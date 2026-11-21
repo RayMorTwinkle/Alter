@@ -13,8 +13,13 @@ export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, 
   "leases", () => ({ turns: 0, lastUsed: {} }),
 );
 const leaseWindow = 30;
+const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。简短、频繁的日程操作可用 enable_tool 租用 calendar。" +
+  "多步或探索性工作用 dispatch_task 派单，可用能力有 calendar、notes（示例笔记 welcome）、outbox（模拟发送）。" +
+  "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的审批；需要用户审批时请用户亲自决定。";
 
-export async function openAlter(storage: Storage, models: HarnessOptions["models"], model: ModelRef) {
+export async function openAlter(
+  storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
+) {
   const demo = createDemoCapabilities();
   const broker = createBroker(() => main);
   const taskExtensions = [demo.extension, TaskTools, broker];
@@ -25,7 +30,7 @@ export async function openAlter(storage: Storage, models: HarnessOptions["models
   }
 
   const controls: ToolRegistration[] = [
-    dispatchTool(taskExtensions),
+    dispatchTool(taskExtensions, taskModel),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
       parameters: obj({ taskId: opt(str()) }), replay: "safe",
@@ -88,10 +93,20 @@ export async function openAlter(storage: Storage, models: HarnessOptions["models
   });
   const registry = createRegistry();
   for (const extension of [...taskExtensions, controlPlane]) registry.install(extension);
-  const harness = await Harness.open(storage, { models, registry, settings: { toolExecution: "sequential" } }, context);
+  const harness = await Harness.open(storage, {
+    models, registry, settings: { toolExecution: "sequential", retry: { enabled: false } },
+  }, context);
   const main: Conversation = await harness.root(context, { agent: {
-    model, extensions: [controlPlane, demo.extension], modelTools: controls,
-    instructions: "Lease calendar for short, frequent edits. Dispatch long, exploratory or multi-step work.",
+    extensions: [controlPlane, demo.extension], modelTools: controls,
   } });
+  // root's agent options only apply on creation. Upgrade M0's model refs before resume,
+  // preserving persisted leases, granted capabilities and the conversational history.
+  await main.commit(async tx => {
+    await configure(tx, main.id, { model: mainModel, instructions: mainInstructions });
+    const tasks = await tx.doc(Tasks, main.id);
+    for (const task of Object.values(tasks.byId)) {
+      if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel });
+    }
+  }, context);
   return { harness, main, demo };
 }

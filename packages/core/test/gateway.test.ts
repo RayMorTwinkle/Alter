@@ -1,0 +1,234 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import type { ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { gatewayConfig } from "../src/config.ts";
+import { chatCommand, observeChat } from "../src/cli.ts";
+import { openAlter } from "../src/main.ts";
+import { createGatewayModels } from "../src/models.ts";
+import { context, MemoryStorage, openNodeSqliteStorage } from "../src/runtime.ts";
+import { Tasks } from "../src/state.ts";
+import { appendUsage, usageSummary, type UsageLine } from "../src/usage.ts";
+import { delta, fakeGateway, httpError, say, toolCall } from "./fixtures/gateway.ts";
+
+const primary = "shared/primary";
+const backup = "backup/main";
+const taskBackup = "backup/task";
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
+
+async function setup(route: Parameters<typeof fakeGateway>[0], timeout = 2000, main = [primary, backup]) {
+  const server = await fakeGateway(route);
+  cleanup.push(() => server.close());
+  const dir = await mkdtemp(join(tmpdir(), "alter-gateway-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const config = gatewayConfig({ ALTER_LLM_BASE_URL: server.baseUrl, ALTER_LLM_API_KEY: "offline-key",
+    ALTER_MAIN_MODEL: main.join(", "), ALTER_TASK_MODEL: [primary, taskBackup].join(","),
+    ALTER_DATA_DIR: dir, ALTER_FIRST_TOKEN_TIMEOUT_MS: String(timeout) });
+  const { models, mainModel, taskModel } = await createGatewayModels(config);
+  const model = models.getModel(mainModel.provider, mainModel.modelId)!;
+  const input = { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] };
+  return {
+    models, mainModel, taskModel, requests: server.requests, dir,
+    stream: (signal?: AbortSignal) => models.streamSimple(model, input, { signal }),
+    async logs(): Promise<UsageLine[]> {
+      return (await readFile(join(dir, "usage.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    },
+  };
+}
+
+it.each([
+  [500, "server"], [503, "server"], [429, "rate_limit"], [401, "auth"], [403, "auth"],
+  ["reset", "network"], ["no headers", "timeout"], ["role only", "timeout"],
+] as const)("falls back before output on %s and records both attempts", async (failure, errorKind) => {
+  const app = await setup(({ model }, res) => {
+    if (model === backup) return say(res, "回答");
+    if (typeof failure === "number") return httpError(res, failure);
+    if (failure === "reset") res.destroy();
+    if (failure === "role only") delta(res, { role: "assistant", content: "" });
+    // Keep the socket open for either timeout case.
+  }, failure === "no headers" || failure === "role only" ? 300 : 2000);
+  const events = [];
+  const stream = app.stream();
+  for await (const event of stream) events.push(event.type);
+  expect(events).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
+  expect(await stream.result()).toMatchObject({ model: backup, content: [{ type: "text", text: "回答" }] });
+  const [a, b] = app.requests;
+  expect(app.requests).toHaveLength(2);
+  expect(a).toMatchObject({ stream: true, model: primary });
+  expect(b).toEqual({ ...a, model: backup });
+  const logs = await app.logs();
+  expect(logs).toHaveLength(2);
+  expect(logs[0]).toEqual({ at: expect.any(String), conversation: "main", model: primary, attempt: 1,
+    outcome: "error", errorKind, latencyMs: expect.any(Number) });
+  expect(logs[1]).toEqual({ at: expect.any(String), conversation: "main", model: backup, attempt: 2, fallbackFrom: primary,
+    outcome: "ok", latencyMs: expect.any(Number), firstTokenMs: expect.any(Number), inputTokens: 8, outputTokens: 3 });
+  expect(new Date(logs[0]!.at).toISOString()).toBe(logs[0]!.at);
+  expect(logs[1]!.latencyMs).toBeGreaterThanOrEqual(logs[1]!.firstTokenMs!);
+});
+
+it.each([
+  ["text", { content: "half an answer" }],
+  ["thinking", { reasoning_content: "considering" }],
+  ["tool", { tool_calls: [{ index: 0, id: "call1", function: { name: "finish", arguments: "{" } }] }],
+] as const)("preserves partial %s output without switching on disconnect", async (_, partial) => {
+  const app = await setup((_body, res) => {
+    delta(res, partial);
+    setTimeout(() => res.destroy(), 25);
+  });
+  expect(await app.stream().result()).toMatchObject({ model: primary, stopReason: "error", content: [expect.anything()] });
+  expect(app.requests.map(r => r.model)).toEqual([primary]);
+  expect(await app.logs()).toMatchObject([{ outcome: "error", firstTokenMs: expect.any(Number) }]);
+});
+
+it("stops the deadline at first output, even for a slow completion", async () => {
+  const app = await setup((_body, res) => {
+    delta(res, { content: "first" });
+    setTimeout(() => say(res, "last"), 300);
+  }, 150);
+  expect(await app.stream().result()).toMatchObject({ stopReason: "stop", content: [{ text: "firstlast" }] });
+  expect(app.requests).toHaveLength(1);
+});
+
+it("exhausts the chain once in order and aggregates failures and incoming fallbacks", async () => {
+  const last = "third/model";
+  const app = await setup((_body, res) => httpError(res, 503), 2000, [primary, backup, last]);
+  const runtime = await openAlter(new MemoryStorage(), app.models, app.mainModel, app.taskModel);
+  cleanup.push(() => runtime.harness.close(context));
+  const sub = await runtime.main.submit({ type: "input", content: "hello" }, context);
+  expect((await sub.wait(context)).status).toBe("unanswered");
+  expect(app.requests.map(r => r.model)).toEqual([primary, backup, last]);
+  expect((await app.logs()).map(l => l.fallbackFrom)).toEqual([undefined, primary, backup]);
+  expect(await usageSummary(app.dir)).toEqual([primary, backup, last].map((model, index) => ({
+    model, calls: 1, failureRate: "100.0%", aborted: 0, fallbacks: index ? 1 : 0, inputTokens: 0, outputTokens: 0,
+    p50Ms: expect.any(Number), p95Ms: expect.any(Number),
+  })));
+});
+
+it("surfaces a bad request without fallback", async () => {
+  const app = await setup((_body, res) => httpError(res, 400));
+  expect(await app.stream().result()).toMatchObject({ model: primary, stopReason: "error" });
+  expect(await app.logs()).toMatchObject([{ outcome: "error", errorKind: "http" }]);
+  expect(app.requests).toHaveLength(1);
+});
+
+it("propagates caller cancellation without fallback", async () => {
+  const app = await setup((_body, res) => delta(res, { role: "assistant" }));
+  const controller = new AbortController();
+  const stream = app.stream(controller.signal);
+  await expect.poll(() => app.requests.length).toBe(1);
+  controller.abort();
+  expect(await stream.result()).toMatchObject({ model: primary, stopReason: "aborted" });
+  expect(await app.logs()).toMatchObject([{ outcome: "error", errorKind: "aborted" }]);
+  expect(app.requests).toHaveLength(1);
+});
+
+it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals and reports to the idle REPL", async mode => {
+  const app = await setup(({ model, messages }, res) => {
+    if (model === primary) return httpError(res, 429);
+    const last = messages.at(-1)!;
+    if (model === taskBackup) {
+      if (last.role === "tool") return toolCall(res, "finish", { summary: "已处理", refs: [] });
+      return toolCall(res, "outbox_send", { message: "hello" });
+    }
+    if (last.content === "delegate") return toolCall(res, "dispatch_task", { brief: "send", context: mode, permission: "auto", allow: [] });
+    say(res, last.role === "tool" ? "已派单" : "收到报告");
+  });
+  const storage = () => mode === "fresh" ? new MemoryStorage() : openNodeSqliteStorage(join(app.dir, "main.sqlite"));
+  const open = async () => {
+    const runtime = await openAlter(await storage(), app.models, app.mainModel, app.taskModel);
+    cleanup.push(() => runtime.harness.close(context));
+    return runtime;
+  };
+  let runtime = await open();
+  const lines: string[] = [];
+  const print = (text: string) => lines.push(text);
+  const attach = async () => {
+    const detach = await observeChat(runtime, print);
+    cleanup.push(async () => detach());
+    runtime.harness.resume();
+  };
+  await attach();
+  await chatCommand(runtime, "delegate", print);
+  await expect.poll(() => lines.some(l => l.startsWith("[用户审批]"))).toBe(true);
+  const id = lines.find(l => l.startsWith("[用户审批]"))!.match(/permission-\d+/)![0];
+  if (mode === "fork") {
+    await runtime.main.waitForIdle(context);
+    // M0 persisted a single model ref. Neither conversation may use that stale ref after reopening.
+    const tasks = await runtime.harness.snapshot(Tasks, runtime.main.id, context);
+    const child = await runtime.harness.conversation(Object.values(tasks!.byId)[0]!.conversationId, context);
+    const legacy = { model: { provider: "faux", modelId: "faux-1" } };
+    await runtime.main.configure(legacy, context);
+    await child!.configure(legacy, context);
+    await runtime.harness.close(context);
+    lines.length = 0;
+    runtime = await open();
+    await attach();
+    expect(lines[0]).toContain(`[用户审批] ${id}`);
+  }
+  await chatCommand(runtime, "/tasks", print);
+  expect(lines.at(-1)).toContain('"status": "running"');
+  const allow = mode === "fresh";
+  await chatCommand(runtime, `/${allow ? "approve" : "deny"} ${id} my note`, print);
+  await expect.poll(() => lines.includes("Alter> 收到报告")).toBe(true);
+  expect(lines.filter(l => l.startsWith("[回投]"))).toEqual([expect.stringMatching(/finished: 已处理/)]);
+  expect(lines.filter(l => l.startsWith("[用户审批]"))).toHaveLength(1);
+  expect(runtime.demo.outbox).toEqual(allow ? ["hello"] : []);
+  const logs = await app.logs();
+  for (const conversation of ["main", "task"] as const) {
+    const uses = logs.filter(l => l.conversation === conversation);
+    expect(uses.map(l => l.model)).toEqual(Array(conversation === "main" ? 3 : 2).fill([primary, conversation === "main" ? backup : taskBackup]).flat());
+  }
+  const entries = await runtime.main.entries({}, 100, undefined, context);
+  expect(entries.items.flatMap(e => e.model ?? []).filter(m => m.role === "assistant").map(m => m.model)).toEqual([backup, backup, backup]);
+  const summary = await usageSummary(app.dir);
+  expect(summary.find(row => row.model === backup)).toMatchObject({ calls: 3, fallbacks: 3, failureRate: "0.0%", inputTokens: 24, outputTokens: 9 });
+});
+
+it("prints a queued task report immediately and only once when it enters the transcript", async () => {
+  let release: ServerResponse | undefined;
+  const app = await setup(({ messages, tools }, res) => {
+    const last = messages.at(-1)!;
+    if (tools?.some(t => t.function.name === "finish")) {
+      return toolCall(res, "finish", { summary: "ready", refs: [] });
+    }
+    if (last.content === "delegate") {
+      return toolCall(res, "dispatch_task", { brief: "report", context: "fresh", permission: "restricted", allow: [] });
+    }
+    if (last.role === "tool") { release = res; return; }
+    say(res, "handled");
+  });
+  const runtime = await openAlter(new MemoryStorage(), app.models, app.mainModel, app.taskModel);
+  cleanup.push(() => runtime.harness.close(context));
+  const lines: string[] = [];
+  const print = (s: string) => lines.push(s);
+  const detach = await observeChat(runtime, print);
+  cleanup.push(async () => detach());
+  await chatCommand(runtime, "delegate", print);
+  await expect.poll(() => release !== undefined && lines.some(s => s.startsWith("[回投]"))).toBe(true);
+  say(release!, "dispatched");
+  await expect.poll(() => lines.includes("Alter> handled")).toBe(true);
+  expect(lines.filter(s => s.startsWith("[回投]"))).toHaveLength(1);
+});
+
+it("summarizes nearest-rank latency and failure rate over all attempts for a model", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-summary-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  expect(await usageSummary(dir)).toEqual([]);
+  for (const latencyMs of [45, 80, 10, 5, 21]) {
+    await appendUsage(dir, { at: new Date().toISOString(), model: primary, conversation: "main", attempt: 1,
+      outcome: latencyMs === 80 ? "error" : "ok", latencyMs });
+  }
+  expect(await usageSummary(dir)).toMatchObject([{ calls: 5, failureRate: "20.0%", p50Ms: 21, p95Ms: 80 }]);
+});
+
+it("counts user aborts separately from provider failures", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-usage-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const base = { at: new Date().toISOString(), conversation: "main", model: "m", attempt: 1, latencyMs: 5 } as const;
+  await appendUsage(dir, { ...base, outcome: "ok" });
+  await appendUsage(dir, { ...base, outcome: "error", errorKind: "aborted" });
+  await appendUsage(dir, { ...base, outcome: "error", errorKind: "server" });
+  expect(await usageSummary(dir)).toMatchObject([{ model: "m", calls: 3, aborted: 1, failureRate: "33.3%" }]);
+});
