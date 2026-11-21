@@ -4,7 +4,7 @@ import { createDemoCapabilities, manifests, toolActions } from "./capabilities.t
 import {
   configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, reply, ToolTask, type Conversation,
-  type ConversationId, type HarnessOptions, type ModelRef, type Storage, type ToolRegistration, type Tx,
+  type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
@@ -19,6 +19,7 @@ const mainInstructions = "你是 Alter 的主助手，负责与用户对话，�
 
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
+  thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
 ) {
   const demo = createDemoCapabilities();
   const broker = createBroker(() => main);
@@ -30,7 +31,7 @@ export async function openAlter(
   }
 
   const controls: ToolRegistration[] = [
-    dispatchTool(taskExtensions, taskModel),
+    dispatchTool(taskExtensions, taskModel, thinking.task),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
       parameters: obj({ taskId: opt(str()) }), replay: "safe",
@@ -102,10 +103,10 @@ export async function openAlter(
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases, granted capabilities and the conversational history.
   await main.commit(async tx => {
-    await configure(tx, main.id, { model: mainModel, instructions: mainInstructions });
+    await configure(tx, main.id, { model: mainModel, thinkingLevel: thinking.main, instructions: mainInstructions });
     const tasks = await tx.doc(Tasks, main.id);
     for (const task of Object.values(tasks.byId)) {
-      if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel });
+      if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: thinking.task });
     }
   }, context);
   return { harness, main, demo };

@@ -113,9 +113,9 @@ export async function createGatewayModels(config: Config) {
     const provider = `alter-${conversation}`;
     const catalog = Array.from(new Set(["chain", ...config[conversation]]), (id): Model<"openai-completions"> => ({
       id, name: id, provider, api: "openai-completions", baseUrl: config.baseUrl,
-      input: ["text"], reasoning: false, contextWindow: 65536, maxTokens: 4096,
+      input: ["text"], reasoning: true, contextWindow: 65536, maxTokens: 4096,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
+      compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: true, maxTokensField: "max_tokens" },
     }));
     models.setProvider(createProvider({
       id: provider, baseUrl: config.baseUrl, models: catalog, api: chainStreams(config, conversation),
@@ -123,5 +123,5 @@ export async function createGatewayModels(config: Config) {
     }));
     return { provider, modelId: "chain" };
   }
-  return { models, mainModel: register("main"), taskModel: register("task") };
+  return { models, mainModel: register("main"), taskModel: register("task"), thinking: config.thinking };
 }

@@ -3,7 +3,7 @@ import { Requests } from "./broker.ts";
 import { manifests } from "./capabilities.ts";
 import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, LiveDoc, reply,
-  ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationId, type Extension, type ModelRef, type Tx, type YieldDecision,
+  ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationId, type Extension, type ModelRef, type ModelThinkingLevel, type Tx, type YieldDecision,
 } from "./runtime.ts";
 import { Ledger, TaskIdentity, Tasks } from "./state.ts";
 
@@ -112,7 +112,7 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
   }, ctx),
 });
 
-export function dispatchTool(taskExtensions: Extension[], taskModel: ModelRef) {
+export function dispatchTool(taskExtensions: Extension[], taskModel: ModelRef, taskThinking?: ModelThinkingLevel) {
   return defineTool({
     name: "dispatch_task", description: "Start a background task. Its report will arrive as a follow-up.",
     parameters: obj({
@@ -135,7 +135,7 @@ export function dispatchTool(taskExtensions: Extension[], taskModel: ModelRef) {
           ? await tx.createConversation(options)
           : await tx.forkConversation(api.conversationId, at, options);
         await configure(tx, child.id, {
-          model: taskModel, extensions: taskExtensions, tools: null, modelTools: null, maxTurns: 40,
+          model: taskModel, thinkingLevel: taskThinking, extensions: taskExtensions, tools: null, modelTools: null, maxTurns: 40,
           instructions: "Carry out the assigned brief. Request any missing capability. " + reminder,
         });
         (await tx.doc(TaskIdentity, child.id)).taskId = taskId;

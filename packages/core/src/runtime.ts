@@ -1,5 +1,6 @@
 // Keep the experimental runtime's imports and shared document conventions here.
 import { defineDoc, type JsonObject } from "@earendil-works/pi-durable";
+export type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export {
   configure, createRegistry, defineExtension, defineSignal, defineTask, defineTool,

@@ -26,11 +26,11 @@ async function setup(route: Parameters<typeof fakeGateway>[0], timeout = 2000, m
   const config = gatewayConfig({ ALTER_LLM_BASE_URL: server.baseUrl, ALTER_LLM_API_KEY: "offline-key",
     ALTER_MAIN_MODEL: main.join(", "), ALTER_TASK_MODEL: [primary, taskBackup].join(","),
     ALTER_DATA_DIR: dir, ALTER_FIRST_TOKEN_TIMEOUT_MS: String(timeout) });
-  const { models, mainModel, taskModel } = await createGatewayModels(config);
+  const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
   const model = models.getModel(mainModel.provider, mainModel.modelId)!;
   const input = { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] };
   return {
-    models, mainModel, taskModel, requests: server.requests, dir,
+    models, mainModel, taskModel, thinking, requests: server.requests, dir,
     stream: (signal?: AbortSignal) => models.streamSimple(model, input, { signal }),
     async logs(): Promise<UsageLine[]> {
       return (await readFile(join(dir, "usage.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
@@ -231,4 +231,28 @@ it("counts user aborts separately from provider failures", async () => {
   await appendUsage(dir, { ...base, outcome: "error", errorKind: "aborted" });
   await appendUsage(dir, { ...base, outcome: "error", errorKind: "server" });
   expect(await usageSummary(dir)).toMatchObject([{ model: "m", calls: 3, aborted: 1, failureRate: "33.3%" }]);
+});
+
+it("sends medium reasoning effort for main and high for tasks", async () => {
+  const app = await setup(({ messages, tools }, res) => {
+    const last = messages.at(-1)!;
+    if (tools?.some(t => t.function.name === "finish")) return toolCall(res, "finish", { summary: "done", refs: [] });
+    if (last.content === "delegate") {
+      return toolCall(res, "dispatch_task", { brief: "work", context: "fresh", permission: "full", allow: [] });
+    }
+    say(res, "ok");
+  });
+  expect(app.thinking).toEqual({ main: "medium", task: "high" });
+  const runtime = await openAlter(new MemoryStorage(), app.models, app.mainModel, app.taskModel, app.thinking);
+  cleanup.push(() => runtime.harness.close(context));
+  await (await runtime.main.submit({ type: "input", content: "delegate" }, context)).wait(context);
+  await expect.poll(() => app.requests.some(r => r.tools?.some(t => t.function.name === "finish"))).toBe(true);
+  const isTask = (r: { tools?: { function: { name: string } }[] }) => r.tools?.some(t => t.function.name === "finish");
+  expect(new Set(app.requests.filter(r => !isTask(r)).map(r => r.reasoning_effort))).toEqual(new Set(["medium"]));
+  expect(new Set(app.requests.filter(isTask).map(r => r.reasoning_effort))).toEqual(new Set(["high"]));
+});
+
+it("rejects an unknown thinking level", () => {
+  expect(() => gatewayConfig({ ALTER_LLM_BASE_URL: "http://x/v1", ALTER_LLM_API_KEY: "k", ALTER_MAIN_MODEL: "a/b",
+    ALTER_TASK_MODEL: "a/b", ALTER_MAIN_THINKING: "extreme" })).toThrow(/ALTER_MAIN_THINKING/);
 });
