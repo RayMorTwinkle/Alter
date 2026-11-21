@@ -8,3 +8,5 @@ dist/
 secrets/
 *.age
 .DS_Store
+
+/data/
