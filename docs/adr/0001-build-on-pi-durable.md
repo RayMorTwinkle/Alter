@@ -47,3 +47,18 @@ M0 原型必须用 pi-durable 跑通四件事，任何一件跑不通就回退�
 2. 受限任务调用未授权工具时被 `beforeTool` 挂起，主会话批准后继续；
 3. 进程在任务执行中被杀掉，重开后任务继续；
 4. 主会话租用一个工具后可直接调用，租约过期后工具从 `modelTools` 消失。
+
+## 验证结果（2026-11-22，M0 原型）
+
+四项全部通过，另加三项（账本强制、auto 档、fork/fresh 上下文差异），共 15 个离线测试，1.8 秒跑完：
+
+| 验证项 | 结果 | 测试 |
+|---|---|---|
+| 后台任务答案回投主会话 | 通过 | `dispatches a fresh notes task…` |
+| 受限任务被挂起、主会话批准后继续 / 拒绝后阻止 | 通过 | `permission` 相关用例 |
+| 进程中途被杀（含 `SIGKILL`）后恢复，副作用、账本、回投各恰好一次 | 通过 | `resumes a SQLite approval…`、`recovers a parked call after SIGKILL…` |
+| 租约 30 轮滑动窗口，不可租能力被拒绝 | 通过 | `renews the calendar lease…` |
+
+额外确认的安全性质：auto 档的对外发送只能由用户批准，主会话无法代答。
+
+实现细节与发现的 pi-durable 限制见 [`packages/core/NOTES.md`](../../packages/core/NOTES.md)。结论：**pi-durable 撑得起 Alter 的核心架构，不需要回退到 pi-agent-core。**
