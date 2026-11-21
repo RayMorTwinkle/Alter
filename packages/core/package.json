@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "chat": "node src/cli.ts",
+    "usage": "node src/usage.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.6.0",

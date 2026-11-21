@@ -26,7 +26,8 @@ type AuditEntry = {
   decision: "park" | "allow" | "deny";
   at: number;
 };
-export const Requests = conversationDoc<{ pending: Record<string, Request> }>("permissions", () => ({ pending: {} }));
+export type PermissionState = { pending: Record<string, Request> };
+export const Requests = conversationDoc<PermissionState>("permissions", () => ({ pending: {} }));
 export const Audit = conversationDoc<{ entries: AuditEntry[]; last: Record<string, AuditEntry["decision"]> }>(
   "audit", () => ({ entries: [], last: {} }),
 );
