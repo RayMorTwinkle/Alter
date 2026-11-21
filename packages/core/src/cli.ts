@@ -86,9 +86,9 @@ export async function chatCommand({ main, harness }: App, line: string, print: (
 async function chat() {
   loadRepoEnv();
   const config = gatewayConfig();
-  const { models, mainModel, taskModel } = await createGatewayModels(config);
+  const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
   const storage = await openNodeSqliteStorage(join(config.dataDir, "main.sqlite"));
-  const app = await openAlter(storage, models, mainModel, taskModel);
+  const app = await openAlter(storage, models, mainModel, taskModel, thinking);
   try {
     const detach = await observeChat(app, console.log);
     const rl = createInterface({ input: process.stdin, output: process.stdout });

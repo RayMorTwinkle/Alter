@@ -91,3 +91,10 @@ CLI 会先订阅主会话和审批记录，再调用 `resume()`。输入一行�
 - 离线测试通过本地 HTTP 服务验证各类错误、首段超时、输出后断流、流式工具调用、两种任务上下文、排队回投、SQLite 恢复和用量统计。真网关仍需确认完整模型 ID、流式工具调用和 `stream_options.include_usage` 支持情况。内置模型元数据暂用 65,536 上下文和 4,096 输出上限，价格字段为零；实际限制与账单以网关为准。
 - 首段输出超时会取消本地 HTTP 尝试，网关仍可能已经接单计费。同一个不可用或无效的密钥也可能使整条链返回鉴权失败。首段之后不再启用这一定时器。
 - SQLite 与用量文件分别落盘。进程被强杀时，未结束的调用可能缺少日志；JSONL 适合排障与汇总，精确计费仍需网关对账。关闭运行时自动重试后，进程若在模型请求进行中退出，恢复时该轮可能标记为 interrupted。已经挂起等待审批的任务可继续。
+
+## Issue #9 · 思考强度
+
+- `ALTER_MAIN_THINKING`（默认 `medium`）与 `ALTER_TASK_THINKING`（默认 `high`）经 pi-durable 会话配置的 `thinkingLevel` 生效；网关模型声明 `reasoning: true` 并开启 `supportsReasoningEffort`，pi-ai 走 OpenAI 风格的 `reasoning_effort` 字段。
+- 打开旧数据库时，主会话与运行中任务的思考强度随模型配置一起升级。
+- **GLM 必须带思考强度**：实测 opencode-go/glm-5.3 的工具调用不带 `reasoning_effort` 时稳定在 97–118 s，带 `medium` 为 3.5 s。不设会撞上首段超时并回退。
+- 真网关冒烟（全新数据目录）：读笔记任务 13 s；建日程 + 审批发送 22 s（#1 时为 32 s）。GLM p50 1.8 s，DeepSeek p50 3.4 s，零失败零回退。

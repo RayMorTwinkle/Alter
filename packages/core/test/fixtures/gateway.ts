@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 type RequestBody = {
   model: string; stream: boolean; messages: { role: string; content: string }[];
   tools?: { function: { name: string } }[];
+  reasoning_effort?: string;
 };
 
 export async function fakeGateway(reply: (body: RequestBody, response: ServerResponse) => void) {
