@@ -1,0 +1,25 @@
+#!/bin/sh
+# 校验提交信息格式（CONTRIBUTING.md 第 4 节）
+msg_file="$1"
+subject=$(grep -v '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -n 1)
+case "$subject" in
+  Merge*|Revert*|fixup!*|squash!*) exit 0 ;;
+esac
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|docs|refactor|test|perf|eval|build|ci|chore)(\([a-z0-9-]+\))?!?: .+'; then
+  echo "提交信息主题行不符合规范：$subject" >&2
+  echo "格式：<类型>(<范围>): <说明>，见 CONTRIBUTING.md" >&2
+  exit 1
+fi
+if [ "$(printf '%s' "$subject" | wc -m)" -gt 72 ]; then
+  echo "主题行超过 72 个字符" >&2
+  exit 1
+fi
+type=$(printf '%s' "$subject" | sed -E 's/^([a-z]+).*/\1/')
+body_lines=$(grep -v '^#' "$msg_file" | sed '1d' | grep -v '^Co-Authored-By:' | sed '/^[[:space:]]*$/d' | wc -l)
+case "$type" in
+  feat|fix|refactor|perf|eval)
+    if [ "$body_lines" -lt 2 ]; then
+      echo "$type 提交需要正文（为什么 / 做了什么 / 验证），见 CONTRIBUTING.md" >&2
+      exit 1
+    fi ;;
+esac

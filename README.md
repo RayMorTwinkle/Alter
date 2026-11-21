@@ -16,6 +16,7 @@
 - [架构总览](docs/architecture/overview.md)
 - [架构决策记录（ADR）](docs/adr/)
 - [路线图](docs/roadmap.md)
+- [协作规范](CONTRIBUTING.md)
 
 ## 许可
 
