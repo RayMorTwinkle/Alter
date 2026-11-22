@@ -40,7 +40,7 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
         name: "mail_send", description: "Send mail and return its Message-ID. Each new tool call is a new send. Report uncertain delivery to the user.",
         parameters: message, replay: "safe",
         execute: (args, api, ctx) => withImap(config, clients, async client =>
-          reply(await send(config, clients, client, args, await toolAttempt(config, api, ctx)))),
+          reply(await send(config, clients, client, args, await toolAttempt(config, args.to, api, ctx)))),
       }),
     ],
     start: host => watchInbox(config, clients, host),

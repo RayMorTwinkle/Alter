@@ -22,7 +22,7 @@ function setup() {
     if (!first || first.type !== "text") throw new Error("Expected text");
     return { text: first.text, details: result.details };
   }
-  return { ...fake, plugin, call, api };
+  return { ...fake, plugin, call, api, docs };
 }
 
 it("disables mail without an address and validates credentials and endpoints", () => {
@@ -128,11 +128,22 @@ it("files the bytes delivered by SMTP once per pi tool task and skips a repeated
   expect(id).toMatch(/^<alter\..+\.12@example\.test>$/);
   expect(app.sent.get(id)).toEqual(app.clients.smtp.mock.calls[0]![2]);
   expect(app.sessions[0]!.selected).toBe("custom/sent");
+  expect(app.docs.receipts).toMatchObject({ "12": { address: config.address, to: outgoing.to, phase: "filed" } });
+  await expect(app.call("mail_send", { ...outgoing, to: "other@example.invalid" })).rejects.toThrow("Recipient changed");
   expect((await app.call("mail_send", outgoing)).text).toBe(id);
   expect(app.clients.smtp).toHaveBeenCalledTimes(1);
   app.api.taskId++;
   expect((await app.call("mail_send", outgoing)).text).not.toBe(id);
   expect(app.clients.smtp).toHaveBeenCalledTimes(2);
+});
+
+it("keeps pre-recipient receipts readable without inferring historical delivery", async () => {
+  const app = setup();
+  const id = "<legacy@example.test>";
+  Object.assign(app.docs.receipts, { "12": { messageId: id, address: config.address, created: 123, phase: "filed" } });
+  expect((await app.call("mail_send", outgoing)).text).toBe(id);
+  expect(app.docs.receipts).not.toHaveProperty("12.to");
+  expect(app.clients.smtp).not.toHaveBeenCalled();
 });
 
 it("reconciles by Sent after a drop between SMTP acceptance and local bookkeeping", async () => {

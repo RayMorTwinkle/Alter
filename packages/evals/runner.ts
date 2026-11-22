@@ -21,6 +21,9 @@ type ModelSetup = {
 export type Options = {
   models(dataDir: string): Promise<ModelSetup>;
   timeZone: string; browser: boolean; mail?: MailConfig; approvalTimeoutMs?: number;
+  plugins?: AlterPlugin[];
+  mailPlugin?(config: MailConfig): AlterPlugin;
+  browserPlugin?(): AlterPlugin;
   demos?: boolean; // Off like the web server; offline tests opt in to drive the simulated outbox.
 };
 export type Result = {
@@ -29,7 +32,7 @@ export type Result = {
   turnLatencyMs: number[]; latencyMs: number; usage: ReturnType<typeof usageTotals>; cleanup: string[];
 };
 
-export function skipReason(task: Task, options: Pick<Options, "mail" | "browser">) {
+export function skipReason(task: Pick<Task, "category">, options: Pick<Options, "mail" | "browser">) {
   if (task.category === "邮箱" && !options.mail) return "缺少 ALTER_MAIL_ADDRESS 或 ALTER_MAIL_AUTH_CODE";
   if ((task.category === "浏览器" || task.category === "组合") && !options.browser) return "ALTER_BROWSER=off";
 }
@@ -44,9 +47,9 @@ async function play(task: Task, c: TaskContext, result: Result) {
     activity = performance.now();
     if (event.event === "timeline" && event.data.kind === "assistant") c.reply = event.data.text;
     if (event.event === "pending") {
-      for (const { id, taskId, tool, audience } of event.data) {
+      for (const { id, taskId, tool, audience, capability, tainted } of event.data) {
         if (seen.has(id)) continue;
-        const row: Approval = { id, taskId, tool, audience, decision: "pending" };
+        const row: Approval = { id, taskId, tool, audience, capability, tainted: !!tainted, decision: "pending" };
         seen.set(id, row);
         result.approvals.push(row);
       }
@@ -73,13 +76,13 @@ async function play(task: Task, c: TaskContext, result: Result) {
     for (const [index, turn] of task.turns.entries()) {
       if (index > 0 && task.category === "日历") c.beforeFollowup = events(c);
       const text = typeof turn === "string" ? turn : turn(c);
-      result.turns.push(text);
       c.reply = "";
       const start = activity = performance.now();
       const deadline = AbortSignal.timeout(240_000);
       const ctx = withAbortSignal(deadline, context);
       try {
         await awaitWithContext(submitMessage(main, text), ctx);
+        result.turns.push(text);
         while (true) {
           deadline.throwIfAborted();
           const { busy, tasks, pending } = surface.snapshot();
@@ -125,7 +128,7 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
   if (skipped) return { ...result, status: "skip", reason: skipped };
 
   function fail(reason: string) {
-    result.status = "fail";
+    if (result.status !== "error") result.status = "fail";
     result.reason = result.reason ? result.reason + "；" + reason : reason;
   }
   let dataDir: string | undefined;
@@ -135,8 +138,9 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
     const f = fixtures(dataDir, options.timeZone, Date.now());
     const now = () => f.now; // All turns and the oracle share the local date even across midnight.
     const plugins: AlterPlugin[] = [createCalendarPlugin({ dataDir, timeZone: f.timeZone, now })];
-    if (options.mail) plugins.push(createMailPlugin(options.mail));
-    if (options.browser) plugins.push(createBrowserPlugin());
+    plugins.push(...(options.plugins ?? []));
+    if (options.mail) plugins.push((options.mailPlugin ?? createMailPlugin)(options.mail));
+    if (options.browser) plugins.push((options.browserPlugin ?? createBrowserPlugin)());
     const { models, mainModel, taskModel, thinking } = await options.models(dataDir);
     const storage = await openNodeSqliteStorage(join(dataDir, "main.sqlite"));
     let app: AlterApp | undefined;
@@ -147,11 +151,11 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
       { plugins, demos: options.demos ?? false, timeZone: f.timeZone, now, approvalTimeoutMs: options.approvalTimeoutMs });
     const c: TaskContext = { ...f, app, reply: "", approvals: result.approvals };
     if (task.category === "浏览器" || task.category === "组合") {
-      c.web = await startPages(f);
+      c.web = await startPages(f, task.page?.(f));
       stops.push(c.web.close);
     }
     if (task.category === "邮箱" && options.mail) {
-      const seed = mailSeed(options.mail, f.id, `${f.eventText}\n确认码：${f.token}`);
+      const seed = mailSeed(options.mail, f.id, task.mailBody?.(f) ?? `${f.eventText}\n确认码：${f.token}`);
       c.mail = seed;
       // Register before SMTP. Even a setup error can leave a delivered seed or a Sent copy.
       stops.push(async () => {
@@ -159,17 +163,16 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
         catch (error) { result.cleanup.push(`可能残留种子「${seed.subject}」${seed.messageId}：${message(error)}`); }
       });
     }
-    try { await task.setup?.(c); }
-    catch (error) {
-      // The agent never saw the task, so this measures the harness, not completion.
-      result.status = "error";
-      result.reason = "准备失败：" + message(error);
-      return result;
-    }
+    await task.setup?.(c);
     const mismatch = await play(task, c, result);
     if (mismatch) fail(mismatch);
-  } catch (error) { fail(message(error)); }
-  finally {
+  } catch (error) {
+    if (result.turns.length) fail(message(error));
+    else {
+      result.status = "error";
+      result.reason = "准备失败：" + message(error);
+    }
+  } finally {
     for (const stop of stops) {
       try { await stop(); } catch (error) { fail(`关闭失败：${message(error)}`); }
     }

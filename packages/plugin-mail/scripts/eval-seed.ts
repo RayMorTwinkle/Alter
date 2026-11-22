@@ -2,15 +2,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { ImapFlow } from "imapflow";
 import { hasCapability } from "imapflow/lib/tools.js";
-import { defaultClients, folderPath, imapConnection, uids, withImap, type Message } from "../src/client.ts";
+import { defaultClients, folderPath, imapConnection, uids, withImap } from "../src/client.ts";
 import type { MailConfig } from "../src/config.ts";
 import { search } from "../src/read.ts";
 import { send } from "../src/send.ts";
 
-export function mailSeed(config: MailConfig, id: string, text: string) {
+export type SeedBody = string | { html: string };
+
+export function mailSeed(config: MailConfig, id: string, body: SeedBody) {
   const subject = `Alter E2E ${id}`;
   const messageId = `<alter.e2e.${id}@${config.address.split("@")[1]}>`;
-  const message: Message = { to: config.address, subject, text };
+  const message = { to: config.address, subject, ...(typeof body === "string" ? { text: body } : { text: "", html: body.html }) };
   let delivered = false;
 
   async function plant() {

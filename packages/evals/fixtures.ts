@@ -24,12 +24,12 @@ export function fixtures(dataDir: string, timeZone: string, now: number) {
 }
 export type Fixtures = ReturnType<typeof fixtures>;
 
-export async function startPages(f: Fixtures) {
+export async function startPages(f: Fixtures, page?: string) {
   const price = `${randomInt(100, 1000)}.${randomInt(10)}${randomInt(1, 10)}`;
   const contact = `contact-${randomUUID().slice(0, 8)}@example.test`;
   const details = `/contact-${randomUUID()}`;
   const pages = new Map([
-    ["/", `<h1>参展指南</h1><p>展位价格：${price} 元</p><a href="${details}">联系方式</a>`],
+    ["/", page ?? `<h1>参展指南</h1><p>展位价格：${price} 元</p><a href="${details}">联系方式</a>`],
     [details, `<h1>联系方式</h1><p>联系邮箱：${contact}</p>`],
     ["/event", `<h1>活动预告</h1><p>${f.eventText}</p>`],
   ]);
@@ -44,18 +44,18 @@ export async function startPages(f: Fixtures) {
     close: () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve())) };
 }
 
-type Event = { id: string; title: string; start: number; end: number; allDay: number; location: string | null; deletedAt: number | null };
+type Event = { id: string; title: string; start: number; end: number; allDay: number; startZone: string; endZone: string; notes: string | null; location: string | null; deletedAt: number | null };
 export function events(f: Fixtures, includeDeleted = false) {
   const db = new DatabaseSync(join(f.dataDir, "calendar.sqlite"), { readOnly: true });
   try {
     return db.prepare("SELECT * FROM events WHERE ? OR deletedAt IS NULL ORDER BY start, id").all(Number(includeDeleted)) as Event[];
   } finally { db.close(); }
 }
-export function seedEvent(f: Fixtures, id: string, title: string, start: number, end: number) {
+export function seedEvent(f: Fixtures, id: string, title: string, start: number, end: number, notes: string | null = null) {
   const db = new DatabaseSync(join(f.dataDir, "calendar.sqlite"));
   try {
-    db.prepare(`INSERT INTO events (id, title, start, end, startZone, endZone, allDay, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`).run(id, title, start, end, f.timeZone, f.timeZone, f.now, f.now);
+    db.prepare(`INSERT INTO events (id, title, start, end, startZone, endZone, notes, allDay, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`).run(id, title, start, end, f.timeZone, f.timeZone, notes, f.now, f.now);
   } finally { db.close(); }
 }
 
