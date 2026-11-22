@@ -4,7 +4,7 @@ import { append, compose, folderPath, uids, type MailClients, type MailConnectio
 import type { MailConfig } from "./config.ts";
 
 type Phase = "ready" | "sending" | "accepted" | "filed";
-type Receipt = { messageId: string; address: string; created: number; phase: Phase };
+type Receipt = { messageId: string; address: string; to?: string; created: number; phase: Phase };
 export const Sends = conversationDoc<{ namespace: string; receipts: Record<string, Receipt> }>("mail-sends",
   () => ({ namespace: "", receipts: {} }));
 export type SendAttempt = {
@@ -13,7 +13,7 @@ export type SendAttempt = {
   mark(phase: "accepted" | "filed"): Promise<void>;
 };
 
-export async function toolAttempt(config: MailConfig, api: Parameters<ToolRegistration["execute"]>[1],
+export async function toolAttempt(config: MailConfig, to: string, api: Parameters<ToolRegistration["execute"]>[1],
   ctx: Parameters<ToolRegistration["execute"]>[2]): Promise<SendAttempt> {
   const key = String(api.taskId);
   const { messageId, created } = await api.commit(async tx => {
@@ -21,10 +21,12 @@ export async function toolAttempt(config: MailConfig, api: Parameters<ToolRegist
     // Numeric pi task IDs can repeat in independent databases.
     doc.namespace ||= randomUUID();
     const receipt = doc.receipts[key] ??= {
-      address: config.address, created: api.now(), phase: "ready",
+      address: config.address, to, created: api.now(), phase: "ready",
       messageId: `<alter.${doc.namespace}.${key}@${config.address.split("@")[1]}>`,
     };
     if (receipt.address !== config.address) throw new Error("Mail account changed during send recovery");
+    if (receipt.to !== undefined && receipt.to !== to) throw new Error("Recipient changed during send recovery");
+    if (receipt.phase === "ready") receipt.to ??= to;
     return { messageId: receipt.messageId, created: receipt.created };
   }, ctx);
   return {

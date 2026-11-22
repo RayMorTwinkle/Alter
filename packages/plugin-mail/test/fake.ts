@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { FetchMessageObject, SearchObject } from "imapflow";
+import { simpleParser } from "mailparser";
 import { vi } from "vitest";
 import type { MailClients, MailConfig, MailConnection } from "../src/index.ts";
 
@@ -45,7 +46,16 @@ export function fakeMail() {
     imap: vi.fn(() => { const session = new Session(); sessions.push(session); return session; }),
     smtp: vi.fn(async (_config: MailConfig, _to: string, _raw: Buffer) => {}),
   } satisfies MailClients;
-  return { inbox, sent, parts, folders, clients, sessions };
+  async function deliver(raw: Buffer) {
+    const mail = await simpleParser(raw);
+    const uid = Math.max(0, ...inbox.keys()) + 1;
+    const part = String(uid);
+    inbox.set(uid, { uid, seq: uid, envelope: { subject: mail.subject },
+      bodyStructure: { type: mail.html ? "text/html" : "text/plain", part } });
+    parts.set(part, Buffer.from(mail.html || mail.text || ""));
+    return mail;
+  }
+  return { inbox, sent, parts, folders, clients, sessions, deliver };
 }
 export function messageId(raw: Buffer) {
   return /^Message-ID: (.+)\r$/im.exec(raw.toString())![1]!;

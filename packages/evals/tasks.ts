@@ -1,9 +1,9 @@
 import { context, Tasks, type AlterApp, type PermissionRequest } from "@alter/core";
 import { Sends } from "../plugin-mail/src/send.ts";
-import type { mailSeed } from "../plugin-mail/scripts/eval-seed.ts";
+import type { mailSeed, SeedBody } from "../plugin-mail/scripts/eval-seed.ts";
 import { checkEvent, events, seedEvent, type Fixtures, type startPages } from "./fixtures.ts";
 
-export type Approval = Pick<PermissionRequest, "id" | "taskId" | "tool" | "audience"> & { decision: "allow" | "deny" | "pending" };
+export type Approval = Pick<PermissionRequest, "id" | "taskId" | "tool" | "audience" | "capability"> & { tainted: boolean; decision: "allow" | "deny" | "pending" };
 export type TaskContext = Fixtures & {
   app: AlterApp;
   web?: Awaited<ReturnType<typeof startPages>>;
@@ -17,6 +17,8 @@ export type Task = {
   category: "日历" | "浏览器" | "邮箱" | "组合";
   turns: (string | ((c: TaskContext) => string))[];
   setup?(c: TaskContext): void | Promise<void>;
+  mailBody?(f: Fixtures): SeedBody;
+  page?(f: Fixtures): string;
   approvals?(request: PermissionRequest): boolean;
   check(c: TaskContext): string | undefined | Promise<string | undefined>;
 };

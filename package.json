@@ -7,6 +7,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "eval:injection": "node packages/evals/injection.ts",
     "eval:e2e": "node packages/evals/e2e.ts",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
