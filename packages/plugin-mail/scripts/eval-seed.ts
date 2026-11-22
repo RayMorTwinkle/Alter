@@ -46,14 +46,11 @@ export function mailSeed(config: MailConfig, id: string, text: string) {
       for (const path of new Set(["INBOX", sent])) {
         try {
           await client.mailboxOpen(path);
-          // SEARCH is substring-based. Only expunge UIDs with an exact envelope match.
-          const candidates = await uids(client, { subject });
+          // 163 ignores SEARCH SUBJECT but honours a Message-ID header search. Expunge only exact envelope matches.
+          const candidates = await uids(client, { header: { "Message-ID": messageId } });
           if (!candidates.length) continue;
           const rows = await client.fetchAll(candidates, { envelope: true }, { uid: true });
           const ids = rows.filter(row => row.envelope?.subject === subject && row.envelope.messageId === messageId).map(row => row.uid);
-          if (rows.some(row => row.envelope?.subject === subject && row.envelope.messageId !== messageId)) {
-            warnings.push(`${path} 内有同主题但 Message-ID 不符的邮件，已保留`);
-          }
           if (!ids.length) continue;
           // Without UID EXPUNGE ImapFlow could expunge other messages flagged Deleted.
           if (!hasCapability(client, "UIDPLUS")) throw new Error("服务不支持定向 UID EXPUNGE");

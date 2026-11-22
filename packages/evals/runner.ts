@@ -4,13 +4,12 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, withAbortSignal } from "@earendil-works/chord/context";
 import {
-  answerUserPermission, context, observeSurface, openAlter, openNodeSqliteStorage, submitMessage, type AlterApp,
+  answerUserPermission, Audit, context, observeSurface, openAlter, openNodeSqliteStorage, readUsage, submitMessage, usageTotals,
+  type AlterApp, type AlterPlugin,
 } from "@alter/core";
 import { createBrowserPlugin } from "@alter/plugin-browser";
 import { createCalendarPlugin } from "@alter/plugin-calendar";
 import { createMailPlugin, type MailConfig } from "@alter/plugin-mail";
-import { Audit } from "../core/src/broker.ts";
-import { readUsage, usageTotals } from "../core/src/usage.ts";
 import { mailSeed } from "../plugin-mail/scripts/eval-seed.ts";
 import { events, fixtures, startPages } from "./fixtures.ts";
 import type { Approval, Task, TaskContext } from "./tasks.ts";
@@ -24,7 +23,7 @@ export type Options = {
   timeZone: string; browser: boolean; mail?: MailConfig; approvalTimeoutMs?: number;
 };
 export type Result = {
-  id: string; category: Task["category"]; repeat: number; status: "pass" | "fail" | "skip"; reason?: string;
+  id: string; category: Task["category"]; repeat: number; status: "pass" | "fail" | "skip" | "error"; reason?: string;
   turns: string[]; reply: string; tools: { enable_tool: number; dispatch_task: number }; approvals: Approval[];
   turnLatencyMs: number[]; latencyMs: number; usage: ReturnType<typeof usageTotals>; cleanup: string[];
 };
@@ -134,7 +133,7 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
     dataDir = await mkdtemp(join(tmpdir(), "alter-e2e-"));
     const f = fixtures(dataDir, options.timeZone, Date.now());
     const now = () => f.now; // All turns and the oracle share the local date even across midnight.
-    const plugins = [createCalendarPlugin({ dataDir, timeZone: f.timeZone, now })];
+    const plugins: AlterPlugin[] = [createCalendarPlugin({ dataDir, timeZone: f.timeZone, now })];
     if (options.mail) plugins.push(createMailPlugin(options.mail));
     if (options.browser) plugins.push(createBrowserPlugin());
     const { models, mainModel, taskModel, thinking } = await options.models(dataDir);
@@ -159,7 +158,13 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
         catch (error) { result.cleanup.push(`可能残留种子「${seed.subject}」${seed.messageId}：${message(error)}`); }
       });
     }
-    await task.setup?.(c);
+    try { await task.setup?.(c); }
+    catch (error) {
+      // The agent never saw the task, so this measures the harness, not completion.
+      result.status = "error";
+      result.reason = "准备失败：" + message(error);
+      return result;
+    }
     const mismatch = await play(task, c, result);
     if (mismatch) fail(mismatch);
   } catch (error) { fail(message(error)); }

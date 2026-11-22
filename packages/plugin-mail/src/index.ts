@@ -18,7 +18,7 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
     ] },
     tools: [
       defineTool({
-        name: "mail_search", description: "Search INBOX, newest matching UIDs first.", replay: "safe",
+        name: "mail_search", description: "Search INBOX, newest first. from and subject are case-insensitive substrings matched within the newest 500 messages that satisfy since and unseen.", replay: "safe",
         parameters: obj({ from: opt(str()), subject: opt(str()), since: opt(str({ description: "YYYY-MM-DD" })),
           unseen: opt(bool()), limit: opt(int({ minimum: 1, maximum: 50 })) }),
         execute: args => withImap(config, clients, async client => external(await search(client, args))),

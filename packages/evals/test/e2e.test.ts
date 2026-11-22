@@ -57,7 +57,7 @@ it("checks actual calendar state, removes each database, and excludes incorrect 
   expect(bad).toMatchObject({ status: "fail", reason: expect.stringContaining("周报会"), usage: { main: { tokens: 1003 } } });
   const md = summary([good, bad]);
   expect(md.indexOf(bad.reason!)).toBeLessThan(md.indexOf("## 完成率"));
-  expect(md).toContain("| 总计 | 1 / 2 | 50.0% | 0 | 9 / 0 | 1 |");
+  expect(md).toContain("| 总计 | 1 / 2 | 50.0% | 0 | 0 | 9 / 0 | 1 |");
   expect(md).toContain("| 日历 | 1 / 2 | 50.0%");
   expect(md).toContain("| calendar-relative | 2 | fail");
 });
@@ -77,6 +77,15 @@ it.each([false, true])("answers a parked user request once and waits for the chi
   expect(summary([row])).toContain(`outbox_send / user / ${allow ? "allow" : "deny"}`);
 });
 
+it("reports a failed setup as a harness error outside the completion rate", async () => {
+  const main = fauxProvider();
+  const row = await runTask({ ...task("calendar-relative"), async setup() { throw new Error("种子未到达"); } }, setup(main));
+  expect(row).toMatchObject({ status: "error", reason: "准备失败：种子未到达" });
+  const md = summary([row]);
+  expect(md).toContain("【执行器错误】 准备失败：种子未到达");
+  expect(md).toContain("| 总计 | 0 / 0 | — | 0 | 1 |");
+});
+
 it("filters and repeats skipped cases without constructing a gateway; writes both reports", async () => {
   const dir = await mkdtemp(join(tmpdir(), "alter-e2e-report-"));
   temporary.push(dir);
@@ -91,7 +100,7 @@ it("filters and repeats skipped cases without constructing a gateway; writes bot
   expect(log.trim().split("\n").map(line => JSON.parse(line))).toEqual(rows);
   const md = await readFile(join(dir, "summary.md"), "utf8");
   expect(md).toBe(summary(rows));
-  expect(md).toContain("| 总计 | 0 / 0 | — | 6 | — / — |");
+  expect(md).toContain("| 总计 | 0 / 0 | — | 6 | 0 | — / — |");
   await expect(evaluate(env)).rejects.toMatchObject({ code: "EEXIST" });
   await expect(evaluate({ ...env, ALTER_EVAL_ONLY: "typo" })).rejects.toThrow("未知任务");
   await expect(evaluate({ ...env, ALTER_EVAL_REPEATS: "0" })).rejects.toThrow("正整数");
