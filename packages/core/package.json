@@ -8,6 +8,7 @@
     "test": "vitest run",
     "chat": "node src/cli.ts",
     "eval:lease": "node evals/lease-vs-dispatch.ts",
+    "eval:permissions": "node evals/permissions/report.ts",
     "usage": "node src/usage.ts"
   },
   "dependencies": {
