@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.3).
+// Mirrors docs/architecture/web-api.md (v1.4).
 
 export type TimelineItem = {
   id: string;
@@ -7,6 +7,7 @@ export type TimelineItem = {
   at: number;
   taskId?: string;
   model?: string;
+  source?: string;
 };
 
 export type PermissionRequest = {
@@ -52,6 +53,8 @@ export type Snapshot = {
   leases: Lease[];
   busy: boolean;
 };
+
+export type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt: number };
 
 export type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
 

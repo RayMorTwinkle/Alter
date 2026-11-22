@@ -65,6 +65,9 @@ const hant = {
   expiresIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小時" : "分鐘"}後自動拒絕`,
   tainted: (source: string) => `這個任務讀取過外部內容（${source}），內容可能被篡改，請核對參數再批准。`,
   error: "出錯了",
+  viaFeishu: "飛書",
+  feishuPair: "飛書配對碼",
+  feishuPairHint: "在飛書私聊 Alter 機器人發送這個碼，綁定你的飛書帳號（10 分鐘內有效）",
 };
 
 export type Strings = typeof hant;
@@ -125,6 +128,9 @@ const hans: Strings = {
   expiresIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小时" : "分钟"}后自动拒绝`,
   tainted: (source: string) => `这个任务读取过外部内容（${source}），内容可能被篡改，请核对参数再批准。`,
   error: "出错了",
+  viaFeishu: "飞书",
+  feishuPair: "飞书配对码",
+  feishuPairHint: "在飞书私聊 Alter 机器人发送这个码，绑定你的飞书账号（10 分钟内有效）",
 };
 
 export type Locale = "hant" | "hans";

@@ -1,0 +1,17 @@
+{
+  "name": "@alter/plugin-feishu",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@alter/core": "workspace:*",
+    "@larksuiteoapi/node-sdk": "1.76.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

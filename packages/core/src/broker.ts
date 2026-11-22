@@ -52,8 +52,13 @@ async function deliver(tx: Tx, main: Conversation, audience: Audience, answer: A
   return reply(result, result !== "delivered" && result !== "duplicate");
 }
 
-export function answerUserPermission(main: Conversation, answer: Answer) {
-  return main.commit(tx => deliver(tx, main, "user", answer), context);
+export function answerUserPermission(main: Conversation, answer: Answer, onDelivered?: (tx: Tx) => Promise<void>) {
+  return main.commit(async tx => {
+    const result = await deliver(tx, main, "user", answer);
+    // A surface can record the winning decision atomically with the broker signal.
+    if (result.output[0]?.text === "delivered") await onDelivered?.(tx);
+    return result;
+  }, context);
 }
 
 export function mainApprovalTool(main: () => Conversation) {

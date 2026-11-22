@@ -11,6 +11,7 @@
   "dependencies": {
     "@alter/core": "workspace:*",
     "@alter/plugin-browser": "workspace:*",
+    "@alter/plugin-feishu": "workspace:*",
     "@alter/plugin-mail": "workspace:*",
     "@alter/plugin-calendar": "workspace:*"
   }

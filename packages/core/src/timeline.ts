@@ -10,6 +10,7 @@ export type TimelineItem = {
   at: number;
   taskId?: string;
   model?: string;
+  source?: string;
 };
 export type TranscriptItem =
   | { kind: "user" | "assistant"; text: string; at: number }
@@ -22,11 +23,11 @@ const defaultClock = inputClock();
 // Keep the public submitMessage(main, text) API while each open host supplies its own clock.
 export const mainClocks = new WeakMap<Conversation, typeof defaultClock>();
 
-export async function submitMessage(main: Conversation, text: string) {
-  const id = randomUUID();
+export async function submitMessage(main: Conversation, text: string, source = "web", requestId?: string) {
+  const id = requestId ?? randomUUID();
   const { at, prefix } = (mainClocks.get(main) ?? defaultClock)();
-  await main.submit({ type: "input", content: prefix + "\n" + text, whenBusy: "followUp",
-    entry: { kind: inputKind, data: { id, at, text } } }, context);
+  await main.submit({ type: "input", requestId, content: prefix + "\n" + text, whenBusy: "followUp",
+    entry: { kind: inputKind, data: { id, at, text, source } } }, context);
   return id;
 }
 
@@ -48,10 +49,11 @@ function inputItem(entry: InputEntry | undefined, text: string, id: string, at: 
     return { kind: "report", id: `report-${data.taskId}`, taskId: data.taskId, text, at: data.at };
   }
   if (entry?.kind === inputKind || entry?.kind === "alter.cli-input") {
+    const source = typeof data?.source === "string" ? data.source : "web";
     if (typeof data?.id === "string" && typeof data.at === "number") {
-      return { kind: "user", id: data.id, at: data.at, text: surfaceText(entry, text) };
+      return { kind: "user", source, id: data.id, at: data.at, text: surfaceText(entry, text) };
     }
-    return { kind: "user", text, id, at };
+    return { kind: "user", source, text, id, at };
   }
   // Older task and broker submissions have no entry metadata. Only untagged framework
   // inputs take this path; a user can quote either notification verbatim.

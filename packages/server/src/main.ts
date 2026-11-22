@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage, type AlterPlugin } from "@alter/core";
 import { createBrowserPlugin } from "@alter/plugin-browser";
 import { createCalendarPlugin } from "@alter/plugin-calendar";
+import { createFeishuSurface, feishuConfigFromEnv } from "@alter/plugin-feishu";
 import { createMailPlugin, mailConfigFromEnv } from "@alter/plugin-mail";
 import { createWebServer } from "./server.ts";
 
@@ -16,6 +17,8 @@ async function start() {
   const config = gatewayConfig();
   const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
   const mail = mailConfigFromEnv(process.env);
+  const feishuConfig = feishuConfigFromEnv(process.env);
+  const feishu = feishuConfig && createFeishuSurface({ config: feishuConfig, dataDir: config.dataDir });
   const calendar = createCalendarPlugin({ dataDir: config.dataDir, timeZone: config.timeZone });
   const plugins: AlterPlugin[] = [calendar];
   if (mail) plugins.push(createMailPlugin(mail));
@@ -25,8 +28,10 @@ async function start() {
     { plugins, demos: false, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
   );
   console.log("Alter plugins:", plugins.map(plugin => plugin.capability.id).join(", ") || "none");
+  let stopFeishu: (() => Promise<void>) | undefined;
   try {
-    const web = await createWebServer(app, { password, dataDir: config.dataDir, calendar });
+    stopFeishu = await feishu?.start(app);
+    const web = await createWebServer(app, { password, dataDir: config.dataDir, calendar, feishu });
     try {
       web.server.listen(port, host);
       await once(web.server, "listening");
@@ -42,7 +47,9 @@ async function start() {
         process.once("SIGTERM", shutdown);
       });
     } finally { await web.close(); }
-  } finally { await app.close(); }
+  } finally {
+    try { await stopFeishu?.(); } finally { await app.close(); }
+  }
 }
 
 if (import.meta.main) await start();

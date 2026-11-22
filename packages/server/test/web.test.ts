@@ -9,13 +9,14 @@ import {
   context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Tasks, type SurfaceEvent, type SurfaceState,
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
+import type { FeishuPairing } from "@alter/plugin-feishu";
 import { createWebServer } from "../src/server.ts";
 import { createCalendarPlugin } from "@alter/plugin-calendar";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 
-async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false) {
+async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false, feishu?: { pairing(): FeishuPairing }) {
   const gateway = await fakeGateway(route);
   cleanup.push(gateway.close);
   const dir = await mkdtemp(join(tmpdir(), "alter-web-"));
@@ -29,7 +30,7 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
     const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel, {},
       { plugins: calendar ? [calendar] : [] });
     cleanup.push(() => app.harness.close(context));
-    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, calendar });
+    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, calendar, feishu });
     cleanup.push(web.close);
     web.server.listen(0, "127.0.0.1");
     await once(web.server, "listening");
@@ -90,7 +91,7 @@ async function stream(read: (path: string) => Promise<Response>) {
 it("authenticates API requests, enforces JSON writes, and revokes the session including its open streams", async () => {
   const web = await setup();
   await expect(createWebServer(web.app, { password: "", dataDir: web.dir })).rejects.toThrow("ALTER_WEB_PASSWORD");
-  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/unknown"]) {
+  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/feishu", "/api/unknown"]) {
     const response = await web.read(path);
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: expect.any(String) });
@@ -102,6 +103,7 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   expect((await web.post("/api/messages", { text: " " })).status).toBe(400);
   const state = { timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   expect(await web.state()).toEqual(state);
+  expect((await web.read("/api/feishu")).status).toBe(404);
   const feed = await stream(web.read);
   expect(feed.events[0]?.data).toEqual(state);
   expect((await web.post("/api/logout")).status).toBe(204);
@@ -123,7 +125,7 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   await first.seen(e => e.event === "delta" && e.data.text === "one");
   const streamed = first.events.find(e => e.event === "delta")!;
   expect(first.events).toContainEqual({ event: "busy", data: { busy: true } });
-  expect(first.events).toContainEqual({ event: "timeline", data: { id, at: expect.any(Number), kind: "user", text: "first" } });
+  expect(first.events).toContainEqual({ event: "timeline", data: { id, at: expect.any(Number), kind: "user", source: "web", text: "first" } });
   expect(await web.state()).toMatchObject({ busy: true });
   const next = await stream(web.read);
   await next.seen(e => e.event === "delta");
@@ -132,7 +134,7 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   expect(queued.status).toBe(202);
   const second = await queued.json();
   await next.seen(e => e.event === "timeline" && e.data.id === second.id && e.data.kind === "user");
-  expect(next.events).toContainEqual({ event: "timeline", data: { id: second.id, at: expect.any(Number), kind: "user", text: "next" } });
+  expect(next.events).toContainEqual({ event: "timeline", data: { id: second.id, at: expect.any(Number), kind: "user", source: "web", text: "next" } });
   delta(release, { content: " two" });
   await next.seen(e => e.event === "delta" && e.data.text === "one two");
   say(release, " three");
@@ -269,7 +271,7 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
   }, context);
   const before = await web.state();
   expect(before.timeline).toHaveLength(200);
-  expect(before.timeline[0]?.text).toBe("5");
+  expect(before.timeline[0]).toMatchObject({ text: "5", source: "web" });
   await web.close();
   const reopened = await web.reopen();
   expect((await fetch(reopened.base + "/api/state", { headers: { cookie: web.sessionCookie() } })).status).toBe(401);
@@ -302,4 +304,16 @@ it("has no calendar endpoint without the calendar plugin", async () => {
   const web = await setup();
   await web.login();
   expect((await web.read("/api/calendar")).status).toBe(404);
+});
+
+it("exposes the current Feishu pairing only to authenticated clients", async () => {
+  let state: FeishuPairing = { paired: false, code: "012345", expiresAt: 123 };
+  const web = await setup(undefined, false, { pairing: () => state });
+  expect((await web.read("/api/feishu")).status).toBe(401);
+  await web.login();
+  const response = await web.read("/api/feishu");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual(state);
+  state = { paired: true };
+  expect(await (await web.read("/api/feishu")).json()).toEqual(state);
 });

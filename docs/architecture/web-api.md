@@ -1,4 +1,4 @@
-# Web API 契约（v1.3）
+# Web API 契约（v1.4）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -10,8 +10,12 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 | `ALTER_WEB_PORT` | `4317` | |
 | `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 两类审批的等待时长，修改只影响新请求 |
 | `ALTER_WEB_PASSWORD` | 无（必填） | 单用户登录密码 |
+| `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 同时设置以启用飞书机器人入口 |
+| `ALTER_FEISHU_DOMAIN` | `feishu` | 国际版用 `lark` |
 
 服务端同时托管前端构建产物（`packages/web/dist`），开发时前端用 Vite 代理 `/api`。
+
+飞书自建应用需启用机器人，并在开放平台为事件和回调选择长连接。订阅消息事件 `im.message.receive_v1` 和卡片回调 `card.action.trigger`。在机器人私聊中发送配对码即可绑定。
 
 ## 鉴权
 
@@ -29,6 +33,7 @@ type TimelineItem = {
   text: string;
   at: number;                 // 毫秒时间戳
   taskId?: string;            // report / permission 关联的任务
+  source?: string;            // v1.4：user 项带来源；web / feishu，旧记录返回 web
   model?: string;             // assistant：实际作答的模型
 };
 
@@ -59,6 +64,8 @@ type PermissionRequest = {
   expiresAt: number;          // v1.1 新增，截止时间（Unix 毫秒）
 };
 
+type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt: number }; // Unix 毫秒
+
 // v1.3 新增，仅在加载了日历插件时提供
 type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
@@ -81,6 +88,7 @@ type TranscriptItem =
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
+| `GET` | `/api/feishu` | `FeishuPairing`（v1.4）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
 | `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
 | `GET` | `/api/events` | SSE，见下 |
 

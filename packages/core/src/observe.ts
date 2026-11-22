@@ -8,6 +8,7 @@ import { Ledger, Tasks, type LedgerEntry, type TaskRecord } from "./state.ts";
 import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
+export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
 export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask"> & { arguments: unknown };
 type Task = Omit<TaskRecord, "conversationId"> & { taskId: string; conversationId: string; pending: PermissionRequest[] };
 export type SurfaceState = {
@@ -24,8 +25,9 @@ const limit = 200;
 
 // Both surfaces attach before resume. Seed the recent history once, then consume the
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
-export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent) => void) {
+export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
   const state: SurfaceState = { timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  let inputSource: string | undefined;
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
   let streamedId: string | undefined;
@@ -41,7 +43,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     timeline.push(item);
     if (timeline.length > 1 && timeline[timeline.length - 2]!.at > item.at) timeline.sort((a, b) => a.at - b.at);
     if (timeline.length > limit) timeline.shift();
-    if (publish) emit({ event: "timeline", data: item });
+    if (publish) emit({ event: "timeline", data: item }, inputSource);
   }
 
   function updateTasks() {
@@ -75,9 +77,13 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     const recent: TimelineItem[] = [];
     do {
       const page = await main.entries({}, limit, cursor, context);
-      for (const entry of page.items) recent.push(...timelineEntries(entry).reverse());
+      for (const entry of page.items) {
+        const items = timelineEntries(entry).reverse();
+        inputSource ??= items.find(item => item.kind === "user")?.source;
+        if (recent.length < limit) recent.push(...items);
+      }
       cursor = page.next;
-    } while (cursor && recent.length < limit);
+    } while (cursor && (recent.length < limit || !inputSource));
 
     for (const item of recent.reverse()) add(item, false);
     await watch(Tasks, value => { records = value.byId; updateTasks(); });
@@ -147,8 +153,11 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
           }
         }
         for (const change of changes) {
-          if (change.type === "entry" && change.value.conversationId === main.id && !placed.has(change.value.id)) {
+          if (change.type === "entry" && change.value.conversationId === main.id) {
             for (const item of timelineEntries(change.value)) {
+              // A follow-up is visible in the inbox before it participates in a model turn.
+              if (item.kind === "user") inputSource = item.source;
+              if (placed.has(change.value.id)) continue;
               // Short answers can finish before pi.live's first progress tick.
               if (item.kind === "assistant" && streamedId !== item.id) {
                 emit({ event: "delta", data: { id: item.id, text: item.text } });
