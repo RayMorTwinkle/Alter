@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Tasks, type MemoryItem, type SurfaceEvent, type SurfaceState,
+  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Notifications, Tasks, type MemoryItem, type SurfaceEvent, type SurfaceState,
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import { createFeishuConnector, type FeishuPairing } from "@alter/plugin-feishu";
@@ -470,4 +470,25 @@ it("publishes the notification list and persists independent read and feedback u
   const next = await web.reopen();
   await next.login();
   expect((await next.state()).notifications).toEqual([{ ...item, status: "read", feedback: "useful" }]);
+});
+
+it.each([true, false])("serves a local-day funnel with Feishu configured=%s", async configured => {
+  const at = Date.parse("2026-12-01T16:05Z");
+  const feishu = configured ? { pairing: () => ({ paired: true as const }) } : undefined;
+  const web = await setup(undefined, false, feishu, () => at);
+  expect((await web.read("/api/funnel")).status).toBe(401);
+  await web.login();
+  for (const query of ["days=-1", "days=2.5", "days=", "days=0", "days=367", "days=x", "days=1&days=2"]) {
+    expect((await web.read("/api/funnel?" + query)).status).toBe(400);
+  }
+  expect((await (await web.read("/api/funnel")).json()).days).toHaveLength(7);
+  await web.app.main.commit(async tx => {
+    (await tx.doc(Notifications, web.app.main.id)).entries.push({
+      id: "unconfirmed", at, kind: "event", level: "now", source: "mail", title: "面试", status: "unread",
+    });
+  }, context);
+  expect(await (await web.read("/api/funnel?days=1")).json()).toEqual({
+    timeZone: "Asia/Shanghai", precision: null, days: [{ date: "2026-12-02", triggered: 1, passed: 1,
+      pushed: configured ? 0 : 1, read: 0, useful: 0, useless: 0, digests: 0, reminders: 0 }],
+  });
 });

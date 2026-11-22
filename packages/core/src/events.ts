@@ -24,6 +24,13 @@ export function emitEvent(main: Conversation, event: ExternalEvent) {
   }, context);
 }
 
+export function prefilter(event: ExternalEvent, seen: boolean, mute: readonly string[]): Decision | undefined {
+  if (seen) return { level: "silent", filtered: "duplicate", reason: "来源与引用重复" };
+  const summary = event.summary.toLowerCase();
+  if (mute.some(word => summary.includes(word))) return { level: "silent", filtered: "mute", reason: "命中静音关键词" };
+  if (/退订|unsubscribe|促销|广告|验证码/i.test(summary)) return { level: "silent", filtered: "marketing", reason: "命中营销或验证码关键词" };
+}
+
 export async function startEventBus(harness: Harness, main: Conversation, time: ReturnType<typeof calendarTime>, now: () => number,
   mute: string[], classify: (event: ExternalEvent, at: number, signal: AbortSignal) => Promise<Decision>) {
   const controller = new AbortController();
@@ -48,12 +55,7 @@ export async function startEventBus(harness: Harness, main: Conversation, time: 
       const seen = await tx.doc(Seen, JSON.stringify([event.source, event.ref]), null);
       let decision: Decision | undefined;
       if (progress.inFlight) decision = { level: "digest", reason: "上次分诊中断，已归入摘要" };
-      else if (seen.seen) decision = { level: "silent", filtered: "duplicate", reason: "来源与引用重复" };
-      else if (mute.some(word => event.summary.toLowerCase().includes(word))) {
-        decision = { level: "silent", filtered: "mute", reason: "命中静音关键词" };
-      } else if (/退订|unsubscribe|促销|广告|验证码/i.test(event.summary)) {
-        decision = { level: "silent", filtered: "marketing", reason: "命中营销或验证码关键词" };
-      }
+      else decision = prefilter(event, seen.seen, mute);
       seen.seen = true;
       if (decision) { await finish(tx, progress, event, decision); return; }
       // Reserve before leaving the transaction. Recovery cannot repeat an ambiguous provider call.

@@ -1,4 +1,4 @@
-# Web API 契约（v1.7）
+# Web API 契约（v1.8）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -95,9 +95,16 @@ type AgendaEvent = { id: string; title: string; start: number; end: number; allD
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
 
 type Notification = {
-  id: string; at: number; kind: "reminder"; level: "now" | "digest" | "silent";
-  title: string; body?: string; source: "schedule"; status: "unread" | "read";
-  feedback?: "useful" | "useless";
+  id: string; at: number; kind: "reminder" | "event" | "digest"; level: "now" | "digest" | "silent";
+  title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing"; status: "unread" | "read";
+  feedback?: "useful" | "useless"; pushedAt?: number;
+};
+
+type Funnel = {
+  timeZone: string;
+  days: { date: string; triggered: number; passed: number; pushed: number; read: number;
+    useful: number; useless: number; digests: number; reminders: number }[];
+  precision: number | null;
 };
 
 type MemoryItem = {
@@ -127,6 +134,7 @@ type TranscriptItem =
 | `POST` | `/api/permissions/:id` | 请求 `{ allow: boolean, note?: string }` → `204`；非用户受众、已到期或已处理 `409` |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
+| `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
 | `GET` | `/api/feishu` | `FeishuPairing`（v1.6 含账号连接状态与可选显示名）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
 | `GET` | `/api/feishu/oauth/start` | 需要登录；`302` 跳转至飞书授权页 |
@@ -138,6 +146,8 @@ type TranscriptItem =
 | `PATCH` | `/api/memory/:id` | 请求至少含 `text`、`status`、`due` 之一 → `204`。期限仅适用于目标，使用 Unix 毫秒，传 `null` 可清除。字段无效返回 `400`，记忆不存在返回 `404` |
 | `DELETE` | `/api/memory/:id` | 删除记忆 → `204`；记忆不存在返回 `404` |
 | `GET` | `/api/events` | SSE，见下 |
+
+漏斗按通知的 `at` 归到用户本地日期，从早到晚列出截至今天的每一天，空日补零。统计基于当前保留的最近 500 条通知，淘汰的记录无法计入。事件计入 `triggered`，通过预过滤的事件计入 `passed`。配置飞书时，`pushed` 只计已有 `pushedAt` 的 `now` 事件；未配置时计所有 `now` 事件。已读和两种反馈独立统计事件的当前状态。摘要和提醒仅计入 `digests`、`reminders`。窗口内的打扰精准率为有用数除以有反馈的事件数，无反馈返回 `null`。
 
 v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际投递到通知中心的 Unix 毫秒时间。按用户本地时间，23:00（含）至次日 08:00（不含）触发的提醒记为 `digest`，其余记为 `now`。已配对的飞书私聊推送新的未读 `now` 通知。读状态和反馈可独立更新，重复提交同一值仍返回 `204`。
 

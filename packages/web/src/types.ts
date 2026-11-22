@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.7).
+// Mirrors docs/architecture/web-api.md (v1.8).
 
 export type TimelineItem = {
   id: string;
@@ -40,6 +40,13 @@ export type Notification = {
   id: string; at: number; kind: "reminder" | "event" | "digest"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number;
+};
+
+export type Funnel = {
+  timeZone: string;
+  days: { date: string; triggered: number; passed: number; pushed: number; read: number;
+    useful: number; useless: number; digests: number; reminders: number }[];
+  precision: number | null;
 };
 
 export type MemoryItem = {

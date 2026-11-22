@@ -199,5 +199,5 @@ export async function openAlter(
     const summary = memory.summary();
     return { at: stamp.at, prefix: summary ? stamp.prefix + "\n" + summary : stamp.prefix };
   });
-  return { harness, main, demo, memory, scheduler, capabilities, events: host, close: () => closing ??= shutdown() };
+  return { harness, main, demo, memory, scheduler, capabilities, now, timeZone, events: host, close: () => closing ??= shutdown() };
 }

@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import {
-  answerUserPermission, context, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
+  answerUserPermission, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
   MemoryInputError, schema, Tasks, usageSummary, type AlterApp,
 } from "@alter/core";
 import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
@@ -168,6 +168,13 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return;
     } else if (method === "POST" && path === "/api/feishu/account/disconnect" && feishuAccount) {
       await feishuAccount.disconnect();
+    } else if (method === "GET" && path === "/api/funnel") {
+      const values = new URL(req.url!, "http://localhost").searchParams.getAll("days");
+      const days = Number(values[0] ?? 7);
+      if (values.length > 1 || !/^\d+$/.test(values[0] ?? "7") || !Number.isSafeInteger(days) || days < 1 || days > 366) {
+        throw new HttpError(400, "days must be an integer between 1 and 366");
+      }
+      return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!options.feishu }));
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");
