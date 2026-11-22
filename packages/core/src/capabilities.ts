@@ -28,9 +28,11 @@ export type AlterPlugin = {
   start?(host: PluginHost): Promise<() => Promise<void>>;
 };
 
-export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = []) {
+// Demos keep the CLI and offline tests self-contained. A real host turns them off so a
+// simulated send is never an alternative to a real one.
+export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = [], demos = true) {
   const pluginIds = new Set(plugins.map(plugin => plugin.capability.id));
-  const activeDemos = demoManifests.filter(cap => !pluginIds.has(cap.id));
+  const activeDemos = demos ? demoManifests.filter(cap => !pluginIds.has(cap.id)) : [];
   const manifests = [...activeDemos, ...plugins.map(plugin => plugin.capability)];
   const toolActions = new Map<string, { capability: string; action: string; effect: Effect }>();
   const ids = new Set<string>();

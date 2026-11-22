@@ -22,7 +22,7 @@ async function start() {
   if (process.env.ALTER_BROWSER !== "off") plugins.push(createBrowserPlugin());
   const app = await openAlter(
     await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking,
-    { plugins, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
+    { plugins, demos: false, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
   );
   console.log("Alter plugins:", plugins.map(plugin => plugin.capability.id).join(", ") || "none");
   try {
