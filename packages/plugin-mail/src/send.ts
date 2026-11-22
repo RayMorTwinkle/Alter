@@ -5,7 +5,7 @@ import type { MailConfig } from "./config.ts";
 
 type Phase = "ready" | "sending" | "accepted" | "filed";
 type Receipt = { messageId: string; address: string; created: number; phase: Phase };
-const Sends = conversationDoc<{ namespace: string; receipts: Record<string, Receipt> }>("mail-sends",
+export const Sends = conversationDoc<{ namespace: string; receipts: Record<string, Receipt> }>("mail-sends",
   () => ({ namespace: "", receipts: {} }));
 export type SendAttempt = {
   messageId: string; created: number;
