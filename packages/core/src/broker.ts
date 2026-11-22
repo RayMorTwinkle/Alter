@@ -127,7 +127,9 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             }
             if (!signal.value.allow) {
               record("deny");
-              return { block: signal.value.note ?? "Permission denied" };
+              // Without this, models tend to re-request the capability and retry, asking the user again.
+              const note = signal.value.note ? ` Note: ${signal.value.note}` : "";
+              return { block: `Permission denied.${note} Do not retry this call or request the capability again; finish and report.` };
             }
             record("allow");
             return;
