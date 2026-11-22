@@ -1,5 +1,5 @@
 import { obj, opt, str } from "@earendil-works/pi-schema";
-import { createBroker, mainApprovalTool, Requests } from "./broker.ts";
+import { approvalClocks, createBroker, mainApprovalTool, Requests } from "./broker.ts";
 import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type ExternalEvent, type PluginHost } from "./capabilities.ts";
 import {
   configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
@@ -7,8 +7,9 @@ import {
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
-import { inputClock } from "./clock.ts";
+import { defaultTimeZone, inputClock } from "./clock.ts";
 import { createMemory } from "./memory.ts";
+import { createScheduler } from "./scheduler.ts";
 import { mainInputContext } from "./timeline.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
@@ -22,13 +23,15 @@ export const leaseWindow = 30;
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number } = {},
+  options: { dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number; setTimer?: HarnessOptions["setTimer"] } = {},
 ) {
   const leasing = options.leasing ?? true;
+  const registry = createRegistry();
+  const scheduler = createScheduler(() => main, registry, options.timeZone ?? defaultTimeZone, options.now ?? Date.now);
   const clock = inputClock(options.timeZone, options.now);
   const memory = createMemory(options.dataDir ?? storageDirectories.get(storage), options.now);
   const plugins: AlterPlugin[] = [memory, ...(options.plugins ?? [])];
-  const capabilities = createCapabilityRegistry(plugins, options.demos ?? true);
+  const capabilities = createCapabilityRegistry([...plugins, scheduler], options.demos ?? true);
   const demo = createDemoCapabilities(capabilities.activeDemos);
   const descriptions: Record<string, string> = {
     calendar: "calendar（示例日历，仅标题）", notes: "notes（示例笔记 welcome）", outbox: "outbox（模拟发送）",
@@ -39,6 +42,7 @@ export async function openAlter(
   const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
     (leasable.has("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
     "用户说出长期偏好、目标（有期限时一并保存）或重要事实时，用 memory_save 记下；一次性的事不要记。" +
+    "用户要求“提醒我……”时，用 schedule_create 创建提醒。" +
     `多步或探索性工作用 dispatch_task 派单，可用能力有 ${available.join("、")}。` +
     "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
   const { toolActions } = capabilities;
@@ -57,6 +61,7 @@ export async function openAlter(
   }
 
   const controls: ToolRegistration[] = [
+    ...scheduler.tools,
     dispatchTool(capabilities, taskExtensions, taskModel, clock, thinking.task),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
@@ -78,6 +83,7 @@ export async function openAlter(
       name: "enable_tool", description: "Lease a main-leasable capability for direct use.",
       parameters: obj({ capability: str(), reason: str({ minLength: 1 }) }), replay: "safe",
       async execute({ capability }, api, ctx) {
+        if (capability === "schedule") return reply("Schedule is always available");
         if (capability === "memory") return reply("Memory is always available");
         if (!leasable.has(capability)) return reply("Capability is not leasable", true);
         await api.commit(async tx => {
@@ -120,7 +126,7 @@ export async function openAlter(
       hook(GenerationTask, { afterRun: () => ({ tasks: [hookTask(AdvanceLeases, null)] }) }),
       hook(ToolTask, { async beforeTool(call, _, ctx) {
         const action = toolActions.get(call.name);
-        if (!action || action.capability === "memory") return;
+        if (!action || action.capability === "memory" || action.capability === "schedule") return;
         return main.commit(async tx => {
           const leases = await tx.doc(Leases, main.id);
           if (!leasable.has(action.capability) || !Object.hasOwn(leases.lastUsed, action.capability)) return { block: "No active lease" };
@@ -129,14 +135,14 @@ export async function openAlter(
       } }),
     ],
   });
-  const registry = createRegistry();
   for (const extension of [...taskExtensions, controlPlane]) registry.install(extension);
   const harness = await Harness.open(storage, {
-    models, registry, settings: { toolExecution: "sequential", retry: { enabled: false } },
+    models, registry, now: options.now, setTimer: options.setTimer, settings: { toolExecution: "sequential", retry: { enabled: false } },
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
     extensions: [controlPlane, extension, broker], modelTools: controls,
   } });
+  if (options.now) approvalClocks.set(main, options.now);
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases, granted capabilities and the conversational history.
   await main.commit(async tx => {
@@ -146,7 +152,7 @@ export async function openAlter(
     await updateOffered(tx, main.id, leases.lastUsed);
     // Pre-timeout requests get one approval window at upgrade. On resume the runtime rechecks parked gates.
     const requests = await tx.doc(Requests, main.id);
-    for (const request of Object.values(requests.pending)) request.expiresAt ??= Date.now() + timeout;
+    for (const request of Object.values(requests.pending)) request.expiresAt ??= (options.now ?? Date.now)() + timeout;
     const tasks = await tx.doc(Tasks, main.id);
     for (const [id, task] of Object.entries(tasks.byId)) {
       if (task.context === undefined || task.createdAt === undefined) {
@@ -184,5 +190,5 @@ export async function openAlter(
     const summary = memory.summary();
     return { at: stamp.at, prefix: summary ? stamp.prefix + "\n" + summary : stamp.prefix };
   });
-  return { harness, main, demo, memory, capabilities, events: host, close: () => closing ??= shutdown() };
+  return { harness, main, demo, memory, scheduler, capabilities, events: host, close: () => closing ??= shutdown() };
 }

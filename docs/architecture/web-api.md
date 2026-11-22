@@ -1,4 +1,4 @@
-# Web API 契约（v1.6）
+# Web API 契约（v1.7）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -6,6 +6,7 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `ALTER_TZ` | `Asia/Shanghai` | 提醒与每日重复使用的用户时区 |
 | `ALTER_WEB_HOST` | `127.0.0.1` | 只监听本机；需要局域网访问时显式改 |
 | `ALTER_WEB_PORT` | `4317` | |
 | `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 两类审批的等待时长，修改只影响新请求 |
@@ -93,6 +94,12 @@ type FeishuPairing = ({ paired: true } | { paired: false; code: string; expiresA
 type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
 
+type Notification = {
+  id: string; at: number; kind: "reminder"; level: "now" | "digest" | "silent";
+  title: string; body?: string; source: "schedule"; status: "unread" | "read";
+  feedback?: "useful" | "useless";
+};
+
 type MemoryItem = {
   id: string;
   kind: "profile" | "goal" | "fact";
@@ -115,7 +122,7 @@ type TranscriptItem =
 
 | 方法 | 路径 | 返回 |
 |---|---|---|
-| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
+| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], notifications: Notification[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
 | `POST` | `/api/messages` | 请求 `{ text }` → `202 { id }`；主会话忙时排队，不报错 |
 | `POST` | `/api/permissions/:id` | 请求 `{ allow: boolean, note?: string }` → `204`；非用户受众、已到期或已处理 `409` |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
@@ -126,10 +133,13 @@ type TranscriptItem =
 | `GET` | `/api/feishu/oauth/callback?code=…&state=…` | 成功 `302` 回到 `/`；无效、过期、重复或拒绝授权返回 `400` 错误页；换令牌或保存失败返回 `502` 错误页 |
 | `POST` | `/api/feishu/account/disconnect` | 需要登录；清除本地授权，重复调用均返回 `204` |
 | `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
+| `POST` | `/api/notifications/:id` | 更新已读或反馈 → `204`。请求至少含 `status`（仅 `read`）或 `feedback`（`useful` 或 `useless`）之一。无效字段返回 `400`，未知或已淘汰的 ID 返回 `404` |
 | `GET` | `/api/memory` | `MemoryItem[]`，按 `updatedAt` 倒序。读取时将已过期的 active 目标转为 pending |
 | `PATCH` | `/api/memory/:id` | 请求至少含 `text`、`status`、`due` 之一 → `204`。期限仅适用于目标，使用 Unix 毫秒，传 `null` 可清除。字段无效返回 `400`，记忆不存在返回 `404` |
 | `DELETE` | `/api/memory/:id` | 删除记忆 → `204`；记忆不存在返回 `404` |
 | `GET` | `/api/events` | SSE，见下 |
+
+v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际投递到通知中心的 Unix 毫秒时间。按用户本地时间，23:00（含）至次日 08:00（不含）触发的提醒记为 `digest`，其余记为 `now`。已配对的飞书私聊推送新的未读 `now` 通知。读状态和反馈可独立更新，重复提交同一值仍返回 `204`。
 
 v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直接执行。
 
@@ -148,6 +158,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | `pending` | `PermissionRequest[]` | 待审批列表整体替换 |
 | `ledger` | `LedgerEntry[]` | 账本整体替换 |
 | `busy` | `{ busy: boolean }` | 主会话是否在生成 |
+| `notifications` | `Notification[]` | v1.7 新增。提醒触发、已读或反馈更新时整体替换，首次连接与重连由 snapshot 提供 |
 | `memory` | `MemoryItem[]` | v1.5：工具写入、网页修改或删除、读取触发过期转换后推送全量列表。首次连接与重连后请求 `GET /api/memory` 获取当前列表 |
 | `calendar` | `Agenda` | v1.3：日程变化时整体替换。不包含在 `snapshot` 中，重连后前端重新请求 `/api/calendar` |
 

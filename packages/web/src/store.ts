@@ -1,4 +1,4 @@
-import type { Agenda, LedgerEntry, MemoryItem, PermissionRequest, Snapshot, Task, TimelineItem } from "./types.ts";
+import type { Agenda, LedgerEntry, MemoryItem, Notification, PermissionRequest, Snapshot, Task, TimelineItem } from "./types.ts";
 
 export type State = Snapshot & {
   draft: { id: string; text: string } | null;
@@ -17,7 +17,8 @@ export type Action =
   | { type: "busy"; busy: boolean }
   | { type: "connection"; connection: State["connection"] }
   | { type: "agenda"; agenda: Agenda }
-  | { type: "memory"; memory: MemoryItem[] };
+  | { type: "memory"; memory: MemoryItem[] }
+  | { type: "notifications"; notifications: Notification[] };
 
 export const initialState: State = {
   timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: [],
@@ -57,6 +58,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, agenda: action.agenda };
     case "memory":
       return { ...state, memory: action.memory };
+    case "notifications":
+      return { ...state, notifications: action.notifications };
   }
 }
 

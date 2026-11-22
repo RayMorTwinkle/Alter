@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.6).
+// Mirrors docs/architecture/web-api.md (v1.7).
 
 export type TimelineItem = {
   id: string;
@@ -36,6 +36,11 @@ export type Task = {
   pending: PermissionRequest[];
 };
 
+export type Notification = {
+  id: string; at: number; kind: "reminder"; level: "now" | "digest" | "silent";
+  title: string; body?: string; source: "schedule"; status: "unread" | "read"; feedback?: "useful" | "useless";
+};
+
 export type MemoryItem = {
   id: string;
   kind: "profile" | "goal" | "fact";
@@ -56,6 +61,7 @@ export type TranscriptItem =
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
 export type Snapshot = {
+  notifications?: Notification[]; // Absent in v1.6 snapshots and before the first snapshot.
   timeline: TimelineItem[];
   tasks: Task[];
   pending: PermissionRequest[];

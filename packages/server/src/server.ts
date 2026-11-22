@@ -2,8 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import {
-  answerUserPermission, context, observeSurface, readTranscript, stopMainTurn, submitMessage,
-  MemoryInputError, Tasks, usageSummary, type AlterApp,
+  answerUserPermission, context, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
+  MemoryInputError, schema, Tasks, usageSummary, type AlterApp,
 } from "@alter/core";
 import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
@@ -12,6 +12,10 @@ const cookieName = "alter_session";
 const cookieOptions = "Path=/; HttpOnly; SameSite=Strict";
 const defaultDist = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const digest = (value: string) => createHash("sha256").update(value).digest();
+
+const notificationPatch = schema.compile(schema.obj({
+  status: schema.opt(schema.lit("read")), feedback: schema.opt(schema.oneOf(["useful", "useless"])),
+}));
 
 function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" }).end(JSON.stringify(data));
@@ -145,6 +149,10 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return json(res, 200, { items: await readTranscript(conversation) });
     } else if (method === "POST" && path === "/api/stop") {
       await stopMainTurn(app);
+    } else if (method === "POST" && /^\/api\/notifications\/[^/]+$/.test(path)) {
+      const patch = await body(req);
+      if (!notificationPatch.check(patch) || !Object.keys(patch).length) throw new HttpError(400, "Expected read status or useful/useless feedback");
+      if (!await updateNotification(app.main, path.split("/")[3]!, patch)) throw new HttpError(404, "Unknown notification");
     } else if (method === "GET" && path === "/api/memory") {
       return json(res, 200, app.memory.list());
     } else if ((method === "PATCH" || method === "DELETE") && /^\/api\/memory\/[^/]+$/.test(path)) {

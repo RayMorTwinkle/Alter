@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  Events, Requests, answerUserPermission, context, createGatewayModels, gatewayConfig, observeSurface,
+  Events, Notifications, Requests, updateNotification, answerUserPermission, context, createGatewayModels, gatewayConfig, observeSurface,
   openAlter, openNodeSqliteStorage, submitMessage,
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
@@ -254,4 +254,27 @@ it("keeps capability requests addressed to the main assistant off the owner's ca
   await expect.poll(() => f.feed.snapshot().pending[0]?.audience).toBe("main");
   await f.close();
   expect(f.transport.sendCard).not.toHaveBeenCalled();
+});
+
+it("delivers only unread now notifications to the paired owner and remembers IDs across restarts", async () => {
+  const f = await setup();
+  const notification = { at: f.clock.now, kind: "reminder", title: "提醒", body: "会议", source: "schedule", status: "unread" } as const;
+  await f.app.main.commit(async tx => {
+    const { entries } = await tx.doc(Notifications, f.app.main.id);
+    entries.push({ ...notification, id: "first", level: "now" }, { ...notification, id: "quiet", level: "digest" },
+      { ...notification, id: "mute", level: "silent" }, { ...notification, id: "old", level: "now", status: "read" });
+  }, context);
+  expect(f.transport.sendText).not.toHaveBeenCalled();
+  await f.pair();
+  await expect.poll(() => f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "提醒\n会议"]]);
+  await updateNotification(f.app.main, "first", { feedback: "useful" });
+  await f.close();
+  const next = await f.reopen();
+  await next.app.main.commit(async tx => {
+    (await tx.doc(Notifications, next.app.main.id)).entries.unshift({ ...notification, body: "下班", id: "second", level: "now" });
+  }, context);
+  await updateNotification(next.app.main, "second", { status: "read" });
+  await next.close();
+  expect(next.transport.sendText.mock.calls).toEqual([["private", "提醒\n下班"]]);
+  expect(f.gateway.requests).toHaveLength(0);
 });

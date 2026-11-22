@@ -1,10 +1,10 @@
 import { X } from "@phosphor-icons/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api.ts";
-import { compactNumber, pretty, seconds } from "../format.ts";
+import { clock, compactNumber, pretty, seconds } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Markdown } from "../markdown.tsx";
-import type { Task, TranscriptItem, UsageRow } from "../types.ts";
+import type { Notification, Task, TranscriptItem, UsageRow } from "../types.ts";
 import { StatusChip } from "./Panels.tsx";
 
 export function Sheet({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
@@ -115,6 +115,38 @@ export function UsageSheet({ onClose }: { onClose: () => void }) {
           </dl>
         </article>
       ))}
+    </Sheet>
+  );
+}
+
+export function NotificationsSheet({ items, onClose, onFeedback }: {
+  items: Notification[]; onClose: () => void; onFeedback: (id: string, feedback: "useful" | "useless") => void;
+}) {
+  const t = useT();
+  const ordered = [...items].sort((a, b) => b.at - a.at);
+  return (
+    <Sheet title={t.notifications} onClose={onClose}>
+      {ordered.length === 0 && <p className="empty">{t.emptyNotifications}</p>}
+      <ul className="rows">
+        {ordered.map(item => (
+          <li key={item.id} className={`notice ${item.status}`}>
+            <div className="row-main">
+              <div className="notice-title">{item.title}</div>
+              {item.body && <div className="notice-body">{item.body}</div>}
+              <div className="row-meta">
+                <span className="chip">{t.noticeLevels[item.level]}</span>
+                <time>{clock(item.at)}</time>
+              </div>
+              <div className="notice-feedback">
+                {(["useful", "useless"] as const).map(value => (
+                  <button key={value} className={`text-btn ${item.feedback === value ? "chosen" : ""}`} aria-pressed={item.feedback === value}
+                    onClick={() => onFeedback(item.id, value)}>{t.feedback[value]}</button>
+                ))}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
     </Sheet>
   );
 }

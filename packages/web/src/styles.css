@@ -208,6 +208,15 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .agenda-day { display: grid; gap: 6px; }
 .agenda-day + .agenda-day { margin-top: 8px; }
 .agenda-day h3 { margin: 4px 4px 0; display: flex; gap: 8px; align-items: baseline; font-size: 13px; font-weight: 500; color: var(--muted); }
+.bell { position: relative; }
+.bell .badge { position: absolute; top: 0; right: -2px; min-width: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+.notice { text-align: left; color: var(--ink); background: var(--paper); border-radius: var(--radius); padding: 10px 12px; border-left: 3px solid transparent; }
+.notice.unread { border-left-color: var(--accent); }
+.notice-title { font-size: 14px; font-weight: 550; }
+.notice-body { font-size: 14px; color: var(--ink-2); white-space: pre-wrap; }
+.notice-feedback { display: flex; gap: 2px; margin-left: -8px; }
+.notice-feedback .text-btn { font-size: 13px; padding: 2px 8px; }
+.notice-feedback .chosen { background: var(--fill-strong); color: var(--ink); }
 .memory-group { display: grid; gap: 6px; }
 .memory-group h3 { margin: 4px 4px 0; font-size: 13px; font-weight: 500; color: var(--muted); }
 .memory-item { display: flex; align-items: flex-start; gap: 8px; background: var(--paper); border-radius: var(--radius); padding: 10px 6px 10px 12px; }

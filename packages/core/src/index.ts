@@ -13,3 +13,6 @@ export { Ledger, Tasks, type LedgerEntry, type Permission, type TaskRecord } fro
 export { readUsage, usageSummary, usageTotals } from "./usage.ts";
 export { observeSurface, stopMainTurn, type AlterApp, type AlterSurface, type PermissionRequest, type SurfaceEvent, type SurfaceState } from "./observe.ts";
 export { readTranscript, submitMessage, type TimelineItem, type TranscriptItem } from "./timeline.ts";
+export { Notifications, updateNotification, type Notification } from "./notifications.ts";
+export type { ScheduleItem } from "./scheduler.ts";
+export { calendarTime } from "./calendar-time.ts";

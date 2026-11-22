@@ -1,5 +1,6 @@
 import { contentText } from "@earendil-works/pi-ai";
 import { Audit, Requests, type PermissionState } from "./broker.ts";
+import { Notifications, type Notification } from "./notifications.ts";
 import { Leases, leaseWindow, type openAlter } from "./main.ts";
 import {
   context, InboxDoc, LiveDoc, type ConversationDocToken, type Cursor, type JsonObject,
@@ -13,10 +14,11 @@ export type PermissionRequest = Omit<PermissionState["pending"][string], "argume
 type Task = Omit<TaskRecord, "conversationId"> & { taskId: string; conversationId: string; pending: PermissionRequest[] };
 export type SurfaceState = {
   timeline: TimelineItem[]; tasks: Task[]; pending: PermissionRequest[]; ledger: LedgerEntry[];
+  notifications: Notification[];
   leases: { capability: string; idleTurns: number; window: number }[]; busy: boolean;
 };
 type Delta = { id: string; text: string };
-type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger"> & {
+type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications"> & {
   busy: { busy: boolean }; timeline: TimelineItem; delta: Delta;
 };
 export type SurfaceEvent = { [K in keyof Payloads]: { event: K; data: Payloads[K] } }[keyof Payloads];
@@ -26,7 +28,7 @@ const limit = 200;
 // Both surfaces attach before resume. Seed the recent history once, then consume the
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
 export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
-  const state: SurfaceState = { timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state: SurfaceState = { timeline: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   let inputSource: string | undefined;
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
@@ -68,6 +70,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       await tx.doc(Tasks, main.id);
       await tx.doc(Requests, main.id);
       await tx.doc(Audit, main.id);
+      await tx.doc(Notifications, main.id);
       await tx.doc(Ledger, main.id);
       await tx.doc(Leases, main.id);
       await tx.doc(InboxDoc, main.id);
@@ -114,6 +117,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       emit({ event: "pending", data: state.pending });
       updateTasks();
     });
+    await watch(Notifications, value => { state.notifications = value.entries; emit({ event: "notifications", data: state.notifications }); });
     await watch(Ledger, value => { state.ledger = value.entries; emit({ event: "ledger", data: state.ledger }); });
     await watch(Leases, value => {
       state.leases = Object.entries(value.lastUsed).map(([capability, last]) => ({
