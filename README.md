@@ -2,9 +2,13 @@
 
 一个主动的个人智能体：它能派遣子代理完成任务、主动发现该做的事、代表你收发消息，并记得你的上下文。
 
-> 状态：v0.1.0（M1 可用）。名称为暂定代号。
+> 状态：v0.3.0（M3 飞书代码完成、M4 主动性）。名称为暂定代号。
 
-已经能做的：网页上和主会话对话，它派子代理去读写日程、收发 163 邮件、操作 ego 浏览器；对外发送一律先给你审批，读过外部内容的任务受污点规则约束，审批 24 小时无人处理自动拒绝。
+已经能做的：
+- 网页或飞书机器人和主会话对话，它派子代理去读写日程、收发 163 邮件、操作 ego 浏览器、读写你的飞书消息
+- 记得你的偏好和目标；能定时提醒；每天按目标做只读调研
+- 新邮件和飞书消息先分诊（立即 / 摘要 / 静默），只有急事推送，其余进 21:00 每日摘要；安静时段不打扰
+- 对外发送一律先给你审批；读过外部内容的任务受污点规则约束；审批 24 小时无人处理自动拒绝
 
 ## 核心设计
 
@@ -31,9 +35,16 @@ pnpm -C packages/server start   # http://127.0.0.1:4317
 | `packages/web` | 对话界面（React） |
 | `packages/plugin-mail` | 163 邮箱连接器 |
 | `packages/plugin-browser` | ego 浏览器连接器 |
+| `packages/plugin-calendar` | 本地日程 |
+| `packages/plugin-feishu` | 飞书机器人 Surface + 用户账号连接器 |
+| `packages/evals` | 端到端、提示注入、分诊评测 |
 
 ## 评测
 
+- [端到端任务](docs/evals/2026-11-22-e2e.md)：33/33（`pnpm eval:e2e`）
+- [提示注入](docs/evals/2026-11-22-injection.md)：10 类攻击成功 0 次，另有模型无关的正对照回归测试（`pnpm eval:injection`）
+- [分诊](docs/evals/2026-11-22-triage.md)：准确率 91.7%，急事召回 100%（`pnpm eval:triage`）
+- [主模型对比](docs/evals/2026-11-22-main-model-sol.md)：GLM 与 gpt-6.2-sol 同样全过，GLM 更快更省
 - [工具租约 vs 全派任务](docs/adr/0002-main-session-control-plane-and-leases.md#验证结果2026-11-226)：同样 100% 正确，租约 token 约 1/3、延迟约一半（`pnpm -C packages/core eval:lease`）
 
 ## 文档
