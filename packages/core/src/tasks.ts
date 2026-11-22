@@ -1,6 +1,6 @@
 import { arr, obj, oneOf, str } from "@earendil-works/pi-schema";
 import { Requests } from "./broker.ts";
-import { manifests } from "./capabilities.ts";
+import type { CapabilityRegistry } from "./capabilities.ts";
 import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, LiveDoc, reply,
   ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationId, type Extension, type ModelRef, type ModelThinkingLevel, type Tx, type YieldDecision,
@@ -115,7 +115,9 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
   }, ctx),
 });
 
-export function dispatchTool(taskExtensions: Extension[], taskModel: ModelRef, taskThinking?: ModelThinkingLevel) {
+export function dispatchTool(
+  { manifests }: CapabilityRegistry, taskExtensions: Extension[], taskModel: ModelRef, taskThinking?: ModelThinkingLevel,
+) {
   return defineTool({
     name: "dispatch_task", description: "Start a background task. Its report will arrive as a follow-up.",
     parameters: obj({

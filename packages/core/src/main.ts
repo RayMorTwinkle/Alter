@@ -1,6 +1,6 @@
 import { obj, opt, str } from "@earendil-works/pi-schema";
 import { createBroker, mainApprovalTool, Requests } from "./broker.ts";
-import { createCapabilityRegistry, createDemoCapabilities, dispatchRegistry, type AlterPlugin, type ExternalEvent, type PluginHost } from "./capabilities.ts";
+import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type ExternalEvent, type PluginHost } from "./capabilities.ts";
 import {
   configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, reply, ToolTask, type Conversation,
@@ -41,13 +41,8 @@ export async function openAlter(
     await configure(tx, id, { modelTools: [...controls, ...leased] });
   }
 
-  const dispatch = dispatchTool(taskExtensions, taskModel, thinking.task);
-  const scopedDispatch: typeof dispatch = {
-    ...dispatch,
-    execute: (args, api, ctx) => dispatchRegistry.run(capabilities, () => dispatch.execute(args, api, ctx)),
-  };
   const controls: ToolRegistration[] = [
-    scopedDispatch,
+    dispatchTool(capabilities, taskExtensions, taskModel, thinking.task),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
       parameters: obj({ taskId: opt(str()) }), replay: "safe",

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { obj, str } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool, reply, type ToolRegistration } from "./runtime.ts";
 
@@ -53,15 +52,6 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = []) {
 }
 export type CapabilityRegistry = ReturnType<typeof createCapabilityRegistry>;
 export const { toolActions } = createCapabilityRegistry();
-
-// dispatchTool uses manifests.some to validate its allow list. Bind that legacy lookup
-// to the invoking harness, including when multiple harnesses dispatch concurrently.
-export const dispatchRegistry = new AsyncLocalStorage<CapabilityRegistry>();
-export const manifests = {
-  some(predicate: (capability: Capability) => boolean) {
-    return (dispatchRegistry.getStore()?.manifests ?? demoManifests).some(predicate);
-  },
-};
 
 export function createDemoCapabilities() {
   const calendar = new Map<string, string>();
