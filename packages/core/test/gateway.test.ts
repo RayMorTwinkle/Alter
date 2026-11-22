@@ -234,12 +234,12 @@ it("counts user aborts separately from provider failures", async () => {
   expect(await usageSummary(dir)).toMatchObject([{ model: "m", calls: 3, aborted: 1, failureRate: "33.3%" }]);
 });
 
-it("sends medium reasoning effort for main and high for tasks", async () => {
+it.each([[undefined, "high"], ["medium", "medium"], ["max", "high"]] as const)("records and sends the effective task reasoning effort (%s)", async (thinking, effective) => {
   const app = await setup(({ messages, tools }, res) => {
     const last = messages.at(-1)!;
     if (tools?.some(t => t.function.name === "finish")) return toolCall(res, "finish", { summary: "done", refs: [] });
     if (last.content === "delegate") {
-      return toolCall(res, "dispatch_task", { brief: "work", context: "fresh", permission: "full", allow: [] });
+      return toolCall(res, "dispatch_task", { brief: "work", context: "fresh", permission: "full", allow: [], thinking });
     }
     say(res, "ok");
   });
@@ -250,7 +250,8 @@ it("sends medium reasoning effort for main and high for tasks", async () => {
   await expect.poll(() => app.requests.some(r => r.tools?.some(t => t.function.name === "finish"))).toBe(true);
   const isTask = (r: { tools?: { function: { name: string } }[] }) => r.tools?.some(t => t.function.name === "finish");
   expect(new Set(app.requests.filter(r => !isTask(r)).map(r => r.reasoning_effort))).toEqual(new Set(["medium"]));
-  expect(new Set(app.requests.filter(isTask).map(r => r.reasoning_effort))).toEqual(new Set(["high"]));
+  expect(new Set(app.requests.filter(isTask).map(r => r.reasoning_effort))).toEqual(new Set([effective]));
+  expect(Object.values((await runtime.harness.snapshot(Tasks, runtime.main.id, context))!.byId)[0]?.thinking).toBe(effective);
 });
 
 it("rejects an unknown thinking level", () => {

@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.8).
+// Mirrors docs/architecture/web-api.md (v1.9).
 
 export type TimelineItem = {
   id: string;
@@ -27,6 +27,8 @@ export type Task = {
   taskId: string;
   brief: string;
   context: "fork" | "fresh";
+  continuedFrom?: string;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
   allow: string[];
   status: "running" | "completed" | "failed";

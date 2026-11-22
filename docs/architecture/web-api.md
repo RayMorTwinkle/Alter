@@ -1,4 +1,4 @@
-# Web API 契约（v1.8）
+# Web API 契约（v1.9）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -64,10 +64,12 @@ type Task = {
   taskId: string;
   brief: string;
   context: "fork" | "fresh";
+  continuedFrom?: string;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
   allow: string[];
   status: "running" | "completed" | "failed";
-  failure?: string;
+  failure?: string;           // 取消任务在此接口返回 status="failed"、failure="cancelled"
   conversationId: string;
   createdAt: number;
   pending: PermissionRequest[];

@@ -174,7 +174,7 @@ it.each([
   const task = state.tasks[0]!;
   const request = state.pending[0]!;
   expect(task).toEqual({ taskId: expect.any(String), conversationId: expect.any(String), createdAt: expect.any(Number),
-    context: "fresh", brief: "send greeting", permission, status: "running", allow: [], pending: [request] });
+    context: "fresh", brief: "send greeting", permission, thinking: "high", status: "running", allow: [], pending: [request] });
   expect(task.createdAt).toBeGreaterThan(0);
   expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience,
     capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason, expiresAt: expect.any(Number) });
@@ -264,6 +264,8 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
     const old = (await tx.doc(Tasks, web.app.main.id)).byId[task.taskId]!;
     Reflect.deleteProperty(old, "context");
     Reflect.deleteProperty(old, "createdAt");
+    Reflect.deleteProperty(old, "thinking");
+    Reflect.deleteProperty(old, "worker");
     const lease = await tx.doc(Leases, web.app.main.id);
     lease.turns = 9;
     lease.lastUsed.calendar = 7;
