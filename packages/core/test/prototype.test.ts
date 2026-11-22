@@ -9,6 +9,8 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { answerUserPermission, Audit, Requests } from "../src/broker.ts";
+import { createBrowserPlugin } from "../../plugin-browser/src/index.ts";
+import { fakeEgo } from "../../plugin-browser/test/fake.ts";
 import { createMailPlugin } from "../../plugin-mail/src/index.ts";
 import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugin-mail/test/fake.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
@@ -412,6 +414,75 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
   expect(mail.clients.smtp).toHaveBeenCalledTimes(1);
   expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.tool === "mail_send")
     .map(e => [e.effect, e.decision])).toEqual([["external-send", "park"], ["external-send", "allow"]]);
+});
+
+it.each(["restricted", "full"] as const)("opens and clicks, then parks a tainted browser fill in %s mode", async permission => {
+  const ego = fakeEgo();
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("browse", permission, ["browser"]);
+    if (text === "browse") return call("browser_open", { url: "https://example.test/" });
+    if (last.role === "toolResult") {
+      if (last.toolName === "browser_open") return call("browser_click", { target: "@21" });
+      if (last.toolName === "browser_click") return call("browser_fill", { target: "@22", text: "hello" });
+      if (last.toolName === "browser_fill") return finish("browsed");
+    }
+    return say("OK");
+  }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
+  await input(app, "delegate");
+  const request = await parked(app);
+  expect(request).toMatchObject({ audience: "user", tool: "browser_fill", tainted: true,
+    taint: { capability: "browser", source: "browser_open" } });
+  expect(ego.page.goto).toHaveBeenCalledOnce();
+  expect(ego.page.click).toHaveBeenCalledOnce();
+  expect(ego.page.fill).not.toHaveBeenCalled();
+  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await expect.poll(() => ego.finish.mock.calls.length).toBe(1);
+  expect(ego.page.fill).toHaveBeenCalledWith("@22", "hello");
+  expect(ego.spaces.size).toBe(0);
+  expect((await ledger(app))[0]?.summary).toBe("browsed");
+});
+
+it("aborts a parked task even when plugin cleanup fails", async () => {
+  const plugin: AlterPlugin = {
+    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },
+    tools: [defineTool({ name: "fixture_read", description: "Read", parameters: obj({}), execute: async () => reply("ok") })],
+    onTaskEnd: async () => { throw new Error("browser gone"); },
+  };
+  const app = await open(text => {
+    if (text === "delegate") return dispatch("send", "auto");
+    if (text === "send") return call("outbox_send", { message: "hello" });
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "delegate");
+  const request = await parked(app);
+  const owner = await app.main.commit(async tx => {
+    const task = (await tx.doc(Tasks, app.main.id)).byId[request.taskId]!;
+    return (await tx.conversation(task.conversationId))!.owner!.taskId;
+  }, context);
+  await app.harness.abortTask(owner, context);
+  const ended = await app.harness.waitForTask(owner, context);
+  expect(ended?.state).toMatchObject({ status: "terminal", outcome: { status: "aborted" } });
+  expect((await app.harness.snapshot(Tasks, app.main.id, context))?.byId[request.taskId]?.status).toBe("failed");
+});
+
+it("closes the browser space when a parked task is aborted", async () => {
+  const ego = fakeEgo();
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("browse", "restricted", ["browser"]);
+    if (text === "browse") return call("browser_open", { url: "https://example.test/" });
+    if (last.role === "toolResult" && last.toolName === "browser_open") return call("browser_press", { key: "Enter" });
+    return say("OK");
+  }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
+  await input(app, "delegate");
+  const request = await parked(app);
+  const owner = await app.main.commit(async tx => {
+    const task = (await tx.doc(Tasks, app.main.id)).byId[request.taskId]!;
+    return (await tx.conversation(task.conversationId))!.owner!.taskId;
+  }, context);
+  await app.harness.abortTask(owner, context);
+  await app.harness.waitForTask(owner, context);
+  expect(ego.spaces.size).toBe(0);
+  expect(ego.page.keyboard.press).not.toHaveBeenCalled();
 });
 
 it("caps plugin events on main and lets an event source flush before harness close", async () => {

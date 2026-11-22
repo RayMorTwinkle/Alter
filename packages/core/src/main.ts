@@ -94,6 +94,13 @@ export async function openAlter(
   const controlPlane = defineExtension({
     name: "alter.main", tools: controls, tasks: [AdvanceLeases, BackgroundTask],
     hooks: [
+      ...plugins.flatMap(({ onTaskEnd }) => onTaskEnd ? [hook(BackgroundTask, {
+        async onTaskEnd(taskId) {
+          const task = (await harness.snapshot(Tasks, main.id, context))?.byId[taskId];
+          const child = task && await harness.conversation(task.conversationId, context);
+          if (child) await onTaskEnd(child);
+        },
+      })] : []),
       hook(GenerationTask, { afterRun: () => ({ tasks: [hookTask(AdvanceLeases, null)] }) }),
       hook(ToolTask, { async beforeTool(call, _, ctx) {
         const action = toolActions.get(call.name);
