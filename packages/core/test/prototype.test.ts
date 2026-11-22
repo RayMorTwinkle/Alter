@@ -7,14 +7,16 @@ import { obj } from "@earendil-works/pi-schema";
 import { contentText, type AssistantMessage, type Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { answerUserPermission, Audit, Requests } from "../src/broker.ts";
 import { createMailPlugin } from "../../plugin-mail/src/index.ts";
 import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugin-mail/test/fake.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { Taint } from "../src/taint.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
+import { observeSurface, stopMainTurn } from "../src/observe.ts";
 import { unescapeNewlines } from "../src/tasks.ts";
 
 type Alter = Awaited<ReturnType<typeof openAlter>>;
@@ -31,7 +33,7 @@ function dispatch(brief: string, permission: Permission = "restricted", allow: s
 function finish(summary: string) {
   return call("finish", { summary, refs: [] });
 }
-async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = []) {
+async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = [], approvalTimeoutMs?: number) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 160 }, () => ({ messages }) => {
     const tools = new Set<string>();
@@ -45,7 +47,7 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
   }));
   const models = createModels();
   models.setProvider(faux.provider);
-  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins });
+  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins, approvalTimeoutMs });
   cleanup.push(app.close);
   return app;
 }
@@ -121,8 +123,9 @@ async function parked(app: Alter) {
     const request = Object.values(requests?.pending ?? {})[0];
     if (!request) return;
     const task = (await app.harness.snapshot(Tasks, app.main.id, context))?.byId[request.taskId];
-    if (!task) return;
-    const live = await app.harness.snapshot(LiveDoc, task.conversationId, context);
+    const conversation = request.taskId === "main" ? app.main.id : task?.conversationId;
+    if (!conversation) return;
+    const live = await app.harness.snapshot(LiveDoc, conversation, context);
     if (live?.tools?.some(slot => slot.taskId === request.toolTask && slot.status === "sleeping")) return request;
   };
   await expect.poll(find).toBeDefined();
@@ -133,7 +136,6 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   const dir = await mkdtemp(join(tmpdir(), "alter-m0-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const reopen = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
-  let requestId = "";
   const route: Route = (text, last) => {
     if (text === "delegate") return dispatch("record after restart");
     if (text === "record after restart") return call("outbox_send", { message: "survived" });
@@ -142,14 +144,14 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   };
   const first = await open(route, await reopen());
   await input(first, "delegate");
-  requestId = (await parked(first)).id;
+  const { id: requestId, expiresAt } = await parked(first);
   await first.main.waitForIdle(context);
   expect(first.demo.outbox).toEqual([]);
   await first.harness.close(context);
 
-  const second = await open(route, await reopen());
+  const second = await open(route, await reopen(), [], 60_000);
   second.harness.resume();
-  expect((await parked(second)).id).toBe(requestId);
+  expect(await parked(second)).toMatchObject({ id: requestId, expiresAt });
   await answerUserPermission(second.main, { requestId, allow: true });
   await expect.poll(async () => (await ledger(second)).length).toBe(1);
   await second.main.waitForIdle(context);
@@ -161,6 +163,36 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   await third.main.waitForIdle(context);
   expect((await incoming(third)).filter(text => text.endsWith("finished: Recorded in outbox"))).toHaveLength(1);
   expect(await ledger(third)).toHaveLength(1);
+});
+
+it.each(["user", "main"])("expires an unanswered %s approval and notifies main once", async audience => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const tool = audience === "user" ? "outbox_send" : "request_capability";
+    const notifications: string[] = [];
+    const app = await open((text, last) => {
+      if (text === "delegate") return dispatch("work");
+      if (text === "work") return call(tool, audience === "user" ? { message: "hello" } : { capability: "notes", reason: "read" });
+      if (last.role === "toolResult" && last.toolName === tool) return finish(text);
+      if (text.startsWith("Notify the user:")) notifications.push(text);
+      return say("OK");
+    });
+    await input(app, "delegate");
+    const request = await parked(app);
+    expect(request).toMatchObject({ audience, expiresAt: now + 86_400_000 });
+    clock.mockReturnValue(request.expiresAt);
+    if (audience === "user") expect((await answerUserPermission(app.main, { requestId: request.id, allow: true })).isError).toBe(true);
+    app.harness.resume();
+    await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual([expect.stringContaining("Approval expired without a decision")]);
+    await app.main.waitForIdle(context);
+    expect(notifications).toEqual([`Notify the user: task ${request.taskId}, request ${request.id} (${tool}): Approval expired without a decision`]);
+    expect(app.demo.outbox).toEqual([]);
+    expect((await app.harness.snapshot(Tasks, app.main.id, context))?.byId[request.taskId]?.allow).toEqual([]);
+    expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
+    expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.tool === tool).map(e => e.decision))
+      .toEqual(["park", "deny"]);
+  } finally { clock.mockRestore(); }
 });
 
 it("recovers a parked call after SIGKILL with no graceful close", async () => {
@@ -245,6 +277,8 @@ it("allows auto local writes and accepts only a host decision for an external se
   expect([...app.demo.calendar.values()]).toEqual(["meeting"]);
   await input(app, `check ${request.taskId}`);
   expect(JSON.parse(status)).toMatchObject([{ taskId: request.taskId, status: "running", pending: [{ id: request.id, audience: "user" }] }]);
+  expect(JSON.parse(status)[0].pending[0].remainingMs).toBeGreaterThan(0);
+  expect(JSON.parse(status)[0].pending[0].remainingMs).toBeLessThanOrEqual(86_400_000);
   await input(app, "approve as main");
   expect(mainResult).toContain("No pending request for this approver");
   expect(app.demo.outbox).toEqual([]);
@@ -457,4 +491,136 @@ it("unescapes newlines only when a summary has none", () => {
   expect(unescapeNewlines("a\\n\\nb")).toBe("a\n\nb");
   expect(unescapeNewlines("a\nuse \\n in code")).toBe("a\nuse \\n in code");
   expect(unescapeNewlines("plain")).toBe("plain");
+});
+
+function externalPlugin() {
+  const actions = [{ name: "send", effect: "external-send" }, { name: "delete", effect: "irreversible" },
+    { name: "run", effect: "unknown" }] as const;
+  const execute = vi.fn(async () => reply("executed"));
+  const plugin: AlterPlugin = {
+    capability: { id: "remote", mainLeasable: true, actions: [{ name: "read", effect: "read" }, ...actions] },
+    tools: [
+      defineTool({ name: "remote_read", description: "Read external text", parameters: obj({}),
+        execute: async () => ({ ...reply("external text"), details: { untrusted: true } }) }),
+      ...actions.map(({ name }) => defineTool({ name: `remote_${name}`, description: name, parameters: obj({}), execute })),
+    ],
+  };
+  return { plugin, execute };
+}
+
+it.each(["send", "delete", "run"])("requires user approval for a tainted full task's remote_%s", async action => {
+  const { plugin, execute } = externalPlugin();
+  const tool = "remote_" + action;
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("read then act", "full");
+    if (text === "read then act") return call("remote_read", {});
+    if (last.role === "toolResult") {
+      if (last.toolName === "remote_read") return call("request_capability", { capability: "remote", reason: "use remote" });
+      if (last.toolName === "request_capability") return call(tool, {});
+      if (last.toolName === tool) return finish(text);
+    }
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  const surface = await observeSurface(app, () => {});
+  cleanup.push(async () => surface.detach());
+  await input(app, "delegate");
+  const request = await parked(app);
+  expect(request).toMatchObject({ audience: "user", tool, tainted: true,
+    taint: { source: "remote_read", capability: "remote", at: expect.any(Number) } });
+  expect(surface.snapshot().pending).toMatchObject([{ id: request.id, tainted: true, taint: request.taint }]);
+  expect(surface.snapshot().tasks[0]?.pending).toEqual(surface.snapshot().pending);
+  expect(execute).not.toHaveBeenCalled();
+  expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries).toContainEqual(
+    expect.objectContaining({ tool, decision: "park", tainted: true }));
+  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["executed"]);
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("propagates a mail report to main and into both fork and fresh tasks across SQLite reopens", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-taint-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const storage = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
+  const plugin = createMailPlugin(mailConfig, fakeMail().clients);
+  const route: Route = (text, last) => {
+    if (text === "read mail") return dispatch("search mail", "full");
+    if (text === "search mail") return call("mail_search", {});
+    if (last.role === "toolResult" && last.toolName === "mail_search") return finish("mail report");
+    if (text === "fork" || text === "fresh") return dispatch("send report", "full", [], text);
+    if (text === "send report") return call("outbox_send", { message: "report" });
+    if (last.role === "toolResult" && last.toolName === "outbox_send") return finish(text);
+    return say("OK");
+  };
+  const first = await open(route, await storage(), [plugin]);
+  await input(first, "read mail");
+  await expect.poll(async () => (await ledger(first)).length).toBe(1);
+  await first.main.waitForIdle(context);
+  const source = (await first.harness.snapshot(Taint, first.main.id, context))?.first;
+  expect(source).toEqual({ source: "mail_search", capability: "mail", at: expect.any(Number) });
+  await input(first, "fork");
+  const forked = await parked(first);
+  expect(forked).toMatchObject({ audience: "user", tainted: true, taint: source });
+  await first.close();
+  const app = await open(route, await storage(), [plugin]);
+  app.harness.resume();
+  const tasks = (await app.harness.snapshot(Tasks, app.main.id, context))!.byId;
+  for (const id of [app.main.id, ...Object.values(tasks).map(task => task.conversationId)]) {
+    expect((await app.harness.snapshot(Taint, id, context))?.first).toEqual(source);
+  }
+  expect(await parked(app)).toEqual(forked);
+  await answerUserPermission(app.main, { requestId: forked.id, allow: false });
+  await expect.poll(async () => (await ledger(app)).length).toBe(2);
+  await input(app, "fresh");
+  expect(await parked(app)).toMatchObject({ audience: "user", tool: "outbox_send", tainted: true, taint: source });
+  expect(app.demo.outbox).toEqual([]);
+});
+
+it("gates a leased main tool after an external result, including when the user stops the turn", async () => {
+  const { plugin, execute } = externalPlugin();
+  const app = await open(text => {
+    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "use remote" });
+    if (text === "read") return call("remote_read", {});
+    if (text === "send") return call("remote_send", {});
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "lease");
+  await input(app, "send");
+  expect(execute).toHaveBeenCalledTimes(1);
+  await input(app, "read");
+  await app.main.submit({ type: "input", content: "send" }, context);
+  const req = await parked(app);
+  expect(req).toMatchObject({ taskId: "main", audience: "user", tool: "remote_send", tainted: true,
+    taint: { source: "remote_read" } });
+  expect(execute).toHaveBeenCalledTimes(1);
+  await answerUserPermission(app.main, { requestId: req.id, allow: true });
+  await app.main.waitForIdle(context);
+  expect(execute).toHaveBeenCalledTimes(2);
+  await app.main.submit({ type: "input", content: "send" }, context);
+  await parked(app);
+  await stopMainTurn(app);
+  expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
+  expect(execute).toHaveBeenCalledTimes(2);
+});
+
+it("withholds an external result if its taint cannot be persisted", async () => {
+  const observed: string[] = [];
+  const plugin: AlterPlugin = {
+    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },
+    tools: [defineTool({ name: "fixture_read", description: "Read external data", parameters: obj({}), execute: async () => {
+      vi.spyOn(app.main, "commit").mockRejectedValueOnce(new Error("storage unavailable"));
+      return { ...reply("untracked content"), details: { untrusted: true } };
+    } })],
+  };
+  const app: Alter = await open((text, last) => {
+    if (text === "delegate") return dispatch("read", "full");
+    if (text === "read") return call("fixture_read", {});
+    if (last.role === "toolResult" && last.toolName === "fixture_read") {
+      observed.push(text);
+      return finish(text);
+    }
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "delegate");
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  expect(observed).toEqual(["External content withheld because its source could not be recorded"]);
 });

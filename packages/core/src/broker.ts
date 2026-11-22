@@ -4,7 +4,8 @@ import {
   context, conversationDoc, defineExtension, defineSignal, defineTool, hook, reply, ToolTask,
   type Conversation, type TaskId, type Tx,
 } from "./runtime.ts";
-import { TaskIdentity, Tasks } from "./state.ts";
+import { isUntrusted, Taint, type TaintSource } from "./taint.ts";
+import { TaskIdentity, Tasks, type Permission } from "./state.ts";
 
 type Audience = "main" | "user";
 type Request = {
@@ -16,6 +17,9 @@ type Request = {
   tool: string;
   reason: string;
   argumentsJson: string;
+  expiresAt: number;
+  tainted?: true;
+  taint?: TaintSource;
 };
 type AuditEntry = {
   taskId: string;
@@ -25,6 +29,7 @@ type AuditEntry = {
   effect: Effect;
   decision: "park" | "allow" | "deny";
   at: number;
+  tainted?: true;
 };
 export type PermissionState = { pending: Record<string, Request> };
 export const Requests = conversationDoc<PermissionState>("permissions", () => ({ pending: {} }));
@@ -40,6 +45,7 @@ async function deliver(tx: Tx, main: Conversation, audience: Audience, answer: A
   const { pending } = await tx.doc(Requests, main.id);
   const request = Object.hasOwn(pending, answer.requestId) ? pending[answer.requestId] : undefined;
   if (!request || request.audience !== audience) return reply("No pending request for this approver", true);
+  if (Date.now() >= request.expiresAt) return reply("Approval expired without a decision", true);
   const value = answer.note === undefined ? { allow: answer.allow } : { allow: answer.allow, note: answer.note };
   const result = await tx.signal(request.toolTask, Decision, request.id, value);
   return reply(result, result !== "delivered" && result !== "duplicate");
@@ -67,15 +73,25 @@ function describeCall({ manifests, toolActions }: CapabilityRegistry, name: stri
   return { capability: manifest.id, action: "request", effect };
 }
 
-export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry) {
+function approver(permission: Permission, tool: string, listed: boolean, risky: boolean, tainted: boolean): Audience | undefined {
+  if (tool === "finish") return;
+  if (tool !== "request_capability" && risky && tainted) return "user";
+  if (permission === "full") return;
+  if (risky && (tool !== "request_capability" || permission === "auto")) return "user";
+  if (permission === "restricted" && !listed) return "main";
+  return undefined;
+}
+
+export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number) {
   return defineExtension({
     name: "alter.broker",
     hooks: [hook(ToolTask, {
       async beforeTool(call, api, ctx) {
         const main = getMain();
-        const identity = await api.snapshot(TaskIdentity, api.conversationId, ctx);
-        if (!identity?.taskId) return { block: "Missing task identity" };
-        const taskId = identity.taskId;
+        const isMain = api.conversationId === main.id;
+        if (isMain && !registry.toolActions.has(call.name)) return; // Main control-plane tools.
+        const taskId = isMain ? "main" : (await api.snapshot(TaskIdentity, api.conversationId, ctx))?.taskId ?? "";
+        if (!taskId) return { block: "Missing task identity" };
         const requestId = `permission-${api.taskId}`;
         const signal = await api.readSignal(Decision, requestId, ctx);
         const descriptor = describeCall(registry, call.name, call.arguments);
@@ -84,43 +100,52 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         };
         return main.commit(async tx => {
           const task = (await tx.doc(Tasks, main.id)).byId[taskId];
+          const risky = effect === "external-send" || effect === "irreversible" || effect === "unknown";
+          const taint = risky && call.name !== "request_capability" ? (await tx.doc(Taint, api.conversationId)).first : undefined;
           const audit = await tx.doc(Audit, main.id);
           const requests = await tx.doc(Requests, main.id);
           function record(decision: AuditEntry["decision"]) {
             if (audit.last[requestId] === decision) return;
-            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at: api.now() });
+            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at: api.now(),
+              ...(taint && { tainted: true as const }) });
             audit.last[requestId] = decision;
           }
-          if (!task || task.status !== "running" || !descriptor) {
+          if ((!isMain && task?.status !== "running") || !descriptor) {
             record("deny");
             return { block: "Unknown capability or inactive task" };
           }
           if (signal) {
             delete requests.pending[requestId];
-            if ("expired" in signal || !signal.value.allow) {
+            if ("expired" in signal) {
+              const reason = "Approval expired without a decision";
+              await main.submit(tx, {
+                type: "input", whenBusy: "followUp", requestId: `expired-${requestId}`,
+                content: `Notify the user: task ${taskId}, request ${requestId} (${call.name}): ${reason}`,
+              });
               record("deny");
-              return { block: "expired" in signal ? "Request expired" : signal.value.note ?? "Permission denied" };
+              return { block: reason };
+            }
+            if (!signal.value.allow) {
+              record("deny");
+              // Without this, models tend to re-request the capability and retry, asking the user again.
+              const note = signal.value.note ? ` Note: ${signal.value.note}` : "";
+              return { block: `Permission denied.${note} Do not retry this call or request the capability again; finish and report.` };
             }
             record("allow");
             return;
           }
-          // Main reads task reports and external data, so it can be injected: only the user approves
-          // calls that leave the machine or cannot be undone. An approved request_capability only adds
-          // to the allow list, which never covers those calls (ADR-0004, #13).
-          const userOnly = call.name !== "request_capability" && (effect === "external-send" || effect === "irreversible" || effect === "unknown");
-          const permitted = call.name === "finish" || task.permission === "full"
-            || (task.permission === "restricted" && task.allow.includes(capability) && !userOnly)
-            || (task.permission === "auto" && (effect === "read" || effect === "write-local"));
-          if (permitted && !requests.pending[requestId]) {
+          // A capability grant does not authorize later calls. Preserve its existing tier policy.
+          const audience = approver(task?.permission ?? "full", call.name, task?.allow.includes(capability) ?? false, risky, !!taint);
+          if (!audience && !requests.pending[requestId]) {
             record("allow");
             return;
           }
-          if (!requests.pending[requestId]) {
-            const audience = task.permission === "auto" || userOnly ? "user" : "main";
-            const reason = call.name === "request_capability" ? String(call.arguments.reason) : task.brief;
+          if (audience && !requests.pending[requestId]) {
+            const reason = call.name === "request_capability" ? String(call.arguments.reason) : task?.brief ?? "Main session tool lease";
             requests.pending[requestId] = {
               id: requestId, toolTask: api.taskId, taskId, audience, reason, capability,
-              tool: call.name, argumentsJson: JSON.stringify(call.arguments),
+              ...(taint && { tainted: true as const, taint: { ...taint } }),
+              expiresAt: api.now() + timeout, tool: call.name, argumentsJson: JSON.stringify(call.arguments),
             };
             if (audience === "main") {
               await main.submit(tx, {
@@ -130,8 +155,30 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             }
             record("park");
           }
-          return { sleep: { signals: [Decision.key(requestId)] } };
+          return { sleep: { until: requests.pending[requestId]!.expiresAt, signals: [Decision.key(requestId)] } };
         }, ctx);
+      },
+      async afterTool(call, result, api, ctx) {
+        const action = registry.toolActions.get(call.name);
+        if (!action) return;
+        const untrusted = isUntrusted(result.details);
+        const main = getMain();
+        if (!untrusted && !(api.conversationId === main.id && result.isError)) return;
+        try {
+          await main.commit(async tx => {
+            if (untrusted) (await tx.doc(Taint, api.conversationId)).first ??= {
+              source: call.name, capability: action.capability, at: api.now(),
+            };
+            // A stopped main turn has no background-task owner to clear its parked lease call.
+            if (api.conversationId === main.id && result.isError) {
+              delete (await tx.doc(Requests, main.id)).pending[`permission-${api.taskId}`];
+            }
+          }, ctx);
+        } catch (error) {
+          // pi-durable logs afterTool exceptions and keeps the original result. Withhold untracked content.
+          if (untrusted) return reply("External content withheld because its source could not be recorded", true);
+          throw error;
+        }
       },
     })],
   });

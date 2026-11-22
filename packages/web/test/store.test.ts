@@ -44,7 +44,17 @@ describe("reduce", () => {
 
   it("counts only requests the user must answer", () => {
     const request = (id: string, audience: PermissionRequest["audience"]): PermissionRequest =>
-      ({ id, taskId: "t", audience, capability: "outbox", tool: "outbox_send", arguments: {}, reason: "" });
+      ({ id, taskId: "t", audience, capability: "outbox", tool: "outbox_send", arguments: {}, reason: "", expiresAt: 0 });
     expect(userPending({ pending: [request("1", "user"), request("2", "main")] }).map(r => r.id)).toEqual(["1"]);
+  });
+});
+
+describe("remaining", () => {
+  it("rounds up and switches to hours from two hours", async () => {
+    const { remaining } = await import("../src/format.ts");
+    expect(remaining(1)).toEqual({ n: 1, unit: "m" });
+    expect(remaining(-5)).toEqual({ n: 1, unit: "m" });
+    expect(remaining(119 * 60_000)).toEqual({ n: 119, unit: "m" });
+    expect(remaining(24 * 3_600_000)).toEqual({ n: 24, unit: "h" });
   });
 });

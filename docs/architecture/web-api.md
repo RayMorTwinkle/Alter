@@ -1,4 +1,4 @@
-# Web API 契约（v1）
+# Web API 契约（v1.2）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -8,6 +8,7 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 |---|---|---|
 | `ALTER_WEB_HOST` | `127.0.0.1` | 只监听本机；需要局域网访问时显式改 |
 | `ALTER_WEB_PORT` | `4317` | |
+| `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 两类审批的等待时长，修改只影响新请求 |
 | `ALTER_WEB_PASSWORD` | 无（必填） | 单用户登录密码 |
 
 服务端同时托管前端构建产物（`packages/web/dist`），开发时前端用 Vite 代理 `/api`。
@@ -47,11 +48,15 @@ type Task = {
 type PermissionRequest = {
   id: string;
   taskId: string;
+  // 主会话自己的租约审批使用 taskId = "main"，只出现在顶层 pending
   audience: "main" | "user";  // 只有 user 的请求在网页上可操作
   capability: string;
   tool: string;
   arguments: unknown;         // 解析后的参数
   reason: string;
+  tainted?: true;             // v1.2 新增，调用受污点规则约束
+  taint?: { source: string; capability: string; at: number }; // 首次不可信结果的工具名、能力和 Unix 毫秒时间
+  expiresAt: number;          // v1.1 新增，截止时间（Unix 毫秒）
 };
 
 type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
@@ -68,7 +73,7 @@ type TranscriptItem =
 |---|---|---|
 | `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
 | `POST` | `/api/messages` | 请求 `{ text }` → `202 { id }`；主会话忙时排队，不报错 |
-| `POST` | `/api/permissions/:id` | 请求 `{ allow: boolean, note?: string }` → `204`；非用户受众或已处理 `409` |
+| `POST` | `/api/permissions/:id` | 请求 `{ allow: boolean, note?: string }` → `204`；非用户受众、已到期或已处理 `409` |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |

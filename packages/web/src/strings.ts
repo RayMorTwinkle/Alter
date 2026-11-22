@@ -57,6 +57,8 @@ const hant = {
   noUsage: "暫無調用記錄",
   language: "简体",
   resolved: "已處理",
+  expiresIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小時" : "分鐘"}後自動拒絕`,
+  tainted: (source: string) => `這個任務讀取過外部內容（${source}），內容可能被篡改，請核對參數再批准。`,
   error: "出錯了",
 };
 
@@ -114,6 +116,8 @@ const hans: Strings = {
   noUsage: "暂无调用记录",
   language: "繁體",
   resolved: "已处理",
+  expiresIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小时" : "分钟"}后自动拒绝`,
+  tainted: (source: string) => `这个任务读取过外部内容（${source}），内容可能被篡改，请核对参数再批准。`,
   error: "出错了",
 };
 

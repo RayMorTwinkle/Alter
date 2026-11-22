@@ -17,7 +17,8 @@ async function start() {
   const mail = mailConfigFromEnv(process.env);
   const plugins = mail ? [createMailPlugin(mail)] : [];
   const app = await openAlter(
-    await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking, { plugins },
+    await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking,
+    { plugins, approvalTimeoutMs: config.approvalTimeoutMs },
   );
   console.log("Alter plugins:", plugins.map(plugin => plugin.capability.id).join(", ") || "none");
   try {

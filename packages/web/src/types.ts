@@ -17,6 +17,9 @@ export type PermissionRequest = {
   tool: string;
   arguments: unknown;
   reason: string;
+  expiresAt: number;
+  tainted?: true;
+  taint?: { source: string; capability: string; at: number };
 };
 
 export type Task = {
