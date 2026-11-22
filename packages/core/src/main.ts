@@ -13,7 +13,7 @@ export const Events = conversationDoc<{ entries: ExternalEvent[] }>("events", ()
 export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, number> }>(
   "leases", () => ({ turns: 0, lastUsed: {} }),
 );
-const leaseWindow = 30;
+export const leaseWindow = 30;
 const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。简短、频繁的日程操作可用 enable_tool 租用 calendar。" +
   "多步或探索性工作用 dispatch_task 派单，可用能力有 calendar、notes（示例笔记 welcome）、outbox（模拟发送）。" +
   "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的审批；需要用户审批时请用户亲自决定。";
@@ -127,7 +127,13 @@ export async function openAlter(
     for (const id of Object.keys(leases.lastUsed)) if (!leasable.has(id)) delete leases.lastUsed[id];
     await updateOffered(tx, main.id, leases.lastUsed);
     const tasks = await tx.doc(Tasks, main.id);
-    for (const task of Object.values(tasks.byId)) {
+    for (const [id, task] of Object.entries(tasks.byId)) {
+      if (task.context === undefined || task.createdAt === undefined) {
+        const child = await tx.conversation(task.conversationId);
+        task.context ??= child?.parent ? "fork" : "fresh";
+        const brief = (await tx.submissionByRequest(task.conversationId, `brief-${id}`))?.entry;
+        task.createdAt ??= brief === undefined ? 0 : (await tx.entry(brief))?.model?.[0]?.timestamp ?? 0;
+      }
       if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: thinking.task });
     }
   }, context);

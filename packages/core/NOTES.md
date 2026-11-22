@@ -99,6 +99,15 @@ CLI 会先订阅主会话和审批记录，再调用 `resume()`。输入一行�
 - **GLM 必须带思考强度**：实测 opencode-go/glm-5.3 的工具调用不带 `reasoning_effort` 时稳定在 97–118 s，带 `medium` 为 3.5 s。不设会撞上首段超时并回退。
 - 真网关冒烟（全新数据目录）：读笔记任务 13 s；建日程 + 审批发送 22 s（#1 时为 32 s）。GLM p50 1.8 s，DeepSeek p50 3.4 s，零失败零回退。
 
+## Issue #2 · Web 后端
+
+- 使用仓库固定的 Node 版本运行 `pnpm -C packages/server start`。入口通过 `loadRepoEnv()` 加载配置，打开数据目录的 `main.sqlite`，挂好观察器后调用 `resume()`。默认监听 `127.0.0.1:4317`。可以通过 `ALTER_WEB_HOST` 和 `ALTER_WEB_PORT` 覆盖。缺少 `ALTER_WEB_PASSWORD` 时启动失败。
+- 登录对配置密码与提交密码分别计算 SHA-256，以 `timingSafeEqual` 比较定长摘要。每次成功登录生成 32 字节随机令牌，浏览器通过带 `Path=/; HttpOnly; SameSite=Strict` 的会话 Cookie 携带。令牌仅存于当前服务进程，重启后需重新登录。登出立即撤销该令牌，并关闭使用它的 SSE 连接。写接口要求 JSON 媒体类型，接收参数的请求体上限为 1 MiB。
+- CLI 和 Web 共用 `observeSurface`。主会话的 `pi.live.generation.message` 由 pi-durable 节流更新，`observeDoc` 可以在进度写入 SQLite 前看到变化。每次只取正文块，组成累计全文。ID 由生成任务 ID 和该次模型请求的起始时间构成。主会话提交 assistant 条目时，通过条目的任务归属和消息时间重建同一 ID。快于首次进度更新的短回答会在最终 `timeline` 前发送一次完整正文的 `delta`。重新连接先发快照，若正在输出正文，紧接着补发当前全文。
+- 用户输入在接纳时获得稳定 ID，立即回显。任务报告也在进入收件箱时可见；放入正式会话记录时按提交记录去重。用户审批在快照中带解析后的工具参数，审批事件的时间可从审计记录恢复。网页只能答复用户受众，同一审批的并发答复只有首次成功。停止操作按主会话当前生成任务的 ID 中止，已排队的消息继续处理。
+- 新任务在派单事务中保存上下文模式和创建时间。打开旧库时按子会话是否有父分支恢复模式，用任务说明条目的时间近似创建时间；尚未写入说明时以 `0` 表示未知。任务转录按会话顺序读取，fork 会包含继承的历史。租约返回距上次使用的完整轮数，以及与过期规则共用的 30 轮窗口。
+- 已实现 v1 的全部必选接口和 SSE 事件。时间线保留最近 200 条，可选的 `before` 分页未实现。离线用例覆盖真实 HTTP、SSE 和 SQLite 恢复；前端构建与真实网关的联调仍需在运行环境验证。
+
 ## Issue #12 · 插件契约与 163 邮箱
 
 宿主在 `openAlter(storage, models, mainModel, taskModel, thinking, { plugins })` 的最后一个参数传入插件。每个插件提供 `capability`、`tools`，可选的 `start(host)` 返回异步停止函数。每次打开的实例都从示例能力与本次插件生成注册表。工具名须与清单中的 `能力名_动作名` 一一对应。Broker、派单允许清单和主会话租约都使用当前实例的能力。任务可以调用四个邮件工具；`mail.mainLeasable` 为 `false`，auto 任务执行 `mail_send` 前须等用户审批。
