@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { gatewayConfig } from "../src/config.ts";
 import { chatCommand, observeChat } from "../src/cli.ts";
 import { openAlter } from "../src/main.ts";
+import { Notifications } from "../src/notifications.ts";
 import { createGatewayModels } from "../src/models.ts";
 import { context, MemoryStorage, openNodeSqliteStorage } from "../src/runtime.ts";
 import { Tasks } from "../src/state.ts";
@@ -270,4 +271,22 @@ it("uses Shanghai as the default time zone and reads ALTER_TZ", () => {
   const env = { ALTER_LLM_BASE_URL: "http://x/v1", ALTER_LLM_API_KEY: "k", ALTER_MAIN_MODEL: "a/b", ALTER_TASK_MODEL: "a/c" };
   expect(gatewayConfig(env).timeZone).toBe("Asia/Shanghai");
   expect(gatewayConfig({ ...env, ALTER_TZ: " America/New_York " }).timeZone).toBe("America/New_York");
+});
+
+it("accounts for a single tool-free task-model attempt per event, including gateway errors", async () => {
+  let count = 0;
+  const f = await setup((_, res) => ++count === 1 ? say(res, '{"level":"now","reason":"请尽快查看"}') : httpError(res, 503));
+  const runtime = await openAlter(new MemoryStorage(), f.models, f.mainModel, f.taskModel);
+  cleanup.push(runtime.close);
+  for (const ref of ["one", "two"]) {
+    await runtime.events.emit({ source: "mail", ref, kind: "new-message", summary: "会议改期", at: 123, untrusted: true });
+  }
+  await expect.poll(async () => (await runtime.harness.snapshot(Notifications, runtime.main.id, context))?.entries[0]?.ref).toBe("two");
+  expect(f.requests.map(r => r.model)).toEqual([primary, primary]);
+  expect(f.requests.every(r => !r.tools?.length)).toBe(true);
+  expect(await f.logs()).toMatchObject([
+    { conversation: "triage", model: primary, attempt: 1, outcome: "ok", inputTokens: 8, outputTokens: 3 },
+    { conversation: "triage", model: primary, attempt: 1, outcome: "error" },
+  ]);
+  expect((await runtime.harness.snapshot(Notifications, runtime.main.id, context))?.entries[0]?.level).toBe("digest");
 });

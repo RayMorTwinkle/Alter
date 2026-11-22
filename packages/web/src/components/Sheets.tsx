@@ -135,6 +135,7 @@ export function NotificationsSheet({ items, onClose, onFeedback }: {
               {item.body && <div className="notice-body">{item.body}</div>}
               <div className="row-meta">
                 <span className="chip">{t.noticeLevels[item.level]}</span>
+                <span>{t.noticeSources[item.source] ?? item.source}</span>
                 <time>{clock(item.at)}</time>
               </div>
               <div className="notice-feedback">

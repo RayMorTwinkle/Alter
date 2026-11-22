@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import { calendarTime, dailyMinutes } from "./calendar-time.ts";
 import type { Capability } from "./capabilities.ts";
-import { Notifications } from "./notifications.ts";
+import { addNotification, digestDay, Notifications } from "./notifications.ts";
 import {
   context, conversationDoc, createRegistry, defineExtension, defineSignal, defineTask, defineTool, reply,
   ROOT_CONVERSATION_ID, type Conversation, type TaskId, type Tx,
@@ -55,10 +55,25 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
   }
 
   register("reminder", async (item, tx, firedAt) => {
+    await addNotification(tx, { id: `${item.id}-${item.at}`, at: firedAt, kind: "reminder", level: time.quietHours(firedAt) ? "digest" : "now",
+      title: "提醒", body: item.text, source: "schedule", status: "unread" }, time.midnight(firedAt));
+  });
+
+  register("digest", async (item, tx, firedAt) => {
     const { entries } = await tx.doc(Notifications, ROOT_CONVERSATION_ID);
-    entries.unshift({ id: `${item.id}-${item.at}`, at: firedAt, kind: "reminder", level: time.quietHours(firedAt) ? "digest" : "now",
-      title: "提醒", body: item.text, source: "schedule", status: "unread" });
-    if (entries.length > 500) entries.pop();
+    const midnight = time.midnight(firedAt);
+    if (item.repeat && time.nextDaily(midnight - 1, item.repeat.daily) > firedAt) return;
+    const state = await digestDay(tx, midnight);
+    if (state.sent) return;
+    const items = [...state.overflow, ...[...entries].reverse()]
+      .filter(n => n.level === "digest" && n.status === "unread" && n.at >= midnight && n.at <= firedAt);
+    if (!items.length) return;
+    state.sent = true;
+    state.overflow = [];
+    await addNotification(tx, {
+      id: `${item.id}-${item.at}`, at: firedAt, kind: "digest", level: "now", source: "schedule", status: "unread",
+      title: `今日摘要（${items.length} 条）`, body: items.map(n => `• [${n.source}] ${[n.title, n.body].filter(Boolean).join(" — ")}`).join("\n"),
+    }, midnight);
   });
 
   type Input = { kind: string; text: string; at: string; daily?: string };
@@ -76,6 +91,20 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
       }
       return id;
     }, context);
+  }
+  async function ensureDigest(daily: string) {
+    const exists = await main().commit(async tx => {
+      const { byId } = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
+      const managed = byId["daily-digest"];
+      if (managed?.item.status === "scheduled" && managed.item.repeat?.daily !== daily) {
+        await tx.signal(managed.worker, Cancel, String(managed.item.at), true);
+        managed.item.at = time.nextDaily(now(), daily);
+        managed.item.repeat = { daily };
+      }
+      return Object.values(byId).some(({ item }) => item.kind === "digest");
+    }, context);
+    if (exists) return;
+    await create({ kind: "digest", text: "每日摘要", daily, at: new Date(time.nextDaily(now(), daily)).toISOString() }, "daily-digest");
   }
   function list() {
     return main().commit(async tx => Object.values((await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId)
@@ -107,5 +136,5 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     defineTool({ name: "schedule_cancel", description: "Cancel a scheduled reminder by ID.", parameters: obj({ id: str() }), replay: "safe",
       execute: async ({ id }) => await cancel(id) ? reply(id) : reply("Unknown or finished schedule", true) }),
   ];
-  return { register, create: (input: Input) => create(input), list, cancel, capability, tools };
+  return { register, ensureDigest, create: (input: Input) => create(input), list, cancel, capability, tools };
 }

@@ -37,8 +37,9 @@ export type Task = {
 };
 
 export type Notification = {
-  id: string; at: number; kind: "reminder"; level: "now" | "digest" | "silent";
-  title: string; body?: string; source: "schedule"; status: "unread" | "read"; feedback?: "useful" | "useless";
+  id: string; at: number; kind: "reminder" | "event" | "digest"; level: "now" | "digest" | "silent";
+  title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
+  status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number;
 };
 
 export type MemoryItem = {

@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { dailyMinutes } from "./calendar-time.ts";
 import { defaultTimeZone } from "./clock.ts";
 
 export const defaultApprovalTimeoutMs = 24 * 60 * 60_000;
@@ -26,6 +27,15 @@ export function loadRepoEnv() {
 
 export function dataDirectory(env = process.env) {
   return resolve(repoRoot, env.ALTER_DATA_DIR?.trim() || "data");
+}
+
+export function proactiveConfig(env = process.env) {
+  const budget = Number(env.ALTER_PROACTIVE_DAILY_TOKENS ?? 200_000);
+  if (!Number.isSafeInteger(budget) || budget < 0) throw new Error("ALTER_PROACTIVE_DAILY_TOKENS must be a nonnegative integer");
+  const digestTime = env.ALTER_DIGEST_TIME?.trim() || "21:00";
+  dailyMinutes(digestTime);
+  const mute = (env.ALTER_MUTE ?? "").toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
+  return { budget, digestTime, mute };
 }
 
 export function gatewayConfig(env = process.env) {

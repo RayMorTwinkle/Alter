@@ -1,20 +1,24 @@
 import { obj, opt, str } from "@earendil-works/pi-schema";
 import { approvalClocks, createBroker, mainApprovalTool, Requests } from "./broker.ts";
-import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type ExternalEvent, type PluginHost } from "./capabilities.ts";
+import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type PluginHost } from "./capabilities.ts";
 import {
   configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, reply, storageDirectories, ToolTask, type Conversation,
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
-import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
+import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } from "./config.ts";
 import { defaultTimeZone, inputClock } from "./clock.ts";
+import { calendarTime } from "./calendar-time.ts";
+import { emitEvent, startEventBus } from "./events.ts";
+import { gatewayDataDirectories } from "./models.ts";
+import { createTriage } from "./triage.ts";
 import { createMemory } from "./memory.ts";
 import { createScheduler } from "./scheduler.ts";
 import { mainInputContext } from "./timeline.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
-export const Events = conversationDoc<{ entries: ExternalEvent[] }>("events", () => ({ entries: [] }));
+export { Events } from "./events.ts";
 export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, number> }>(
   "leases", () => ({ turns: 0, lastUsed: {} }),
 );
@@ -26,8 +30,11 @@ export async function openAlter(
   options: { dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number; setTimer?: HarnessOptions["setTimer"] } = {},
 ) {
   const leasing = options.leasing ?? true;
+  const proactive = proactiveConfig();
+  const timeZone = options.timeZone ?? defaultTimeZone;
+  const now = options.now ?? Date.now;
   const registry = createRegistry();
-  const scheduler = createScheduler(() => main, registry, options.timeZone ?? defaultTimeZone, options.now ?? Date.now);
+  const scheduler = createScheduler(() => main, registry, timeZone, now);
   const clock = inputClock(options.timeZone, options.now);
   const memory = createMemory(options.dataDir ?? storageDirectories.get(storage), options.now);
   const plugins: AlterPlugin[] = [memory, ...(options.plugins ?? [])];
@@ -164,16 +171,12 @@ export async function openAlter(
       if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: thinking.task });
     }
   }, context);
-  const host: PluginHost = {
-    emit: event => main.commit(async tx => {
-      const { entries } = await tx.doc(Events, main.id);
-      entries.push({ ...event, untrusted: true });
-      if (entries.length > 500) entries.splice(0, entries.length - 500);
-    }, context),
-  };
+  const host: PluginHost = { emit: event => emitEvent(main, event) };
+  let stopEvents: (() => Promise<void>) | undefined;
   const stops: (() => Promise<void>)[] = [];
   let closing: Promise<void> | undefined;
   async function shutdown() {
+    await stopEvents?.();
     const results = await Promise.allSettled(stops.reverse().map(async stop => stop()));
     await harness.close(context);
     const errors = results.filter(r => r.status === "rejected").map(r => r.reason);
@@ -181,6 +184,12 @@ export async function openAlter(
   }
   try {
     for (const plugin of plugins) if (plugin.start) stops.push(await plugin.start(host));
+    await scheduler.ensureDigest(proactive.digestTime);
+    const currentModels = () => typeof models === "function" ? models() : models;
+    const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
+    const time = calendarTime(timeZone);
+    const classify = createTriage(currentModels, taskModel, memory.summary, time, proactive.budget, dir);
+    stopEvents = await startEventBus(harness, main, time, now, proactive.mute, classify);
   } catch (error) {
     await shutdown();
     throw error;

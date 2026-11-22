@@ -1,0 +1,94 @@
+import { defineDocFamily } from "@earendil-works/pi-durable";
+import type { calendarTime } from "./calendar-time.ts";
+import type { ExternalEvent } from "./capabilities.ts";
+import { addNotification } from "./notifications.ts";
+import { context, conversationDoc, type Conversation, type Harness, type Tx } from "./runtime.ts";
+import type { Decision } from "./triage.ts";
+
+export const Events = conversationDoc<{ entries: ExternalEvent[]; trimmed?: number }>("events", () => ({ entries: [] }));
+type Progress = { cursor: number; overflow: Record<string, ExternalEvent>; inFlight?: true };
+const Progress = conversationDoc<Progress>("event-progress", () => ({ cursor: 0, overflow: {} }));
+const Seen = defineDocFamily<{ seen: boolean }, null>({ kind: "alter.event-ref", version: 1, family: true, scope: "session",
+  initial: () => ({ seen: false }), checkpointWhen: () => false });
+
+export function emitEvent(main: Conversation, event: ExternalEvent) {
+  return main.commit(async tx => {
+    const log = await tx.doc(Events, main.id);
+    log.entries.push({ ...event, untrusted: true });
+    if (log.entries.length <= 500) return;
+    const progress = await tx.doc(Progress, main.id);
+    const index = log.trimmed ?? 0;
+    const oldest = log.entries.shift()!;
+    if (index >= progress.cursor) progress.overflow[index] = oldest;
+    log.trimmed = index + 1;
+  }, context);
+}
+
+export async function startEventBus(harness: Harness, main: Conversation, time: ReturnType<typeof calendarTime>, now: () => number,
+  mute: string[], classify: (event: ExternalEvent, at: number, signal: AbortSignal) => Promise<Decision>) {
+  const controller = new AbortController();
+
+  async function finish(tx: Tx, progress: Progress, event: ExternalEvent, decision: Decision) {
+    const at = now();
+    const level = decision.level === "now" && time.quietHours(at) ? "digest" : decision.level;
+    await addNotification(tx, { id: `event-${progress.cursor}`, title: event.summary, body: decision.reason, at, level,
+      kind: "event", ref: event.ref, source: event.source, status: "unread", ...(decision.filtered && { filtered: decision.filtered }) }, time.midnight(at));
+    delete progress.overflow[progress.cursor];
+    progress.cursor++;
+    delete progress.inFlight;
+  }
+
+  async function consume() {
+    const at = now();
+    const event = await main.commit(async tx => {
+      const progress = await tx.doc(Progress, main.id);
+      const log = await tx.doc(Events, main.id);
+      const event = progress.overflow[progress.cursor] ?? log.entries[progress.cursor - (log.trimmed ?? 0)];
+      if (!event) throw new Error(`Missing external event at cursor ${progress.cursor}`);
+      const seen = await tx.doc(Seen, JSON.stringify([event.source, event.ref]), null);
+      let decision: Decision | undefined;
+      if (progress.inFlight) decision = { level: "digest", reason: "上次分诊中断，已归入摘要" };
+      else if (seen.seen) decision = { level: "silent", filtered: "duplicate", reason: "来源与引用重复" };
+      else if (mute.some(word => event.summary.toLowerCase().includes(word))) {
+        decision = { level: "silent", filtered: "mute", reason: "命中静音关键词" };
+      } else if (/退订|unsubscribe|促销|广告|验证码/i.test(event.summary)) {
+        decision = { level: "silent", filtered: "marketing", reason: "命中营销或验证码关键词" };
+      }
+      seen.seen = true;
+      if (decision) { await finish(tx, progress, event, decision); return; }
+      // Reserve before leaving the transaction. Recovery cannot repeat an ambiguous provider call.
+      progress.inFlight = true;
+      return { ...event };
+    }, context);
+    if (!event) return;
+    const decision = await classify(event, at, controller.signal);
+    await main.commit(async tx => finish(tx, await tx.doc(Progress, main.id), event, decision), context);
+  }
+
+  let cursor = await main.commit(async tx => {
+    await tx.doc(Events, main.id);
+    return (await tx.doc(Progress, main.id)).cursor;
+  }, context);
+  let end = cursor;
+  let running: Promise<void> | undefined;
+  let retry: NodeJS.Timeout | undefined;
+  function wake() {
+    if (running || retry || controller.signal.aborted || cursor >= end) return;
+    running = (async () => {
+      while (!controller.signal.aborted && cursor < end) { await consume(); cursor++; }
+    })().catch(error => {
+      console.warn("Alter event processing interrupted:", error);
+      retry = setTimeout(() => { retry = undefined; wake(); }, 1000).unref();
+    }).finally(() => { running = undefined; wake(); });
+  }
+  function update(log: { entries: readonly ExternalEvent[]; trimmed?: number }) {
+    end = (log.trimmed ?? 0) + log.entries.length;
+    wake();
+  }
+  const sub = await harness.observeDoc(Events, main.id, {
+    advance(change) { if (change.kind === "value") update(change.value); }, end() {},
+  }, context);
+  if (!sub) throw new Error("Events document was not initialized");
+  update(sub.value);
+  return async () => { sub.detach(); controller.abort(); await running; clearTimeout(retry); };
+}
