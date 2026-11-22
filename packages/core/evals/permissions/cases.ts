@@ -10,7 +10,7 @@ type Taint = "clean" | "task-read" | "main-read";
 export type PermissionCase = {
   id: string; note: string; caller: Caller; taint: Taint; tool: string;
   args: Record<string, string | string[]>; effect: Effect; expected: Decision;
-  priorApproval?: "capability" | "send";
+  priorApproval?: "capability" | "send" | "send-denied";
 };
 
 function task(permission: Permission, allow: string[] = [], context: TaskRecord["context"] = "fresh"): Caller {
@@ -74,6 +74,10 @@ export const cases: PermissionCase[] = [
     "clean", "outbox_send", { message: "通知" }, "external-send", "user", "capability"),
   single("3-repeat-send", "受污染全权任务第一次发送经用户同意，第二次仍需批准。", task("full"),
     "task-read", "outbox_send", { message: "第二条" }, "external-send", "user", "send"),
+  single("30-denied-retry", "#30 用户拒绝发送后，同一任务再次发送直接拒绝，不再询问。", task("restricted", ["outbox"]),
+    "clean", "outbox_send", { message: "再试一次" }, "external-send", "deny", "send-denied"),
+  single("30-denied-retry-full", "#30 全权任务读过外部内容、用户拒绝发送后，同一任务再次发送直接拒绝。", task("full"),
+    "task-read", "outbox_send", { message: "再试一次" }, "external-send", "deny", "send-denied"),
   single("auto-calendar", "自动档无日历授权也可创建本地日程。", task("auto"), "clean",
     "calendar_create", { title: "站会" }, "write-local", "allow"),
   single("lease-calendar-list", "主会话租用日历后可以直接查日程。", leased("calendar"), "clean",

@@ -33,8 +33,9 @@ type AuditEntry = {
 };
 export type PermissionState = { pending: Record<string, Request> };
 export const Requests = conversationDoc<PermissionState>("permissions", () => ({ pending: {} }));
-export const Audit = conversationDoc<{ entries: AuditEntry[]; last: Record<string, AuditEntry["decision"]> }>(
-  "audit", () => ({ entries: [], last: {} }),
+// refused: "<taskId> <tool>" pairs the user explicitly denied. Absent in stores written before #30.
+export const Audit = conversationDoc<{ entries: AuditEntry[]; last: Record<string, AuditEntry["decision"]>; refused?: Record<string, true> }>(
+  "audit", () => ({ entries: [], last: {}, refused: {} }),
 );
 const Decision = defineSignal({
   name: "alter.permission", version: 1, schema: obj({ allow: bool(), note: opt(str()) }),
@@ -114,7 +115,9 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             record("deny");
             return { block: "Unknown capability or inactive task" };
           }
+          const refusal = `${taskId} ${call.name}`;
           if (signal) {
+            const askedUser = requests.pending[requestId]?.audience === "user";
             delete requests.pending[requestId];
             if ("expired" in signal) {
               const reason = "Approval expired without a decision";
@@ -127,15 +130,23 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             }
             if (!signal.value.allow) {
               record("deny");
+              if (askedUser) (audit.refused ??= {})[refusal] = true;
               // Without this, models tend to re-request the capability and retry, asking the user again.
+              // Naming the decider matters: "permission denied" reads as a system fault, and main re-dispatches.
               const note = signal.value.note ? ` Note: ${signal.value.note}` : "";
-              return { block: `Permission denied.${note} Do not retry this call or request the capability again; finish and report.` };
+              const who = askedUser ? "The user declined" : "The main session declined";
+              return { block: `${who} this ${call.name} call.${note} This is a decision, not a system error. Do not retry it or request the capability again; finish and report that it was declined.` };
             }
             record("allow");
             return;
           }
           // A capability grant does not authorize later calls. Preserve its existing tier policy.
           const audience = approver(task?.permission ?? "full", call.name, task?.allow.includes(capability) ?? false, risky, !!taint);
+          // Prompts alone do not stop retries after a denial, so the user is never asked twice in one task.
+          if (audience === "user" && !isMain && audit.refused?.[refusal] && !requests.pending[requestId]) {
+            record("deny");
+            return { block: `The user already declined ${call.name} in this task. Do not call it again; finish and report that the user declined.` };
+          }
           if (!audience && !requests.pending[requestId]) {
             record("allow");
             return;
