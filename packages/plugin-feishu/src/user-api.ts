@@ -1,8 +1,20 @@
-import { Client, defaultHttpInstance, defaultLogger, Domain, LoggerLevel, withUserAccessToken, type AccessTokenResponse, type HttpInstance } from "@larksuiteoapi/node-sdk";
+import { Client, defaultHttpInstance, defaultLogger, Domain, LoggerLevel, withUserAccessToken, type HttpInstance } from "@larksuiteoapi/node-sdk";
 import type { FeishuConfig } from "./config.ts";
 
 type Chat = { chat_id?: string; name?: string; type: string };
 type Message = { sender: string; time?: string; text: string };
+
+export type AccessTokenResponse = { accessToken: string; refreshToken?: string; expiresIn?: number };
+export class FeishuTokenError extends Error {
+  readonly statusCode: number;
+  readonly code: number;
+  constructor(statusCode: number, code: number, description: string) {
+    super(description || "Feishu token request failed");
+    this.name = "FeishuTokenError";
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
 
 export interface FeishuUserApi {
   exchange(code: string, redirectUri: string, verifier: string): Promise<AccessTokenResponse>;
@@ -33,15 +45,28 @@ async function data<T>(operation: string, request: Promise<{ code?: number; data
 // The SDK response interceptor unwraps Axios responses to the HttpInstance body type.
 const http = defaultHttpInstance as HttpInstance;
 
+// The SDK's accessToken client targets /oauth/v3/token, which does not verify PKCE for codes
+// from /authen/v1/authorize. Use the documented v2 token endpoint directly.
+async function token(base: string, body: Record<string, string>): Promise<AccessTokenResponse> {
+  const res = await fetch(`${base}/open-apis/authen/v2/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/json; charset=utf-8" }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000),
+  });
+  const data = await res.json().catch(() => ({})) as { code?: number; access_token?: string; refresh_token?: string; expires_in?: number; error?: string; error_description?: string };
+  if (!res.ok || data.code || !data.access_token) throw new FeishuTokenError(res.status, data.code ?? 0, data.error_description ?? data.error ?? "");
+  return { accessToken: data.access_token, refreshToken: data.refresh_token, expiresIn: data.expires_in };
+}
+
 export function sdkUserApi(config: FeishuConfig, endpoints?: { domain: string; oauthBaseUrl: string }): FeishuUserApi {
+  const base = endpoints?.domain ?? (config.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn");
+  const client_id = config.appId, client_secret = config.appSecret;
   const client = new Client({
     appId: config.appId, appSecret: config.appSecret, domain: config.domain === "lark" ? Domain.Lark : Domain.Feishu,
     ...endpoints, disableTokenCache: true, loggerLevel: LoggerLevel.error, logger: { ...defaultLogger, error() {} },
     httpInstance: { ...http, request: options => http.request({ ...options, timeout: 15_000 }) },
   });
   return {
-    exchange: (code, redirectUri, verifier) => client.accessToken.retrieveByAuthorizationCode({ code, redirectUri, codeVerifier: verifier }),
-    refresh: refreshToken => client.accessToken.refresh({ refreshToken }),
+    exchange: (code, redirect_uri, code_verifier) => token(base, { grant_type: "authorization_code", client_id, client_secret, code, redirect_uri, code_verifier }),
+    refresh: refresh_token => token(base, { grant_type: "refresh_token", client_id, client_secret, refresh_token }),
     async name(token) {
       return (await data("user_info", client.authen.userInfo.get({}, withUserAccessToken(token)))).name;
     },

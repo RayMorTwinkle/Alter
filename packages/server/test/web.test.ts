@@ -276,7 +276,7 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
   expect(before.timeline[0]).toMatchObject({ text: "5", source: "web" });
   await web.close();
   const reopened = await web.reopen();
-  expect((await fetch(reopened.base + "/api/state", { headers: { cookie: web.sessionCookie() } })).status).toBe(401);
+  expect((await fetch(reopened.base + "/api/state", { headers: { cookie: web.sessionCookie() } })).status).toBe(200); // Sessions persist across restarts.
   await reopened.login();
   const restored = await reopened.state();
   expect(restored.timeline).toEqual(before.timeline);

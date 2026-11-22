@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
@@ -10,6 +12,7 @@ import { HttpError, requestPath, serveStatic } from "./static.ts";
 
 const cookieName = "alter_session";
 const cookieOptions = "Path=/; HttpOnly; SameSite=Strict";
+const sessionMs = 365 * 24 * 3600_000;
 const defaultDist = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const digest = (value: string) => createHash("sha256").update(value).digest();
 
@@ -47,7 +50,7 @@ type WebOptions = {
 export async function createWebServer(app: AlterApp, options: WebOptions) {
   if (!options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const passwordHash = digest(options.password);
-  const sessions = new Set<string>();
+  const sessions = openSessions(join(options.dataDir, "web-sessions.json"), passwordHash);
   const clients = new Map<ServerResponse, string>();
   function write(res: ServerResponse, frame: string) {
     // A disconnected or stalled client can rebuild from a snapshot on reconnect.
@@ -93,7 +96,10 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
           res.writeHead(302, { Location: "/" }).end();
           return;
         }
-      } catch {
+      } catch (error) {
+        // SDK token errors carry only status, code and description, never the secret or tokens.
+        const { name, message: detail, code, statusCode: http } = error as Error & { code?: unknown; statusCode?: unknown };
+        console.error("Feishu OAuth callback failed:", name, http ?? "", code ?? "", detail);
         status = 502;
         message = "飞书账号连接失败，请检查应用权限和回调地址后重试。";
       }
@@ -113,7 +119,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (typeof password !== "string" || !timingSafeEqual(digest(password), passwordHash)) throw new HttpError(401, "Invalid password");
       const session = randomBytes(32).toString("base64url");
       sessions.add(session);
-      res.setHeader("Set-Cookie", `${cookieName}=${session}; ${cookieOptions}`);
+      res.setHeader("Set-Cookie", `${cookieName}=${session}; Max-Age=${sessionMs / 1000}; ${cookieOptions}`);
     } else if (logout) {
       if (token) sessions.delete(token);
       for (const [client, owner] of clients) if (owner === token) { clients.delete(client); client.end(); }
@@ -194,7 +200,6 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     clearInterval(heartbeat);
     unsubscribe?.();
     surface.detach();
-    sessions.clear();
     for (const res of clients.keys()) res.end();
     clients.clear();
   }
@@ -207,3 +212,27 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     });
   } };
 }
+
+// Sessions survive restarts for a year. Only token hashes are stored, and a new password invalidates them all.
+function openSessions(path: string, passwordHash: Buffer) {
+  const key = (token: string) => digest(token).toString("hex");
+  const owner = passwordHash.toString("hex");
+  let saved: Record<string, number> = {};
+  try {
+    const file = JSON.parse(readFileSync(path, "utf8")) as { owner?: string; sessions?: Record<string, number> };
+    if (file.owner === owner && file.sessions) saved = file.sessions;
+  } catch { /* First start or unreadable file: everyone logs in again. */ }
+  function persist() {
+    const now = Date.now();
+    for (const [k, expires] of Object.entries(saved)) if (expires <= now) delete saved[k];
+    const temp = `${path}.${randomBytes(6).toString("hex")}`;
+    writeFileSync(temp, JSON.stringify({ owner, sessions: saved }), { mode: 0o600 });
+    renameSync(temp, path);
+  }
+  return {
+    has: (token: string) => (saved[key(token)] ?? 0) > Date.now(),
+    add(token: string) { saved[key(token)] = Date.now() + sessionMs; persist(); },
+    delete(token: string) { delete saved[key(token)]; persist(); },
+  };
+}
+
