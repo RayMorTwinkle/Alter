@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "live": "node scripts/live.ts"
   },
   "dependencies": {
     "@alter/core": "workspace:*"
