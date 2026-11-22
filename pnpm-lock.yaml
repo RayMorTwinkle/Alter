@@ -39,6 +39,12 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/plugin-calendar:
+    dependencies:
+      '@alter/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/plugin-mail:
     dependencies:
       '@alter/core':
@@ -69,6 +75,9 @@ importers:
       '@alter/plugin-browser':
         specifier: workspace:*
         version: link:../plugin-browser
+      '@alter/plugin-calendar':
+        specifier: workspace:*
+        version: link:../plugin-calendar
       '@alter/plugin-mail':
         specifier: workspace:*
         version: link:../plugin-mail
