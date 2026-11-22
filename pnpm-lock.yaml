@@ -60,6 +60,9 @@ importers:
       '@alter/core':
         specifier: workspace:*
         version: link:../core
+      '@alter/plugin-mail':
+        specifier: workspace:*
+        version: link:../plugin-mail
 
   packages/web:
     dependencies:
