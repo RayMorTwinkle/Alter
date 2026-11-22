@@ -20,7 +20,8 @@ const fixture: AlterPlugin = {
   capability: { id: "fixture", mainLeasable: true, actions },
   tools: actions.map(({ name }) => defineTool({
     name: "fixture_" + name, description: name, parameters: obj({}),
-    execute: async () => name === "untrusted" ? { ...reply("外部内容"), details: { untrusted: true } } : reply(name),
+    execute: async () => name === "untrusted" ? { ...reply('<external url="https://example.test/?a=1&amp;b=2">外部内容</external>'),
+      details: { untrusted: true } } : reply(name),
   })),
 };
 
@@ -81,7 +82,7 @@ function completed(entry: EntryRecord, expectedErrors: string[]): Observation | 
   if (message.isError && message.toolCallId !== "report" && !expectedErrors.includes(message.toolCallId)) throw new Error(message.toolName + " · " + text);
 }
 
-async function play(c: PermissionCase, signal: AbortSignal): Promise<Observation> {
+async function play(c: PermissionCase, signal: AbortSignal, plugins: AlterPlugin[]): Promise<Observation> {
   const ctx = withAbortSignal(signal, context);
   const route = script(c);
   const faux = fauxProvider();
@@ -89,7 +90,7 @@ async function play(c: PermissionCase, signal: AbortSignal): Promise<Observation
   const models = createModels();
   models.setProvider(faux.provider);
   const storage = new MemoryStorage();
-  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins: [fixture] });
+  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins: [fixture, ...plugins] });
   let result: Observation | undefined;
   let error: unknown;
   let approved = false;
@@ -142,10 +143,10 @@ async function play(c: PermissionCase, signal: AbortSignal): Promise<Observation
   }
 }
 
-export async function runCase(c: PermissionCase): Promise<Result> {
+export async function runCase(c: PermissionCase, plugins: AlterPlugin[] = []): Promise<Result> {
   const signal = AbortSignal.timeout(5000);
   try {
-    const observation = await awaitWithContext(play(c, signal), withAbortSignal(signal, context));
+    const observation = await awaitWithContext(play(c, signal, plugins), withAbortSignal(signal, context));
     return { ...c, ...observation };
   } catch (error) {
     return { ...c, actual: null, error: signal.aborted ? "5 秒超时" : String(error) };
@@ -157,7 +158,7 @@ export async function runCases(): Promise<Result[]> {
   // Four batches keep even a suite of five-second timeouts inside the 30-second test budget.
   const batchSize = Math.ceil(cases.length / 4);
   for (let i = 0; i < cases.length; i += batchSize) {
-    results.push(...await Promise.all(cases.slice(i, i + batchSize).map(runCase)));
+    results.push(...await Promise.all(cases.slice(i, i + batchSize).map(c => runCase(c))));
   }
   return results;
 }

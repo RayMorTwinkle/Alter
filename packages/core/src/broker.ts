@@ -4,7 +4,7 @@ import {
   context, conversationDoc, defineExtension, defineSignal, defineTool, hook, reply, ToolTask,
   type Conversation, type TaskId, type Tx,
 } from "./runtime.ts";
-import { isUntrusted, Taint, type TaintSource } from "./taint.ts";
+import { isUntrusted, normalUrl, recordUntrusted, Taint, type TaintSource } from "./taint.ts";
 import { TaskIdentity, Tasks, type Permission } from "./state.ts";
 
 type Audience = "main" | "user";
@@ -109,8 +109,9 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         return main.commit(async tx => {
           const task = (await tx.doc(Tasks, main.id)).byId[taskId];
           const risky = effect === "external-send" || effect === "irreversible" || effect === "unknown";
-          const taint = (risky || descriptor?.guarded) && call.name !== "request_capability"
-            ? (await tx.doc(Taint, api.conversationId)).first : undefined;
+          const state = (risky || descriptor?.guarded) && call.name !== "request_capability"
+            ? await tx.doc(Taint, api.conversationId) : undefined;
+          const taint = state?.first;
           const audit = await tx.doc(Audit, main.id);
           const requests = await tx.doc(Requests, main.id);
           function record(decision: AuditEntry["decision"]) {
@@ -149,9 +150,12 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             return;
           }
           // A capability grant does not authorize later calls. Preserve its existing tier policy.
-          const audience = approver(task?.permission ?? "full", call.name, task?.allow.includes(capability) ?? false, risky, !!taint);
+          const value = descriptor.seenArg === undefined ? undefined : call.arguments[descriptor.seenArg];
+          const url = typeof value === "string" ? normalUrl(value) : undefined;
+          const seen = !risky && descriptor.guarded && url !== undefined && state?.seen?.includes(url);
+          const audience = approver(task?.permission ?? "full", call.name, task?.allow.includes(capability) ?? false, risky, !!taint && !seen);
           // Prompts alone do not stop retries after a denial, so the user is never asked twice in one task.
-          if (audience === "user" && !isMain && audit.refused?.[refusal] && !requests.pending[requestId]) {
+          if ((audience === "user" || taint) && !isMain && audit.refused?.[refusal] && !requests.pending[requestId]) {
             record("deny");
             return { block: `The user already declined ${call.name} in this task. Do not call it again; finish and report that the user declined.` };
           }
@@ -185,9 +189,9 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         if (!untrusted && !(api.conversationId === main.id && result.isError)) return;
         try {
           await main.commit(async tx => {
-            if (untrusted) (await tx.doc(Taint, api.conversationId)).first ??= {
+            if (untrusted) recordUntrusted(await tx.doc(Taint, api.conversationId), {
               source: call.name, capability: action.capability, at: api.now(),
-            };
+            }, result.output);
             // A stopped main turn has no background-task owner to clear its parked lease call.
             if (api.conversationId === main.id && result.isError) {
               delete (await tx.doc(Requests, main.id)).pending[`permission-${api.taskId}`];

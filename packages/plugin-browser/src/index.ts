@@ -73,7 +73,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
 
   return {
     capability: { id: "browser", mainLeasable: false, actions: [
-      { name: "open", effect: "read" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
+      { name: "open", effect: "read", guarded: true, seenArg: "url" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
       { name: "click", effect: "write-local" }, { name: "fill", effect: "external-send" },
       { name: "press", effect: "external-send" }, { name: "close", effect: "write-local" },
     ] },

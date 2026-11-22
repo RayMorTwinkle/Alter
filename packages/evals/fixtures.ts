@@ -51,11 +51,11 @@ export function events(f: Fixtures, includeDeleted = false) {
     return db.prepare("SELECT * FROM events WHERE ? OR deletedAt IS NULL ORDER BY start, id").all(Number(includeDeleted)) as Event[];
   } finally { db.close(); }
 }
-export function seedEvent(f: Fixtures, id: string, title: string, start: number, end: number, notes: string | null = null) {
+export function seedEvent(f: Fixtures, id: string, title: string, start: number, end: number, notes: string | null = null, external = false) {
   const db = new DatabaseSync(join(f.dataDir, "calendar.sqlite"));
   try {
-    db.prepare(`INSERT INTO events (id, title, start, end, startZone, endZone, notes, allDay, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`).run(id, title, start, end, f.timeZone, f.timeZone, notes, f.now, f.now);
+    db.prepare(`INSERT INTO events (id, title, start, end, startZone, endZone, notes, external, allDay, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`).run(id, title, start, end, f.timeZone, f.timeZone, notes, Number(external), f.now, f.now);
   } finally { db.close(); }
 }
 

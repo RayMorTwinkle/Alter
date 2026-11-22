@@ -9,9 +9,9 @@ export {
   GenerationTask, Harness, InboxDoc, hook, hookTask, LiveDoc, MemoryStorage, ROOT_CONVERSATION_ID,
   SubmissionSettled, ToolResultEntry, ToolTask,
   type Conversation, type ConversationDocToken, type ConversationId, type Cursor, type EntryRecord, type JsonObject, type LiveState, type InboxState, type Extension, type HarnessOptions, type ModelRef,
-  type Storage, type TaskId, type ToolRegistration, type Tx, type YieldDecision,
+  type Storage, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration, type Tx, type YieldDecision,
 } from "@earendil-works/pi-durable";
-export { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+export { BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";
 
 // Storage itself exposes no path. Keep sibling databases with the host that opened it.
 export const storageDirectories = new WeakMap<Storage, string>();

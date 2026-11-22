@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { context, createCapabilityRegistry, type ToolRegistration } from "@alter/core";
 import { afterEach, expect, it } from "vitest";
 import { createCalendarPlugin } from "../src/index.ts";
@@ -16,14 +17,19 @@ async function setup(timeZone = "Asia/Shanghai") {
   let active = plugin();
   let stop = await active.start!({ emit: async () => {} });
   cleanup.push(() => stop());
-  async function call(action: string, args: object = {}) {
+  async function invoke(action: string, args: object = {}, tainted = false) {
     const tool = active.tools.find(t => t.name === "calendar_" + action)!;
-    const result = await tool.execute(args, {} as Parameters<ToolRegistration["execute"]>[1], context);
+    const api = { conversationId: 1, snapshot: async () => tainted ? { first: { source: "mail_read", capability: "mail", at } } : undefined };
+    const result = await tool.execute(args, api as unknown as Parameters<ToolRegistration["execute"]>[1], context);
     if (!("output" in result) || result.output?.[0]?.type !== "text") throw new Error("Expected calendar text");
-    expect(result.details).toBeUndefined();
-    return JSON.parse(result.output[0].text);
+    return { value: JSON.parse(result.output[0].text), details: result.details };
   }
-  return { plugin: active, call, async reopen() {
+  async function call(action: string, args: object = {}) {
+    const result = await invoke(action, args);
+    expect(result.details).toBeUndefined();
+    return result.value;
+  }
+  return { plugin: active, call, invoke, dataDir, async reopen() {
     await stop();
     active = plugin();
     stop = await active.start!({ emit: async () => {} });
@@ -35,11 +41,41 @@ it("replaces the demo manifest and declares the effects of exactly five leasable
   const { toolActions, manifests } = createCapabilityRegistry([plugin]);
   expect(manifests.filter(m => m.id === "calendar")).toEqual([plugin.capability]);
   expect(plugin.capability.mainLeasable).toBe(true);
+  expect(plugin.capability.actions.filter(a => a.guarded).map(a => a.name)).toEqual(["update", "delete"]);
   expect(plugin.tools.map(tool => [tool.name, toolActions.get(tool.name)?.effect])).toEqual([
     ["calendar_list", "read"], ["calendar_create", "write-local"], ["calendar_update", "write-local"],
     ["calendar_delete", "write-local"], ["calendar_restore", "write-local"],
   ]);
   expect(() => createCapabilityRegistry([plugin, plugin])).toThrow("Duplicate capability");
+});
+
+it("migrates a pre-provenance database and preserves the local event", async () => {
+  const { call, dataDir, reopen } = await setup();
+  const { event } = await call("create", { title: "旧日程", start: "2026-11-23T09:00" });
+  const db = new DatabaseSync(join(dataDir, "calendar.sqlite"));
+  try { db.exec("ALTER TABLE events DROP COLUMN external"); } finally { db.close(); }
+  await reopen();
+  expect(await call("list")).toEqual([event]);
+  await call("update", { id: event.id, title: "改名" });
+  await reopen();
+  expect(await call("list")).toMatchObject([{ title: "改名" }]);
+});
+
+it("retains the source of tainted creates and updates and tags only lists containing an external row", async () => {
+  const { call, invoke, reopen } = await setup();
+  const details = { untrusted: true, source: "calendar" };
+  const { event } = await call("create", { title: "本地", start: "2026-11-23T09:00" });
+  const imported = await invoke("create", { title: "邀请", start: "2026-11-24T09:00" }, true);
+  await reopen();
+  expect((await invoke("list")).details).toEqual(details);
+  expect(await call("list", { to: "2026-11-24" })).toEqual([event]);
+  await call("delete", { id: imported.value.event.id });
+  expect(await call("list")).toEqual([event]);
+  expect((await invoke("list", { includeDeleted: true })).details).toEqual(details);
+  await invoke("update", { id: event.id, notes: "外部备注" }, true);
+  await call("update", { id: event.id, title: "改名" });
+  await reopen();
+  expect(await invoke("list")).toMatchObject({ value: [{ notes: "外部备注", title: "改名" }], details });
 });
 
 it("persists local times, metadata and soft deletion across reopen and restore", async () => {
