@@ -109,7 +109,8 @@ time { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums;
   padding-top: env(safe-area-inset-top);
 }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
-.pair-code { display: inline-flex; align-items: baseline; gap: 6px; margin-right: 6px; padding: 3px 10px; border-radius: 999px; background: var(--fill); font-size: 13px; color: var(--muted); cursor: help; }
+.pair-code { border: 0; font: inherit; display: inline-flex; align-items: baseline; gap: 6px; margin-right: 6px; padding: 3px 10px; border-radius: 999px; background: var(--fill); font-size: 13px; color: var(--muted); cursor: help; }
+a.text-btn { text-decoration: none; font-size: 14px; }
 .pair-code b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
 .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .status i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }

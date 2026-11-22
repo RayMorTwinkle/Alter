@@ -5,7 +5,7 @@ import {
   answerUserPermission, context, observeSurface, readTranscript, stopMainTurn, submitMessage,
   MemoryInputError, Tasks, usageSummary, type AlterApp,
 } from "@alter/core";
-import type { FeishuPairing } from "@alter/plugin-feishu";
+import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
 
 const cookieName = "alter_session";
@@ -35,7 +35,12 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 // Structural so the server does not depend on a calendar implementation.
 export type Agenda = { timeZone: string; agenda(): unknown[]; subscribe(listener: () => void): () => void };
 
-export async function createWebServer(app: AlterApp, options: { password: string; dataDir: string; dist?: string; calendar?: Agenda; feishu?: { pairing(): FeishuPairing } }) {
+type WebOptions = {
+  password: string; dataDir: string; dist?: string; calendar?: Agenda;
+  feishu?: { pairing(): FeishuPairing }; feishuAccount?: FeishuAccount;
+};
+
+export async function createWebServer(app: AlterApp, options: WebOptions) {
   if (!options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const passwordHash = digest(options.password);
   const sessions = new Set<string>();
@@ -51,7 +56,7 @@ export async function createWebServer(app: AlterApp, options: { password: string
     const message = frame(event, data);
     for (const res of clients.keys()) write(res, message);
   });
-  const { calendar } = options;
+  const { calendar, feishuAccount } = options;
   const agenda = () => ({ timeZone: calendar!.timeZone, events: calendar!.agenda() });
   const unsubscribe = calendar?.subscribe(() => {
     if (!clients.size) return;
@@ -71,6 +76,27 @@ export async function createWebServer(app: AlterApp, options: { password: string
       return serveStatic(options.dist ?? defaultDist, path, res);
     }
     res.setHeader("Cache-Control", "no-store");
+    if (method === "GET" && path === "/api/feishu/oauth/callback") {
+      res.setHeader("Referrer-Policy", "no-referrer");
+      if (!feishuAccount) throw new HttpError(404, "Feishu is not configured");
+      const params = new URL(req.url!, "http://localhost").searchParams;
+      const states = params.getAll("state");
+      const codes = params.getAll("code");
+      let message = "授权请求无效或已过期，请从 Web 设置重新连接。";
+      let status = 400;
+      try {
+        if (await feishuAccount.callback(states.length === 1 ? states[0]! : null, codes.length === 1 ? codes[0]! : null)) {
+          res.writeHead(302, { Location: "/" }).end();
+          return;
+        }
+      } catch {
+        status = 502;
+        message = "飞书账号连接失败，请检查应用权限和回调地址后重试。";
+      }
+      res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" })
+        .end(`<!doctype html><meta charset="utf-8"><title>飞书授权失败</title><p>${message}</p><a href="/">返回 Alter</a>`);
+      return;
+    }
     const token = req.headers.cookie?.split(";").map(c => c.trim()).find(c => c.startsWith(cookieName + "="))?.slice(cookieName.length + 1);
     const login = method === "POST" && path === "/api/login";
     const logout = method === "POST" && path === "/api/logout";
@@ -128,7 +154,12 @@ export async function createWebServer(app: AlterApp, options: { password: string
     } else if (method === "GET" && path === "/api/calendar" && calendar) {
       return json(res, 200, agenda());
     } else if (method === "GET" && path === "/api/feishu" && options.feishu) {
-      return json(res, 200, options.feishu.pairing());
+      return json(res, 200, { ...options.feishu.pairing(), account: await feishuAccount?.status() ?? { connected: false } });
+    } else if (method === "GET" && path === "/api/feishu/oauth/start" && feishuAccount) {
+      res.writeHead(302, { Location: feishuAccount.start() }).end();
+      return;
+    } else if (method === "POST" && path === "/api/feishu/account/disconnect" && feishuAccount) {
+      await feishuAccount.disconnect();
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");

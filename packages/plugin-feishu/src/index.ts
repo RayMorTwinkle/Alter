@@ -5,6 +5,8 @@ import type { FeishuConfig } from "./config.ts";
 import { openState } from "./state.ts";
 import { sdkTransport, type FeishuMessage, type FeishuTransport } from "./transport.ts";
 
+export { createFeishuConnector } from "./connector.ts";
+export type { FeishuAccount } from "./account.ts";
 export { feishuConfigFromEnv, type FeishuConfig } from "./config.ts";
 export type { FeishuHandlers, FeishuMessage, FeishuTransport } from "./transport.ts";
 export type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt: number };

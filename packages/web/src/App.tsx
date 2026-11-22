@@ -9,6 +9,7 @@ import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx
 import { TaskSheet, UsageSheet } from "./components/Sheets.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
+import type { FeishuPairing } from "./types.ts";
 import { defaultLocale, strings, type Locale } from "./strings.ts";
 
 type Auth = "checking" | "out" | "in";
@@ -52,16 +53,21 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
 
   // The code rotates every 10 minutes until the owner pairs; a 404 means Feishu is not configured.
-  const [pairCode, setPairCode] = useState("");
+  // Connecting the account leaves the page for Feishu and returns to "/", which refetches.
+  const [feishu, setFeishu] = useState<FeishuPairing | null>(null);
+  const [feishuTick, setFeishuTick] = useState(0);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = () => api.feishu().then(status => {
-      setPairCode(status.paired ? "" : status.code);
+      setFeishu(status);
       if (!status.paired) timer = setTimeout(poll, 15_000);
-    }, () => setPairCode(""));
+    }, () => setFeishu(null));
     void poll();
     return () => clearTimeout(timer);
-  }, []);
+  }, [feishuTick]);
+  const onDisconnectFeishu = () => {
+    if (confirm(t.feishuDisconnectConfirm)) void guard(() => api.disconnectFeishu()).then(() => setFeishuTick(n => n + 1), () => {});
+  };
 
   const waiting = userPending(state).length;
   useEffect(() => {
@@ -110,11 +116,19 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
           <i />{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}
         </span>
         <div className="topbar-actions">
-          {pairCode && (
+          {feishu && !feishu.paired && (
             <span className="pair-code" title={t.feishuPairHint}>
               <span className="pair-label">{t.feishuPair}</span>
-              <b>{pairCode.slice(0, 3)} {pairCode.slice(3)}</b>
+              <b>{feishu.code.slice(0, 3)} {feishu.code.slice(3)}</b>
             </span>
+          )}
+          {feishu?.paired && !feishu.account.connected && (
+            <a className="text-btn" href="/api/feishu/oauth/start" title={t.feishuConnectHint}>{t.feishuConnect}</a>
+          )}
+          {feishu?.paired && feishu.account.connected && (
+            <button className="pair-code" onClick={onDisconnectFeishu} title={t.feishuDisconnect}>
+              <span className="pair-label">{t.viaFeishu}</span><b>{feishu.account.name ?? t.feishuConnected}</b>
+            </button>
           )}
           <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.usage} aria-label={t.usage}><ChartBar /></button>
           <button className="text-btn" onClick={onToggleLocale}>{t.language}</button>

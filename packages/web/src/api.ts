@@ -32,6 +32,7 @@ export const api = {
   usage: () => request<UsageRow[]>("/api/usage"),
   calendar: () => request<Agenda>("/api/calendar"),
   feishu: () => request<FeishuPairing>("/api/feishu"),
+  disconnectFeishu: () => request<void>("/api/feishu/account/disconnect", { method: "POST", body: {} }),
   memory: () => request<MemoryItem[]>("/api/memory"),
   updateMemory: (id: string, patch: Partial<Pick<MemoryItem, "text" | "status">>) =>
     request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),

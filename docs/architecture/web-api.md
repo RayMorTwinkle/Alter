@@ -1,4 +1,4 @@
-# Web API 契约（v1.5）
+# Web API 契约（v1.6）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -10,18 +10,40 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 | `ALTER_WEB_PORT` | `4317` | |
 | `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 两类审批的等待时长，修改只影响新请求 |
 | `ALTER_WEB_PASSWORD` | 无（必填） | 单用户登录密码 |
-| `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 同时设置以启用飞书机器人入口 |
+| `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 同时设置以启用飞书机器人入口与用户账号 Connector |
+| `ALTER_FEISHU_REDIRECT_URI` | `http://127.0.0.1:<ALTER_WEB_PORT>/api/feishu/oauth/callback` | 端口默认 4317，与开放平台登记值完全一致 |
 | `ALTER_FEISHU_DOMAIN` | `feishu` | 国际版用 `lark` |
 
 服务端同时托管前端构建产物（`packages/web/dist`），开发时前端用 Vite 代理 `/api`。
 
 飞书自建应用需启用机器人，并在开放平台为事件和回调选择长连接。订阅消息事件 `im.message.receive_v1` 和卡片回调 `card.action.trigger`。在机器人私聊中发送配对码即可绑定。
 
+### 飞书用户账号
+
+在开放平台自建应用的「安全设置 → 重定向 URL」登记 `http://127.0.0.1:4317/api/feishu/oauth/callback`。浏览器必须能访问此地址。改用其他端口、域名或反向代理时，登记实际回调地址，并将 `ALTER_FEISHU_REDIRECT_URI` 配置为同一值。
+
+在「权限管理」为用户身份开通以下权限并发布版本。授权页按空格分隔请求这六个 scope。
+
+| Scope | 用途 |
+|---|---|
+| `offline_access` | 获取可续期的用户令牌 |
+| `im:chat:read` | 列出用户所在会话 |
+| `im:message` | 用户身份读写消息的基础权限 |
+| `im:message.p2p_msg:get_as_user` | 读取单聊历史消息 |
+| `im:message.group_msg:get_as_user` | 读取群聊历史消息 |
+| `im:message.send_as_user` | 以授权用户身份发消息 |
+
+网页通过顶层导航访问授权起点。服务使用授权码和 PKCE（S256）换取令牌，按用户身份调用飞书 API。令牌在数据目录的 `feishu-user.json` 中以 0600 权限原子保存。服务运行时提前刷新，重启后也会检查到期时间。刷新失败后需要重新连接。
+
+机器人配对与账号授权独立。断开账号会删除本地令牌并作废未完成的授权请求，机器人仍可使用。
+
+平台接口见[获取授权码](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code)、[列出群聊和单聊](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)、[读取会话历史](https://open.feishu.cn/document/server-docs/im-v1/message/list)和[发送消息](https://open.feishu.cn/document/server-docs/im-v1/message/create)。
+
 ## 鉴权
 
 - `POST /api/login` `{ password }` → `204`，设置 `HttpOnly; SameSite=Strict` 的会话 Cookie；失败 `401`
 - `POST /api/logout` → `204`
-- 其余 `/api/*` 未登录返回 `401`
+- 飞书 OAuth 的 `GET /api/feishu/oauth/callback` 通过 10 分钟内单次有效的 state 验证跨站回调。其余受保护的 API 未登录返回 `401`
 - 所有写请求要求 `Content-Type: application/json`（挡掉跨站表单提交）
 
 ## 数据类型
@@ -64,7 +86,8 @@ type PermissionRequest = {
   expiresAt: number;          // v1.1 新增，截止时间（Unix 毫秒）
 };
 
-type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt: number }; // Unix 毫秒
+type FeishuPairing = ({ paired: true } | { paired: false; code: string; expiresAt: number }) // Unix 毫秒
+  & { account: { connected: boolean; name?: string } };
 
 // v1.3 新增，仅在加载了日历插件时提供
 type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
@@ -98,7 +121,10 @@ type TranscriptItem =
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
-| `GET` | `/api/feishu` | `FeishuPairing`（v1.4）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
+| `GET` | `/api/feishu` | `FeishuPairing`（v1.6 含账号连接状态与可选显示名）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
+| `GET` | `/api/feishu/oauth/start` | 需要登录；`302` 跳转至飞书授权页 |
+| `GET` | `/api/feishu/oauth/callback?code=…&state=…` | 成功 `302` 回到 `/`；无效、过期、重复或拒绝授权返回 `400` 错误页；换令牌或保存失败返回 `502` 错误页 |
+| `POST` | `/api/feishu/account/disconnect` | 需要登录；清除本地授权，重复调用均返回 `204` |
 | `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
 | `GET` | `/api/memory` | `MemoryItem[]`，按 `updatedAt` 倒序。读取时将已过期的 active 目标转为 pending |
 | `PATCH` | `/api/memory/:id` | 请求至少含 `text`、`status`、`due` 之一 → `204`。期限仅适用于目标，使用 Unix 毫秒，传 `null` 可清除。字段无效返回 `400`，记忆不存在返回 `404` |
@@ -129,4 +155,4 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 
 ## 错误
 
-非 2xx 响应体为 `{ error: string }`。
+除飞书 OAuth 回调的 HTML 错误页外，API 错误响应体为 `{ error: string }`。

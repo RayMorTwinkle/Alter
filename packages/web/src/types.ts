@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.5).
+// Mirrors docs/architecture/web-api.md (v1.6).
 
 export type TimelineItem = {
   id: string;
@@ -64,7 +64,8 @@ export type Snapshot = {
   busy: boolean;
 };
 
-export type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt: number };
+export type FeishuPairing = ({ paired: true } | { paired: false; code: string; expiresAt: number })
+  & { account: { connected: boolean; name?: string } };
 
 export type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
 

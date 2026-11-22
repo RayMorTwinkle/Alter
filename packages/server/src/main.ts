@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage, type AlterPlugin } from "@alter/core";
 import { createBrowserPlugin } from "@alter/plugin-browser";
 import { createCalendarPlugin } from "@alter/plugin-calendar";
-import { createFeishuSurface, feishuConfigFromEnv } from "@alter/plugin-feishu";
+import { createFeishuConnector, createFeishuSurface, feishuConfigFromEnv } from "@alter/plugin-feishu";
 import { createMailPlugin, mailConfigFromEnv } from "@alter/plugin-mail";
 import { createWebServer } from "./server.ts";
 
@@ -19,8 +19,10 @@ async function start() {
   const mail = mailConfigFromEnv(process.env);
   const feishuConfig = feishuConfigFromEnv(process.env);
   const feishu = feishuConfig && createFeishuSurface({ config: feishuConfig, dataDir: config.dataDir });
+  const connector = feishuConfig && createFeishuConnector({ config: feishuConfig, dataDir: config.dataDir });
   const calendar = createCalendarPlugin({ dataDir: config.dataDir, timeZone: config.timeZone });
   const plugins: AlterPlugin[] = [calendar];
+  if (connector) plugins.push(connector.plugin);
   if (mail) plugins.push(createMailPlugin(mail));
   if (process.env.ALTER_BROWSER !== "off") plugins.push(createBrowserPlugin());
   const app = await openAlter(
@@ -31,7 +33,7 @@ async function start() {
   let stopFeishu: (() => Promise<void>) | undefined;
   try {
     stopFeishu = await feishu?.start(app);
-    const web = await createWebServer(app, { password, dataDir: config.dataDir, calendar, feishu });
+    const web = await createWebServer(app, { password, dataDir: config.dataDir, calendar, feishu, feishuAccount: connector?.account });
     try {
       web.server.listen(port, host);
       await once(web.server, "listening");
