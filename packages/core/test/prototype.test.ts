@@ -13,7 +13,7 @@ import { createMailPlugin } from "../../plugin-mail/src/index.ts";
 import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugin-mail/test/fake.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
-import { context, createRegistry, defineTool, Harness, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
 import { Taint } from "../src/taint.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
 import { observeSurface, stopMainTurn } from "../src/observe.ts";
@@ -600,34 +600,6 @@ it("gates a leased main tool after an external result, including when the user s
   await stopMainTurn(app);
   expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
   expect(execute).toHaveBeenCalledTimes(2);
-});
-
-it("restores pre-tracking SQLite results and report propagation before any new dispatch", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "alter-legacy-taint-"));
-  cleanup.push(() => rm(dir, { recursive: true, force: true }));
-  const storage = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
-  const legacy = await Harness.open(await storage(), { models: createModels(), registry: createRegistry() }, context);
-  const main = await legacy.root(context);
-  try {
-    await main.commit(async tx => {
-      const task = await tx.createConversation({ ownership: { kind: "ownerless" } });
-      (await tx.doc(Tasks, main.id)).byId["task-legacy"] = {
-        conversationId: task.id, brief: "read mail", createdAt: 1, context: "fresh", allow: [], permission: "full", status: "completed",
-      };
-      await tx.appendEntry(task.id, { kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "legacy",
-        toolName: "remote_read", content: [{ type: "text", text: "mail" }], isError: false, timestamp: 2, details: { untrusted: true } }] });
-      await tx.appendEntry(main.id, { kind: "alter.task-report", data: { taskId: "task-legacy", at: 3 },
-        model: [{ role: "user", content: "task task-legacy finished: mail", timestamp: 3 }] });
-    }, context);
-  } finally { await legacy.close(context); }
-  const app = await open(text => {
-    if (text === "delegate") return dispatch("send", "full");
-    if (text === "send") return call("outbox_send", { message: "mail" });
-    return say("OK");
-  }, await storage(), [externalPlugin().plugin]);
-  await input(app, "delegate");
-  expect(await parked(app)).toMatchObject({ audience: "user", tainted: true, taint: { source: "remote_read", capability: "remote", at: 2 } });
-  expect(app.demo.outbox).toEqual([]);
 });
 
 it("withholds an external result if its taint cannot be persisted", async () => {

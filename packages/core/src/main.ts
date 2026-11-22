@@ -7,7 +7,6 @@ import {
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
-import { restoreTaint, Taint } from "./taint.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
@@ -115,7 +114,6 @@ export async function openAlter(
   const main: Conversation = await harness.root(context, { agent: {
     extensions: [controlPlane, extension, broker], modelTools: controls,
   } });
-  const legacyTaint = !(await harness.snapshot(Taint, main.id, context));
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases, granted capabilities and the conversational history.
   await main.commit(async tx => {
@@ -139,7 +137,6 @@ export async function openAlter(
       }
       if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: thinking.task });
     }
-    if (legacyTaint) await restoreTaint(tx, main.id, tasks.byId, capabilities);
   }, context);
   const host: PluginHost = {
     emit: event => main.commit(async tx => {
