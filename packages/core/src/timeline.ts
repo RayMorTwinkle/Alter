@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { contentText } from "@earendil-works/pi-ai";
+import { inputClock } from "./clock.ts";
 import { context, type Conversation, type Cursor, type EntryRecord, type InboxState } from "./runtime.ts";
 
 export type TimelineItem = {
@@ -17,22 +18,38 @@ export type TranscriptItem =
 
 const inputKind = "alter.user-input";
 
+const defaultClock = inputClock();
+// Keep the public submitMessage(main, text) API while each open host supplies its own clock.
+export const mainClocks = new WeakMap<Conversation, typeof defaultClock>();
+
 export async function submitMessage(main: Conversation, text: string) {
   const id = randomUUID();
-  await main.submit({ type: "input", content: text, whenBusy: "followUp",
-    entry: { kind: inputKind, data: { id, at: Date.now() } } }, context);
+  const { at, prefix } = (mainClocks.get(main) ?? defaultClock)();
+  await main.submit({ type: "input", content: prefix + "\n" + text, whenBusy: "followUp",
+    entry: { kind: inputKind, data: { id, at, text } } }, context);
   return id;
 }
 
-function inputItem(entry: Pick<EntryRecord, "kind" | "data"> | undefined, text: string, id: string, at: number): TimelineItem {
-  const payload = entry?.data;
-  const data = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : undefined;
+type InputEntry = Pick<EntryRecord, "kind" | "data">;
+
+function entryData(entry?: InputEntry) {
+  const data = entry?.data;
+  return data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
+}
+
+function surfaceText(entry: InputEntry | undefined, fallback: string) {
+  const original = entryData(entry)?.text;
+  return (entry?.kind === inputKind || entry?.kind === "alter.task-brief") && typeof original === "string" ? original : fallback;
+}
+
+function inputItem(entry: InputEntry | undefined, text: string, id: string, at: number): TimelineItem {
+  const data = entryData(entry);
   if (entry?.kind === "alter.task-report" && typeof data?.taskId === "string" && typeof data.at === "number") {
     return { kind: "report", id: `report-${data.taskId}`, taskId: data.taskId, text, at: data.at };
   }
   if (entry?.kind === inputKind || entry?.kind === "alter.cli-input") {
     if (typeof data?.id === "string" && typeof data.at === "number") {
-      return { kind: "user", id: data.id, at: data.at, text };
+      return { kind: "user", id: data.id, at: data.at, text: surfaceText(entry, text) };
     }
     return { kind: "user", text, id, at };
   }
@@ -78,7 +95,7 @@ export async function readTranscript(conversation: Conversation): Promise<Transc
         const at = msg.timestamp;
         if (msg.role === "system") continue;
         if (msg.role === "user") {
-          items.push({ kind: "user", text: contentText(msg.content), at });
+          items.push({ kind: "user", text: surfaceText(entry, contentText(msg.content)), at });
         } else if (msg.role === "toolResult") {
           items.push({ kind: "tool_result", tool: msg.toolName, text: contentText(msg.content), at, isError: msg.isError });
         } else {

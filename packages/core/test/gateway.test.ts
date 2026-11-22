@@ -132,7 +132,7 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
       if (last.role === "tool") return toolCall(res, "finish", { summary: "已处理", refs: [] });
       return toolCall(res, "outbox_send", { message: "hello" });
     }
-    if (last.content === "delegate") return toolCall(res, "dispatch_task", { brief: "send", context: mode, permission: "auto", allow: [] });
+    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send", context: mode, permission: "auto", allow: [] });
     say(res, last.role === "tool" ? "已派单" : "收到报告");
   });
   const storage = () => mode === "fresh" ? new MemoryStorage() : openNodeSqliteStorage(join(app.dir, "main.sqlite"));
@@ -193,7 +193,7 @@ it("prints a queued task report immediately and only once when it enters the tra
     if (tools?.some(t => t.function.name === "finish")) {
       return toolCall(res, "finish", { summary: "ready", refs: [] });
     }
-    if (last.content === "delegate") {
+    if (last.content?.endsWith("\ndelegate")) {
       return toolCall(res, "dispatch_task", { brief: "report", context: "fresh", permission: "restricted", allow: [] });
     }
     if (last.role === "tool") { release = res; return; }
@@ -264,4 +264,10 @@ it("reads the configurable approval timeout in minutes", () => {
   for (const value of ["0", "-1", "never", "Infinity"]) {
     expect(() => gatewayConfig({ ...env, ALTER_APPROVAL_TIMEOUT_MINUTES: value })).toThrow(/ALTER_APPROVAL_TIMEOUT_MINUTES/);
   }
+});
+
+it("uses Shanghai as the default time zone and reads ALTER_TZ", () => {
+  const env = { ALTER_LLM_BASE_URL: "http://x/v1", ALTER_LLM_API_KEY: "k", ALTER_MAIN_MODEL: "a/b", ALTER_TASK_MODEL: "a/c" };
+  expect(gatewayConfig(env).timeZone).toBe("Asia/Shanghai");
+  expect(gatewayConfig({ ...env, ALTER_TZ: " America/New_York " }).timeZone).toBe("America/New_York");
 });

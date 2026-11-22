@@ -9,6 +9,8 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { answerUserPermission, Audit, Requests } from "../src/broker.ts";
+import { createCalendarPlugin } from "../../plugin-calendar/src/index.ts";
+import { readTranscript, submitMessage } from "../src/timeline.ts";
 import { createBrowserPlugin } from "../../plugin-browser/src/index.ts";
 import { fakeEgo } from "../../plugin-browser/test/fake.ts";
 import { createMailPlugin } from "../../plugin-mail/src/index.ts";
@@ -35,7 +37,8 @@ function dispatch(brief: string, permission: Permission = "restricted", allow: s
 function finish(summary: string) {
   return call("finish", { summary, refs: [] });
 }
-async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = [], approvalTimeoutMs?: number) {
+async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = [], approvalTimeoutMs?: number,
+  clock: { timeZone?: string; now?: () => number } = {}) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 160 }, () => ({ messages }) => {
     const tools = new Set<string>();
@@ -45,11 +48,12 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
       for (const tool of msg.toolsAdded ?? []) tools.add(tool.name);
     }
     const last = messages.findLast(msg => msg.role !== "system")!;
-    return route(contentText(last.content), last, messages, [...tools].sort());
+    const text = contentText(last.content);
+    return route(last.role === "user" ? text.replace(/^\[当前时间 [^\n]*\]\n/, "") : text, last, messages, [...tools].sort());
   }));
   const models = createModels();
   models.setProvider(faux.provider);
-  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins, approvalTimeoutMs });
+  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins, approvalTimeoutMs, ...clock });
   cleanup.push(app.close);
   return app;
 }
@@ -694,4 +698,65 @@ it("withholds an external result if its taint cannot be persisted", async () => 
   await input(app, "delegate");
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(observed).toEqual(["External content withheld because its source could not be recorded"]);
+});
+
+it("leases only the installed calendar tools and creates a timed event in the same main turn", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-calendar-lease-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const plugin = createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" });
+  let created = "";
+  let leased: string[] = [];
+  const app = await open((text, last, _, offered) => {
+    if (text === "schedule") return call("enable_tool", { capability: "calendar", reason: "schedule meeting" });
+    if (last.role === "toolResult" && last.toolName === "enable_tool") {
+      leased = offered.filter(name => name.startsWith("calendar_"));
+      return call("calendar_create", { title: "站会", start: "2026-11-23T15:00", location: "A" });
+    }
+    if (last.role === "toolResult" && last.toolName === "calendar_create") created = text;
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await submitMessage(app.main, "schedule");
+  await app.main.waitForIdle(context);
+  expect(app.demo.tools.map(t => t.name)).toEqual(["notes_read", "outbox_send"]);
+  expect(app.capabilities.manifests.filter(cap => cap.id === "calendar")).toEqual([plugin.capability]);
+  expect(leased).toEqual(plugin.tools.map(t => t.name).sort());
+  const agent = await app.main.agent(context);
+  expect(agent.tools.map(t => t.name).sort()).toEqual([...controls, ...leased].sort());
+  expect(JSON.parse(created).event).toMatchObject({ title: "站会", start: "2026-11-23T15:00:00.000+08:00", location: "A" });
+  expect(app.demo.calendar.size).toBe(0);
+});
+
+it("stamps each model input at submission or dispatch and preserves the original surface text", async () => {
+  let at = Date.parse("2026-11-22T03:50Z");
+  const raw = "[当前时间 用户原文]\n请派单";
+  const seen: string[] = [];
+  const app = await open((_, last) => {
+    if (last.role === "user") {
+      const content = contentText(last.content);
+      seen.push(content);
+      if (content.endsWith(raw)) {
+        at += 60_000;
+        return dispatch("查日历");
+      }
+      if (content.endsWith("查日历")) return finish("已查");
+    }
+    return say("OK");
+  }, new MemoryStorage(), [], undefined, { timeZone: "Asia/Shanghai", now: () => at });
+  const surface = await observeSurface(app, () => {});
+  cleanup.push(async () => surface.detach());
+  const id = await submitMessage(app.main, raw);
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  await app.main.waitForIdle(context);
+  await submitMessage(app.main, "下一条");
+  await app.main.waitForIdle(context);
+  expect(seen).toContain("[当前时间 2026-11-22 周日 11:50 Asia/Shanghai]\n" + raw);
+  expect(seen).toContain("[当前时间 2026-11-22 周日 11:51 Asia/Shanghai]\n查日历");
+  expect(seen).toContain("[当前时间 2026-11-22 周日 11:51 Asia/Shanghai]\n下一条");
+  expect(surface.snapshot().timeline.find(item => item.id === id)?.text).toBe(raw);
+  const [task] = Object.values((await app.harness.snapshot(Tasks, app.main.id, context))!.byId);
+  const history = await observeSurface(app, () => {});
+  cleanup.push(async () => history.detach());
+  expect(history.snapshot().timeline.find(item => item.id === id)?.text).toBe(raw);
+  const child = await app.harness.conversation(task!.conversationId, context);
+  expect(await readTranscript(child!)).toContainEqual({ kind: "user", text: "查日历", at: expect.any(Number) });
 });

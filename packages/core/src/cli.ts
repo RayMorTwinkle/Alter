@@ -50,7 +50,7 @@ async function chat() {
   const config = gatewayConfig();
   const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
   const storage = await openNodeSqliteStorage(join(config.dataDir, "main.sqlite"));
-  const app = await openAlter(storage, models, mainModel, taskModel, thinking, { approvalTimeoutMs: config.approvalTimeoutMs });
+  const app = await openAlter(storage, models, mainModel, taskModel, thinking, { approvalTimeoutMs: config.approvalTimeoutMs, timeZone: config.timeZone });
   try {
     const detach = await observeChat(app, console.log);
     const rl = createInterface({ input: process.stdin, output: process.stdout });

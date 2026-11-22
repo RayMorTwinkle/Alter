@@ -1,5 +1,6 @@
 import { arr, obj, oneOf, str } from "@earendil-works/pi-schema";
 import { Requests } from "./broker.ts";
+import type { inputClock } from "./clock.ts";
 import type { CapabilityRegistry } from "./capabilities.ts";
 import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, LiveDoc, reply,
@@ -85,7 +86,7 @@ async function failTask(tx: Tx, mainId: ConversationId, taskId: string, failure:
 }
 
 // The background task owns the conversation and sleeps until its brief settles. Main stays available.
-export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | "settled" }, null, {
+export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }, { phase: "start" | "settled" }, null, {
   onTaskEnd(taskId: string): Promise<void>;
 }>({
   name: "alter.background-task", version: 1, initial: () => ({ phase: "start" }),
@@ -95,7 +96,8 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
       const child = (await runtime.conversation(task.conversationId, ctx))!;
       await runtime.commit(async tx => {
         await child.submit(tx, {
-          type: "input", content: task.brief, requestId: `brief-${input.taskId}`,
+          type: "input", content: input.timePrefix ? input.timePrefix + "\n" + task.brief : task.brief,
+          entry: { kind: "alter.task-brief", data: { text: task.brief } }, requestId: `brief-${input.taskId}`,
           notify: { taskId: runtime.taskId, key: "settled" },
         });
         return { status: "sleeping", checkpoint: { phase: "settled" }, signals: [SubmissionSettled.key("settled")] };
@@ -131,7 +133,7 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
 });
 
 export function dispatchTool(
-  { manifests }: CapabilityRegistry, taskExtensions: Extension[], taskModel: ModelRef, taskThinking?: ModelThinkingLevel,
+  { manifests }: CapabilityRegistry, taskExtensions: Extension[], taskModel: ModelRef, clock: ReturnType<typeof inputClock>, taskThinking?: ModelThinkingLevel,
 ) {
   return defineTool({
     name: "dispatch_task", description: "Start a background task. Its report will arrive as a follow-up.",
@@ -147,7 +149,8 @@ export function dispatchTool(
         const tasks = await tx.doc(Tasks, api.conversationId);
         if (tasks.byId[taskId]) return;
         const at = args.context === "fork" ? await tx.latestEntryId(api.conversationId) : undefined;
-        const owner = await tx.createTask(BackgroundTask, { taskId }, {
+        const stamp = clock();
+        const owner = await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
           ownership: { kind: "conversation" }, background: true,
         });
         const options = { ownership: { kind: "task" as const, taskId: owner } };
@@ -162,7 +165,7 @@ export function dispatchTool(
         await inheritTaint(tx, api.conversationId, child.id);
         (await tx.doc(TaskIdentity, child.id)).taskId = taskId;
         tasks.byId[taskId] = {
-          conversationId: child.id, brief: args.brief, context: args.context, createdAt: api.now(),
+          conversationId: child.id, brief: args.brief, context: args.context, createdAt: stamp.at,
           permission: args.permission, allow: args.allow, status: "running",
         };
       }, ctx);
