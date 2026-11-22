@@ -51,7 +51,7 @@ export function answerUserPermission(main: Conversation, answer: Answer) {
 
 export function mainApprovalTool(main: () => Conversation) {
   return defineTool({
-    name: "answer_permission_request", description: "Allow or deny a restricted task's pending request.",
+    name: "answer_permission_request", description: "Allow or deny a restricted task's capability request. Sends and irreversible actions go to the user.",
     parameters: obj({ requestId: str(), allow: bool(), note: opt(str()) }),
     execute: (answer, api, ctx) => api.commit(tx => deliver(tx, main(), "main", answer), ctx),
   });
@@ -104,15 +104,19 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             record("allow");
             return;
           }
+          // Main reads task reports and external data, so it can be injected: only the user approves
+          // calls that leave the machine or cannot be undone. An approved request_capability only adds
+          // to the allow list, which never covers those calls (ADR-0004, #13).
+          const userOnly = call.name !== "request_capability" && (effect === "external-send" || effect === "irreversible" || effect === "unknown");
           const permitted = call.name === "finish" || task.permission === "full"
-            || (task.permission === "restricted" && task.allow.includes(capability))
+            || (task.permission === "restricted" && task.allow.includes(capability) && !userOnly)
             || (task.permission === "auto" && (effect === "read" || effect === "write-local"));
           if (permitted && !requests.pending[requestId]) {
             record("allow");
             return;
           }
           if (!requests.pending[requestId]) {
-            const audience = task.permission === "auto" ? "user" : "main";
+            const audience = task.permission === "auto" || userOnly ? "user" : "main";
             const reason = call.name === "request_capability" ? String(call.arguments.reason) : task.brief;
             requests.pending[requestId] = {
               id: requestId, toolTask: api.taskId, taskId, audience, reason, capability,
