@@ -1,75 +1,37 @@
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { contentText } from "@earendil-works/pi-ai";
-import { answerUserPermission, Requests, type PermissionState } from "./broker.ts";
+import { answerUserPermission } from "./broker.ts";
 import { gatewayConfig, loadRepoEnv } from "./config.ts";
 import { openAlter } from "./main.ts";
 import { createGatewayModels } from "./models.ts";
-import { context, InboxDoc, openNodeSqliteStorage, type InboxState } from "./runtime.ts";
+import { context, openNodeSqliteStorage } from "./runtime.ts";
+import { observeSurface, type PermissionRequest, type AlterApp } from "./observe.ts";
+import { submitMessage, type TimelineItem } from "./timeline.ts";
 import { Tasks } from "./state.ts";
 
-type App = Awaited<ReturnType<typeof openAlter>>;
-const cliEntry = "alter.cli-input";
-
-export async function observeChat({ harness, main }: App, print: (text: string) => void) {
-  // Attach before resume, including documents not yet created in an older database.
-  await main.commit(async tx => {
-    await tx.doc(Requests, main.id);
-    await tx.doc(InboxDoc, main.id);
-  }, context);
-  const queued = new Set<number>();
-  function showInbox({ items }: InboxState) {
-    for (const item of items) {
-      if (item.mode === "write" || item.entry?.kind === cliEntry || queued.has(item.id)) continue;
-      print(`[回投] ${contentText(item.content)}`);
-      queued.add(item.id);
-    }
-  }
-  const inbox = await harness.observeDoc(InboxDoc, main.id, {
-    advance(call) { if (call.kind === "value") showInbox(call.value); }, end() {},
-  }, context);
-  showInbox(inbox!.value);
-
+export async function observeChat(app: AlterApp, print: (text: string) => void) {
   let shown = new Set<string>();
-  function showPermissions(requests: PermissionState) {
-    const pending = Object.values(requests.pending).filter(req => req.audience === "user");
+  function permissions(requests: PermissionRequest[]) {
+    const pending = requests.filter(req => req.audience === "user");
     for (const req of pending) {
-      if (!shown.has(req.id)) print(`[用户审批] ${req.id} · ${req.taskId} · ${req.tool} ${req.argumentsJson}\n原因：${req.reason}\n/approve ${req.id} 或 /deny ${req.id}`);
+      if (!shown.has(req.id)) print(`[用户审批] ${req.id} · ${req.taskId} · ${req.tool} ${JSON.stringify(req.arguments)}\n原因：${req.reason}\n/approve ${req.id} 或 /deny ${req.id}`);
     }
     shown = new Set(pending.map(req => req.id));
   }
-  const permissions = await harness.observeDoc(Requests, main.id, {
-    advance(call) { if (call.kind === "value") showPermissions(call.value); }, end() {},
-  }, context);
-  showPermissions(permissions!.value);
-
-  const commits = harness.observeCommits({
-    advance({ changes }) {
-      const alreadyShown = new Set<number>();
-      for (const change of changes) {
-        if (change.type !== "submission" || change.value.conversationId !== main.id) continue;
-        const submission = change.value;
-        if (submission.status !== "queued" && queued.delete(submission.id) && submission.entry !== undefined) {
-          alreadyShown.add(submission.entry);
-        }
-      }
-      for (const change of changes) {
-        if (change.type !== "entry" || change.value.conversationId !== main.id) continue;
-        const entry = change.value;
-        for (const msg of entry.model ?? []) {
-          if (msg.role === "user" && entry.kind !== cliEntry && !alreadyShown.has(entry.id)) print(`[回投] ${contentText(msg.content)}`);
-          if (msg.role !== "assistant") continue;
-          const text = contentText(msg.content);
-          if (text) print(`Alter> ${text}`);
-          if (msg.errorMessage) print(`[模型错误] ${msg.model} · ${msg.errorMessage}`);
-        }
-      }
-    }, end() {},
+  function show(item: TimelineItem) {
+    if (item.kind === "assistant") print(`Alter> ${item.text}`);
+    else if (item.kind === "notice" && item.id.endsWith("-error")) print(item.text);
+    else if (item.kind !== "user" && !item.id.startsWith("approval-")) print(`[回投] ${item.text}`);
+  }
+  const observer = await observeSurface(app, event => {
+    if (event.event === "timeline") show(event.data);
+    if (event.event === "pending") permissions(event.data);
   });
-  return () => { inbox!.detach(); permissions!.detach(); commits.detach(); };
+  return observer.detach;
 }
 
-export async function chatCommand({ main, harness }: App, line: string, print: (text: string) => void) {
+export async function chatCommand({ main, harness }: AlterApp, line: string, print: (text: string) => void) {
   if (line === "/tasks") {
     const tasks = await harness.snapshot(Tasks, main.id, context);
     print(JSON.stringify(tasks?.byId ?? {}, null, 2));
@@ -79,7 +41,7 @@ export async function chatCommand({ main, harness }: App, line: string, print: (
     const answer = await answerUserPermission(main, { requestId, allow: command === "/approve", note: note.join(" ") || undefined });
     print(contentText(answer.output));
   } else if (line) {
-    await main.submit({ type: "input", content: line, whenBusy: "followUp", entry: { kind: cliEntry } }, context);
+    await submitMessage(main, line);
   }
 }
 
