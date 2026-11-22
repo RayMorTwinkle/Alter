@@ -21,6 +21,7 @@ type ModelSetup = {
 export type Options = {
   models(dataDir: string): Promise<ModelSetup>;
   timeZone: string; browser: boolean; mail?: MailConfig; approvalTimeoutMs?: number;
+  demos?: boolean; // Off like the web server; offline tests opt in to drive the simulated outbox.
 };
 export type Result = {
   id: string; category: Task["category"]; repeat: number; status: "pass" | "fail" | "skip" | "error"; reason?: string;
@@ -143,7 +144,7 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
     const closeApp = () => app ? app.close() : storage.close(context);
     stops.push(closeApp);
     app = await openAlter(storage, models, mainModel, taskModel, thinking,
-      { plugins, timeZone: f.timeZone, now, approvalTimeoutMs: options.approvalTimeoutMs });
+      { plugins, demos: options.demos ?? false, timeZone: f.timeZone, now, approvalTimeoutMs: options.approvalTimeoutMs });
     const c: TaskContext = { ...f, app, reply: "", approvals: result.approvals };
     if (task.category === "浏览器" || task.category === "组合") {
       c.web = await startPages(f);

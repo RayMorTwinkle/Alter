@@ -71,7 +71,7 @@ it.each([false, true])("answers a parked user request once and waits for the chi
   const approvalTask: Task = { id: "offline-approval", category: "日历", turns: ["发消息"],
     approvals: allow ? () => true : undefined,
     check: c => c.app.demo.outbox.length === Number(allow) ? undefined : "发送次数不符" };
-  const row = await runTask(approvalTask, setup(main, worker));
+  const row = await runTask(approvalTask, { ...setup(main, worker), demos: true });
   expect(row).toMatchObject({ status: "pass", reply: "已收到任务报告", tools: { dispatch_task: 1 },
     approvals: [{ tool: "outbox_send", audience: "user", decision: allow ? "allow" : "deny" }] });
   expect(summary([row])).toContain(`outbox_send / user / ${allow ? "allow" : "deny"}`);
