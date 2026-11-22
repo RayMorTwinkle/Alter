@@ -1,6 +1,6 @@
 // A contract-faithful fake of packages/server for UI work (docs/architecture/web-api.md). Password: "alter".
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem, TranscriptItem } from "../src/types.ts";
+import type { AgendaEvent, LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem, TranscriptItem } from "../src/types.ts";
 
 const port = Number(process.env.PORT ?? 4318);
 const now = Date.now();
@@ -26,6 +26,19 @@ const transcripts: Record<string, TranscriptItem[]> = {
     { kind: "tool_call", tool: "finish", arguments: { summary: "已讀取筆記「welcome」", refs: [{ kind: "note", ref: "welcome" }] }, at: now - 3_591_000 },
   ],
 };
+const hour = 3_600_000;
+// Local midnight in Asia/Shanghai, which has no daylight saving.
+const midnight = Math.floor((now + 8 * hour) / (24 * hour)) * 24 * hour - 8 * hour;
+const at = (day: number, h: number) => midnight + day * 24 * hour + h * hour;
+const events: AgendaEvent[] = [
+  { id: "evt_1", title: "和導師討論開題", start: now - hour / 2, end: now + hour / 2, allDay: false, location: "主樓 302" },
+  { id: "evt_2", title: "健身", start: at(0, 21), end: at(0, 22), allDay: false },
+  { id: "evt_3", title: "週報會", start: at(1, 15), end: at(1, 16), allDay: false, location: "A 會議室", notes: "帶上本週評測結果：租約 vs 全派任務" },
+  { id: "evt_4", title: "團建", start: at(2, 0), end: at(3, 0), allDay: true },
+  { id: "evt_5", title: "夜間部署窗口", start: at(2, 23), end: at(3, 1), allDay: false },
+  { id: "evt_6", title: "面試：後端開發", start: at(4, 10), end: at(4, 11), allDay: false, location: "線上" },
+];
+const agenda = () => ({ timeZone: "Asia/Shanghai", events: events.filter(e => e.end > midnight && e.start < at(7, 0)).sort((a, b) => a.start - b.start) });
 let busy = false;
 const sessions = new Set<string>();
 const clients = new Set<ServerResponse>();
@@ -101,6 +114,8 @@ async function decide(requestId: string, allow: boolean, note?: string) {
   if (allow) {
     ledger.push({ taskId: task.taskId, summary, refs: [{ kind: "calendar", ref: "event-76" }, { kind: "outbox", ref: "msg-1" }], at: Date.now() });
     emit("ledger", ledger);
+    events.push({ id: "evt_76", title: "規劃會議", start: at(3, 14), end: at(3, 15), allDay: false, location: "B 會議室" });
+    emit("calendar", agenda());
   }
   emit("tasks", tasks);
   return true;
@@ -157,6 +172,7 @@ createServer(async (req, res) => {
   const transcript = /^\/api\/tasks\/(.+)\/transcript$/.exec(path);
   if (transcript) return json(res, 200, { items: transcripts[decodeURIComponent(transcript[1]!)] ?? [] });
   if (path === "/api/stop") { setBusy(false); return json(res, 204); }
+  if (path === "/api/calendar") return json(res, 200, agenda());
   if (path === "/api/usage") {
     return json(res, 200, [
       { model: "opencode-go/glm-5.3", calls: 12, failureRate: "0.0%", aborted: 1, fallbacks: 0, inputTokens: 9508, outputTokens: 1290, p50Ms: 1825, p95Ms: 4430 },

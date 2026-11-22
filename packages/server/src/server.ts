@@ -31,7 +31,10 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   throw new HttpError(400, "Expected a JSON object");
 }
 
-export async function createWebServer(app: AlterApp, options: { password: string; dataDir: string; dist?: string }) {
+// Structural so the server does not depend on a calendar implementation.
+export type Agenda = { timeZone: string; agenda(): unknown[]; subscribe(listener: () => void): () => void };
+
+export async function createWebServer(app: AlterApp, options: { password: string; dataDir: string; dist?: string; calendar?: Agenda }) {
   if (!options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const passwordHash = digest(options.password);
   const sessions = new Set<string>();
@@ -45,6 +48,13 @@ export async function createWebServer(app: AlterApp, options: { password: string
   const surface = await observeSurface(app, ({ event, data }) => {
     if (!clients.size) return;
     const message = frame(event, data);
+    for (const res of clients.keys()) write(res, message);
+  });
+  const { calendar } = options;
+  const agenda = () => ({ timeZone: calendar!.timeZone, events: calendar!.agenda() });
+  const unsubscribe = calendar?.subscribe(() => {
+    if (!clients.size) return;
+    const message = frame("calendar", agenda());
     for (const res of clients.keys()) write(res, message);
   });
   const heartbeat = setInterval(() => {
@@ -105,6 +115,8 @@ export async function createWebServer(app: AlterApp, options: { password: string
       return json(res, 200, { items: await readTranscript(conversation) });
     } else if (method === "POST" && path === "/api/stop") {
       await stopMainTurn(app);
+    } else if (method === "GET" && path === "/api/calendar" && calendar) {
+      return json(res, 200, agenda());
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");
@@ -121,6 +133,7 @@ export async function createWebServer(app: AlterApp, options: { password: string
   });
   function dispose() {
     clearInterval(heartbeat);
+    unsubscribe?.();
     surface.detach();
     sessions.clear();
     for (const res of clients.keys()) res.end();

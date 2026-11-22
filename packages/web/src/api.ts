@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Snapshot, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -30,14 +30,19 @@ export const api = {
   transcript: (taskId: string) =>
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
   usage: () => request<UsageRow[]>("/api/usage"),
+  calendar: () => request<Agenda>("/api/calendar"),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
   const source = new EventSource("/api/events");
-  source.onopen = () => dispatch({ type: "connection", connection: "open" });
+  source.onopen = () => {
+    dispatch({ type: "connection", connection: "open" });
+    // Changes made while disconnected are not replayed; a 404 means this server has no calendar.
+    api.calendar().then(agenda => dispatch({ type: "agenda", agenda }), () => {});
+  };
   source.onerror = () => {
     dispatch({ type: "connection", connection: "lost" });
     api.state().catch(error => {
@@ -58,6 +63,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "pending": return dispatch({ type: "pending", pending: data });
         case "ledger": return dispatch({ type: "ledger", ledger: data });
         case "busy": return dispatch({ type: "busy", busy: data.busy });
+        case "calendar": return dispatch({ type: "agenda", agenda: data });
       }
     });
   }

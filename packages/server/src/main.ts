@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { join } from "node:path";
-import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage } from "@alter/core";
+import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage, type AlterPlugin } from "@alter/core";
 import { createBrowserPlugin } from "@alter/plugin-browser";
 import { createCalendarPlugin } from "@alter/plugin-calendar";
 import { createMailPlugin, mailConfigFromEnv } from "@alter/plugin-mail";
@@ -16,7 +16,8 @@ async function start() {
   const config = gatewayConfig();
   const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
   const mail = mailConfigFromEnv(process.env);
-  const plugins = [createCalendarPlugin({ dataDir: config.dataDir, timeZone: config.timeZone })];
+  const calendar = createCalendarPlugin({ dataDir: config.dataDir, timeZone: config.timeZone });
+  const plugins: AlterPlugin[] = [calendar];
   if (mail) plugins.push(createMailPlugin(mail));
   if (process.env.ALTER_BROWSER !== "off") plugins.push(createBrowserPlugin());
   const app = await openAlter(
@@ -25,7 +26,7 @@ async function start() {
   );
   console.log("Alter plugins:", plugins.map(plugin => plugin.capability.id).join(", ") || "none");
   try {
-    const web = await createWebServer(app, { password, dataDir: config.dataDir });
+    const web = await createWebServer(app, { password, dataDir: config.dataDir, calendar });
     try {
       web.server.listen(port, host);
       await once(web.server, "listening");

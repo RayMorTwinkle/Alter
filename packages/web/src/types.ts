@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1).
+// Mirrors docs/architecture/web-api.md (v1.3).
 
 export type TimelineItem = {
   id: string;
@@ -52,6 +52,10 @@ export type Snapshot = {
   leases: Lease[];
   busy: boolean;
 };
+
+export type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
+
+export type Agenda = { timeZone: string; events: AgendaEvent[] };
 
 export type UsageRow = {
   model: string;
