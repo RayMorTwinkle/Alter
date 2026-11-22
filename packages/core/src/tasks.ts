@@ -8,6 +8,7 @@ import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
   ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationHandle, type ConversationId, type Cursor, type Harness, type Extension, type ModelRef, type ModelThinkingLevel, type TaskId, type Tx, type YieldDecision,
 } from "./runtime.ts";
+import { activeWake } from "./wake.ts";
 import { budgetExhausted } from "./usage.ts";
 import { inheritTaint } from "./taint.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type TaskRecord } from "./state.ts";
@@ -75,6 +76,7 @@ const finish = defineTool({
       await report(tx, main, task, taskId, at, summary);
       ledger.entries.push({ taskId, summary, refs, at });
       task.status = "completed";
+      task.endedAt = at;
       return { ...reply(summary), control: { terminate: true } };
     }, ctx);
   },
@@ -112,6 +114,7 @@ async function failTask(tx: Tx, main: ConversationHandle, taskId: string, failur
   const task = (await tx.doc(Tasks, main.id)).byId[taskId]!;
   if (task.status !== "running") return;
   task.status = "failed";
+  task.endedAt = at;
   task.failure = failure;
   await clearRequests(tx, main.id, taskId, !aborted);
   if (!aborted || task.proactive) await report(tx, main, task, taskId, at, failure);
@@ -173,6 +176,8 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
   return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs, goal?: TaskRecord["goal"]) => {
     const tasks = await tx.doc(Tasks, mainId);
     if (tasks.byId[taskId]) return;
+    const stamp = clock();
+    const wake = !goal || args.continuedFrom ? await activeWake(tx, mainId, stamp.at) : undefined;
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
     if (previous) {
@@ -182,7 +187,6 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       const end = await tx.latestEntryId(previous.conversationId);
       if (end !== undefined) latest.lastEntry = end;
     }
-    const stamp = clock();
     const worker = await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
       ownership: { kind: "conversation" }, background: true,
     });
@@ -210,9 +214,11 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       delete scope.full;
     }
     identity.taskId = taskId;
+    if (wake) identity.wakeId = wake.wakeId;
+    else delete identity.wakeId;
     identity.reminders = 0;
     tasks.byId[taskId] = {
-      worker, conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
+      worker, ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
       permission: args.permission, status: "running", ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),
     };
@@ -348,6 +354,7 @@ export function createTaskCancellation(host: () => Harness) {
         if (!task) return reply("Unknown task", true);
         if (task.status === "running") {
           task.status = "cancelled";
+          task.endedAt = api.now();
           await clearRequests(tx, api.conversationId, taskId);
           (await tx.doc(Ledger, api.conversationId)).entries.push({ taskId, summary: "cancelled", refs: [], at: api.now() });
           await tx.createTask(stop, task.worker, { ownership: { kind: "conversation" }, background: true });

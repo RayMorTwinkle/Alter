@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.10).
+// Mirrors docs/architecture/web-api.md (v1.11).
 
 export type TimelineItem = {
   id: string;
@@ -105,4 +105,54 @@ export type UsageRow = {
   outputTokens: number;
   p50Ms: number;
   p95Ms: number;
+};
+
+export type StatsRange = "day" | "7d" | "30d" | "all";
+
+export type StatsUsage = {
+  calls: number; input: number; cacheRead: number; cacheWrite: number; output: number; tokens: number;
+  cacheHitRate: number | null; costUsd: number | null;
+  errors: number; aborted: number; fallbacks: number; retries: number;
+};
+
+export type StatsAudit = {
+  taskId: string; tool: string; capability: string; action: string;
+  effect: "read" | "write-local" | "external-send" | "irreversible" | "unknown";
+  decision: "park" | "allow" | "deny"; at: number; tainted?: true;
+};
+
+export type StatsReview = {
+  requestId: string; taskId?: string; tool?: string; user?: ApprovalDecision; userAt?: number;
+  judgment?: { inScope: boolean; reason: string }; judgedAt?: number; judgeAllowedAt?: number;
+  timeoutAt?: number; expiredAt?: number; ended?: "deferred" | "expired";
+};
+
+export type StatsTask = {
+  taskId: string; status: Task["status"] | "cancelled"; createdAt: number; continuedFrom: string | null;
+  wakeId: string | null; thinking: string; models: string[]; usage: StatsUsage;
+  usageSource: "ledger" | "transcript" | "none"; durationMs: number | null; rounds: number;
+  tools: Record<string, number>; approvals: StatsAudit[]; reviews: StatsReview[]; result: string | null;
+};
+
+export type StatsWake = {
+  wakeId: string; wakeSource: string; wakeAt: number; usage: StatsUsage; dispatchedTasks: number;
+};
+
+export type StatsLatency = { samples: number; p50Ms: number | null; p95Ms: number | null };
+
+export type Stats = {
+  range: StatsRange; timeZone: string; at: number; total: StatsUsage;
+  byRole: (StatsUsage & { role: string })[]; byModel: (StatsUsage & { model: string })[];
+  tasks: { count: number; completed: number; terminal: number; successRate: number | null; items: StatsTask[] };
+  wakes: { count: number; bySource: Record<string, number>; items: StatsWake[] };
+  approvals: {
+    decisions: { park: number; allow: number; deny: number };
+    pending: Pick<PermissionRequest, "id" | "taskId" | "audience" | "tool" | "expiresAt">[];
+    byApprover: { approver: "user" | "judge" | "timeout"; count: number }[];
+    userDecisions: Record<ApprovalDecision, number>; judgments: { inScope: number; outOfScope: number };
+    timeouts: number; expired: number; shadow: ApprovalStats; shadowAgreementRate: number | null;
+  };
+  funnel: Funnel; watchWakeAccuracy: number | null; latency: { firstToken: StatsLatency; total: StatsLatency };
+  topTasks: { taskId: string; costUsd: number }[];
+  daily: { date: string; usage: StatsUsage; tasks: number; succeeded: number; wakes: number }[];
 };

@@ -3,7 +3,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import type { ExternalEvent } from "./capabilities.ts";
 import type { Notification } from "./notifications.ts";
 import type { ModelRef } from "./runtime.ts";
-import { budgetExhausted, type ProactiveBudget, type UsageLine } from "./usage.ts";
+import { budgetExhausted, splitUsage, type ProactiveBudget, type UsageLine } from "./usage.ts";
 
 export type Decision = { level: Notification["level"]; reason: string; filtered?: Notification["filtered"] };
 const instructions = "你负责外部事件分诊。结合用户记忆，紧急且需要立即关注选 now，可稍后查看选 digest，无需关注选 silent。" +
@@ -28,21 +28,24 @@ function parse(message: AssistantMessage): Parsed {
 
 export async function classify(models: Models, ref: ModelRef, memory: string, event: ExternalEvent, at: number, signal: AbortSignal) {
   const started = performance.now();
-  const line: UsageLine = { model: ref.modelId, at: new Date(at).toISOString(), conversation: "triage",
+  const line: UsageLine = { model: ref.modelId, at: new Date(at).toISOString(), conversation: "triage", role: "triage", thinking: "off",
     attempt: 1, latencyMs: 0, outcome: "error" };
   let parsed: Parsed = { decision: { level: "digest", reason: "分诊调用未完成，已归入摘要" }, validOutput: false };
   try {
     const model = models.getModel(ref.provider, ref.modelId);
     if (!model) throw new Error("Unknown task model");
     const data = JSON.stringify({ source: event.source, summary: event.summary }).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
-    const message = await models.completeSimple(model, {
+    const stream = models.streamSimple(model, {
       systemPrompt: instructions, messages: [{ role: "user", timestamp: at, content: `${memory}\n<untrusted>${data}</untrusted>` }],
     }, { signal, maxRetries: 0, disableContinuation: true, metadata: { alterConversation: "triage" } });
+    for await (const event of stream) {
+      if (event.type !== "start" && event.type !== "done" && event.type !== "error") line.firstTokenMs ??= Math.round(performance.now() - started);
+    }
+    const message = await stream.result();
     line.model = message.model;
     const usage = message.usage;
     if (usage.totalTokens > 0 || usage.reasoning !== undefined) {
-      line.inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-      line.outputTokens = usage.output;
+      Object.assign(line, splitUsage(usage));
     }
     if (message.stopReason === "error" || message.stopReason === "aborted") line.errorKind = message.stopReason;
     else { line.outcome = "ok"; parsed = parse(message); }

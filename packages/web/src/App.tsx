@@ -6,7 +6,8 @@ import { Chat } from "./components/Chat.tsx";
 import { Login } from "./components/Login.tsx";
 import { MemoryPanel } from "./components/Memory.tsx";
 import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx";
-import { NotificationsSheet, TaskSheet, UsageSheet } from "./components/Sheets.tsx";
+import { NotificationsSheet, TaskSheet } from "./components/Sheets.tsx";
+import { StatsSheet } from "./components/Stats.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
 import type { ApprovalDecision, FeishuPairing } from "./types.ts";
@@ -142,7 +143,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
           <button className="icon-btn ghost bell" onClick={openNotices} title={t.notifications} aria-label={t.notifications}>
             <Bell />{unread.length > 0 && <span className="badge">{unread.length}</span>}
           </button>
-          <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.usage} aria-label={t.usage}><ChartBar /></button>
+          <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.stats.title} aria-label={t.stats.title}><ChartBar /></button>
           <button className="text-btn" onClick={onToggleLocale}>{t.language}</button>
           <button className="icon-btn ghost" onClick={onLogout} title={t.logout} aria-label={t.logout}><SignOut /></button>
         </div>
@@ -177,7 +178,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       </nav>
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
-      {showUsage && <UsageSheet onClose={() => setShowUsage(false)} />}
+      {showUsage && <StatsSheet onClose={() => setShowUsage(false)} />}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>
   );

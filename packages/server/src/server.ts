@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, approvalStats, isApprovalDecision, isApprovalMode, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  MemoryInputError, schema, Tasks, usageSummary, type AlterApp,
+  MemoryInputError, schema, stats, Tasks, usageSummary, type AlterApp,
 } from "@alter/core";
 import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
@@ -194,6 +194,13 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         app.settings.set(patch.approvalModel);
       }
       return json(res, 200, { approvalModel: app.settings.approvalModel });
+    } else if (method === "GET" && path === "/api/stats") {
+      const values = new URL(req.url!, "http://localhost").searchParams.getAll("range");
+      const range = values[0] ?? "7d";
+      if (values.length > 1 || (range !== "day" && range !== "7d" && range !== "30d" && range !== "all")) {
+        throw new HttpError(400, "range must be day, 7d, 30d or all");
+      }
+      return json(res, 200, await stats(range, app.timeZone, { app, dir: options.dataDir, feishu: !!options.feishu }));
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");

@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, FeishuPairing, Funnel, MemoryItem, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, FeishuPairing, Funnel, MemoryItem, Snapshot, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -30,6 +30,7 @@ export const api = {
   transcript: (taskId: string) =>
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
   usage: () => request<UsageRow[]>("/api/usage"),
+  stats: (range: StatsRange) => request<Stats>(`/api/stats?range=${range}`),
   calendar: () => request<Agenda>("/api/calendar"),
   feishu: () => request<FeishuPairing>("/api/feishu"),
   disconnectFeishu: () => request<void>("/api/feishu/account/disconnect", { method: "POST", body: {} }),

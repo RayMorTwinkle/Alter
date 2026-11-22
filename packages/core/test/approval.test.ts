@@ -5,7 +5,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, expect, it } from "vitest";
-import { answerUserPermission, approvalStats, judge, readUsage, observeSurface, openAlter, type ApprovalDecision } from "../src/index.ts";
+import { answerUserPermission, approvalStats, stats, judge, readUsage, observeSurface, openAlter, type ApprovalDecision } from "../src/index.ts";
 import { context, defineTool, MemoryStorage, openNodeSqliteStorage, reply, type Storage } from "../src/runtime.ts";
 import { obj } from "@earendil-works/pi-schema";
 
@@ -87,7 +87,7 @@ it("judges with only the statement and call, low reasoning and no tools, and fai
 it("checks only the approved snapshot and marks appended items until the user expands it", async () => {
   const f = await setup([declare(), send(), declare(extra), send(), send("other"), call("fixture_delete", {}), finish],
     ctx => JSON.parse(contentText(ctx.messages.at(-1)!.content)).call.arguments.message === "team"
-      ? positive() : say('{"inScope":false,"reason":"对象不同"}'));
+      ? positive() : say('{"inScope":false,"reason":"对象不同"}'), true);
   f.app.settings.set("auto");
   await f.start();
   const initial = await f.park();
@@ -105,6 +105,9 @@ it("checks only the approved snapshot and marks appended items until the user ex
   await f.decide(irreversible.id, "deny");
   await expect.poll(() => f.surface.snapshot().tasks[0]?.status).toBe("completed");
   expect(f.deletes()).toBe(0);
+  const { approvals } = await stats("day", f.app.timeZone, { app: f.app, dir: f.dir! });
+  expect(approvals).toMatchObject({ userDecisions: { statement: 1, once: 1, deny: 1, "task-full": 0 },
+    byApprover: [{ approver: "user", count: 3 }, { approver: "judge", count: 1 }, { approver: "timeout", count: 0 }] });
 });
 
 it("honors task-full for subsequent irreversible operations even with the model off", async () => {
@@ -117,7 +120,7 @@ it("honors task-full for subsequent irreversible operations even with the model 
 });
 
 it("uses a scoped default at the soft deadline and leaves no pending approval", async () => {
-  const f = await setup([declare(), send(), finish]);
+  const f = await setup([declare(), send(), finish], positive, true);
   f.app.settings.set("auto");
   await f.start();
   const req = await f.park();
@@ -126,6 +129,9 @@ it("uses a scoped default at the soft deadline and leaves no pending approval", 
   await expect.poll(() => f.app.demo.outbox).toEqual(["team"]);
   expect(f.surface.snapshot().pending).toEqual([]);
   expect(f.surface.snapshot().ledger[0]?.summary).toContain("审批模型放行");
+  const { approvals } = await stats("all", f.app.timeZone, { app: f.app, dir: f.dir! });
+  expect(approvals).toMatchObject({ timeouts: 1, expired: 0, judgments: { inScope: 1, outOfScope: 0 },
+    byApprover: [{ approver: "user", count: 0 }, { approver: "judge", count: 0 }, { approver: "timeout", count: 1 }] });
 });
 
 it("keeps a deferred approval across restart and consumes it once for matching arguments", async () => {
@@ -141,7 +147,9 @@ it("keeps a deferred approval across restart and consumes it once for matching a
   f.app.harness.resume();
   await f.park("fixture_delete");
   expect(results[0]).toContain("暂未获批");
-  expect(await readUsage(f.dir!)).toMatchObject([{ conversation: "judge", model: ref.modelId, outcome: "ok" }]);
+  expect((await readUsage(f.dir!)).filter(line => line.role === "judge")).toMatchObject([
+    { conversation: "judge", model: ref.modelId, taskId: req.taskId, thinking: "low", outcome: "ok" },
+  ]);
   expect(f.surface.snapshot().pending.find(p => p.id === req.id)?.deferred).toBe(true);
   await f.close();
   const g = await f.reopen();

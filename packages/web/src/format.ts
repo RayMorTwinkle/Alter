@@ -24,6 +24,7 @@ export function remaining(ms: number) {
 }
 
 export function compactNumber(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   return n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 

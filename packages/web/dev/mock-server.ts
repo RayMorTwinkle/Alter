@@ -139,6 +139,37 @@ async function decide(requestId: string, allow: boolean, note?: string) {
 function cookie(req: IncomingMessage) {
   return /alter_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
 }
+function mockStats(range: string) {
+  const usage = (calls: number, input: number, cacheRead: number, output: number, cost: number | null) => ({
+    calls, input, cacheRead, cacheWrite: 0, output, tokens: input + cacheRead + output,
+    cacheHitRate: cacheRead / (input + cacheRead), costUsd: cost, errors: 0, aborted: 0, fallbacks: 1, retries: 2,
+  });
+  const days = range === "day" ? 1 : range === "7d" ? 7 : 30;
+  const daily = Array.from({ length: days }, (_, i) => {
+    const date = new Date(now - (days - 1 - i) * 86_400_000).toISOString().slice(0, 10);
+    const k = 1 + ((i * 7) % 5);
+    return { date, usage: usage(20 * k, 9000 * k, 30000 * k, 1800 * k, 0.04 * k), tasks: k, succeeded: k - (i % 3 === 0 ? 1 : 0), wakes: 3 * k };
+  });
+  return {
+    range, timeZone: "Asia/Shanghai", at: Date.now(), total: usage(612, 284_000, 1_020_000, 61_000, 1.32),
+    byRole: [
+      { role: "main", ...usage(210, 120_000, 640_000, 22_000, 0.6) }, { role: "task", ...usage(330, 150_000, 370_000, 36_000, 0.66) },
+      { role: "judge", ...usage(52, 9000, 6000, 1800, 0.03) }, { role: "triage", ...usage(20, 5000, 4000, 1200, 0.03) },
+    ],
+    byModel: [{ model: "deepseek-v4.1-flash", ...usage(560, 260_000, 990_000, 57_000, 1.2) }, { model: "glm-5.1-air", ...usage(52, 24_000, 30_000, 4000, 0.12) }],
+    tasks: { count: 23, completed: 20, terminal: 22, successRate: 20 / 22, items: tasks.map(task => ({
+      taskId: task.taskId, status: task.status, createdAt: task.createdAt, continuedFrom: null, wakeId: null, thinking: "high",
+      models: ["deepseek-v4.1-flash"], usage: usage(14, 6000, 21000, 900, 0.03), usageSource: "ledger", durationMs: 48_000, rounds: 7,
+      tools: { browser_open: 2 }, approvals: [], result: null,
+    })) },
+    wakes: { count: 71, bySource: { "user-web": 30, "user-feishu": 18, report: 19, schedule: 4 }, items: [] },
+    approvals: { decisions: { park: 1, allow: 14, deny: 2 }, pending: [], byApprover: [{ approver: "user", count: 12 }, { approver: "judge", count: 4 }, { approver: "timeout", count: 1 }], timeouts: 1, shadowAgreementRate: 0.83 },
+    funnel: { days: [], precision: null }, watchWakeAccuracy: null,
+    latency: { firstToken: { samples: 210, p50Ms: 1400, p95Ms: 3900 }, total: { samples: 210, p50Ms: 9800, p95Ms: 31000 } },
+    topTasks: [], daily,
+  };
+}
+
 async function body(req: IncomingMessage) {
   let raw = "";
   for await (const chunk of req) raw += chunk;
@@ -210,6 +241,7 @@ createServer(async (req, res) => {
     return json(res, 204);
   }
   if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000, account: { connected: false } });
+  if (path === "/api/stats") return json(res, 200, mockStats(url.searchParams.get("range") ?? "7d"));
   if (path === "/api/usage") {
     return json(res, 200, [
       { model: "opencode-go/glm-5.3", calls: 12, failureRate: "0.0%", aborted: 1, fallbacks: 0, inputTokens: 9508, outputTokens: 1290, p50Ms: 1825, p95Ms: 4430 },
