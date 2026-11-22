@@ -61,6 +61,17 @@ export function mailSeed(config: MailConfig, id: string, body: SeedBody) {
           }
         } catch (error) { warnings.push(`${path}：${error instanceof Error ? error.message : String(error)}`); }
       }
+      // The agent drafts a reply before asking to send it; a denied or cut-off run leaves the draft behind.
+      try {
+        const drafts = folderPath(await client.list(), "Drafts");
+        const box = drafts && await client.mailboxOpen(drafts);
+        if (box && box.exists) {
+          const rows = await client.fetchAll(`${Math.max(1, box.exists - 50)}:*`, { envelope: true, uid: true });
+          const ids = rows.filter(row => row.envelope?.subject?.replace(/^(re|回复)[:：]\s*/i, "") === subject).map(row => row.uid);
+          if (ids.length && !hasCapability(client, "UIDPLUS")) throw new Error("服务不支持定向 UID EXPUNGE");
+          if (ids.length && !await client.messageDelete(ids, { uid: true })) throw new Error("未确认删除");
+        }
+      } catch (error) { warnings.push(`草稿箱：${error instanceof Error ? error.message : String(error)}`); }
     });
     if (!delivered) warnings.push("未确认投递，收件箱可能稍后收到种子");
     if (warnings.length) throw new Error(warnings.join("；"));
