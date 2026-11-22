@@ -1,6 +1,6 @@
 import { obj, opt, str } from "@earendil-works/pi-schema";
 import { createBroker, mainApprovalTool, Requests } from "./broker.ts";
-import { createDemoCapabilities, manifests, toolActions } from "./capabilities.ts";
+import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type ExternalEvent, type PluginHost } from "./capabilities.ts";
 import {
   configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, reply, ToolTask, type Conversation,
@@ -9,6 +9,7 @@ import {
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
+export const Events = conversationDoc<{ entries: ExternalEvent[] }>("events", () => ({ entries: [] }));
 export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, number> }>(
   "leases", () => ({ turns: 0, lastUsed: {} }),
 );
@@ -20,18 +21,28 @@ const mainInstructions = "你是 Alter 的主助手，负责与用户对话，�
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
+  options: { plugins?: AlterPlugin[] } = {},
 ) {
   const demo = createDemoCapabilities();
-  const broker = createBroker(() => main);
-  const taskExtensions = [demo.extension, TaskTools, broker];
+  const plugins = options.plugins ?? [];
+  const capabilities = createCapabilityRegistry(plugins);
+  const { manifests, toolActions } = capabilities;
+  const tools = [...demo.tools, ...plugins.flatMap(plugin => plugin.tools)];
+  const extension = defineExtension({ name: demo.extension.name, tools });
+  const leasable = new Set(manifests.filter(cap => cap.mainLeasable).map(cap => cap.id));
+  const broker = createBroker(() => main, capabilities);
+  const taskExtensions = [extension, TaskTools, broker];
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
-    const leased = demo.tools.filter(tool => Object.hasOwn(lastUsed, toolActions.get(tool.name)!.capability));
+    const leased = tools.filter(tool => {
+      const id = toolActions.get(tool.name)!.capability;
+      return leasable.has(id) && Object.hasOwn(lastUsed, id);
+    });
     await configure(tx, id, { modelTools: [...controls, ...leased] });
   }
 
   const controls: ToolRegistration[] = [
-    dispatchTool(taskExtensions, taskModel, thinking.task),
+    dispatchTool(capabilities, taskExtensions, taskModel, thinking.task),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
       parameters: obj({ taskId: opt(str()) }), replay: "safe",
@@ -49,7 +60,7 @@ export async function openAlter(
       name: "enable_tool", description: "Lease a main-leasable capability for direct use.",
       parameters: obj({ capability: str(), reason: str({ minLength: 1 }) }), replay: "safe",
       async execute({ capability }, api, ctx) {
-        if (!manifests.find(item => item.id === capability)?.mainLeasable) return reply("Capability is not leasable", true);
+        if (!leasable.has(capability)) return reply("Capability is not leasable", true);
         await api.commit(async tx => {
           const leases = await tx.doc(Leases, api.conversationId);
           leases.lastUsed[capability] = leases.turns + 1;
@@ -86,7 +97,7 @@ export async function openAlter(
         if (!action) return;
         return main.commit(async tx => {
           const leases = await tx.doc(Leases, main.id);
-          if (!Object.hasOwn(leases.lastUsed, action.capability)) return { block: "No active lease" };
+          if (!leasable.has(action.capability) || !Object.hasOwn(leases.lastUsed, action.capability)) return { block: "No active lease" };
           leases.lastUsed[action.capability] = leases.turns + 1;
         }, ctx);
       } }),
@@ -98,12 +109,18 @@ export async function openAlter(
     models, registry, settings: { toolExecution: "sequential", retry: { enabled: false } },
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
-    extensions: [controlPlane, demo.extension], modelTools: controls,
+    extensions: [controlPlane, extension], modelTools: controls,
   } });
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases, granted capabilities and the conversational history.
   await main.commit(async tx => {
-    await configure(tx, main.id, { model: mainModel, thinkingLevel: thinking.main, instructions: mainInstructions });
+    const instructions = plugins.length
+      ? mainInstructions + " 可派给任务的插件能力：" + plugins.map(p => p.capability.id).join("、") + "。"
+      : mainInstructions;
+    await configure(tx, main.id, { model: mainModel, thinkingLevel: thinking.main, instructions });
+    const leases = await tx.doc(Leases, main.id);
+    for (const id of Object.keys(leases.lastUsed)) if (!leasable.has(id)) delete leases.lastUsed[id];
+    await updateOffered(tx, main.id, leases.lastUsed);
     const tasks = await tx.doc(Tasks, main.id);
     for (const [id, task] of Object.entries(tasks.byId)) {
       if (task.context === undefined || task.createdAt === undefined) {
@@ -115,5 +132,26 @@ export async function openAlter(
       if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: thinking.task });
     }
   }, context);
-  return { harness, main, demo };
+  const host: PluginHost = {
+    emit: event => main.commit(async tx => {
+      const { entries } = await tx.doc(Events, main.id);
+      entries.push({ ...event, untrusted: true });
+      if (entries.length > 500) entries.splice(0, entries.length - 500);
+    }, context),
+  };
+  const stops: (() => Promise<void>)[] = [];
+  let closing: Promise<void> | undefined;
+  async function shutdown() {
+    const results = await Promise.allSettled(stops.reverse().map(async stop => stop()));
+    await harness.close(context);
+    const errors = results.filter(r => r.status === "rejected").map(r => r.reason);
+    if (errors.length) throw new AggregateError(errors, "Plugin shutdown failed");
+  }
+  try {
+    for (const plugin of plugins) if (plugin.start) stops.push(await plugin.start(host));
+  } catch (error) {
+    await shutdown();
+    throw error;
+  }
+  return { harness, main, demo, capabilities, close: () => closing ??= shutdown() };
 }

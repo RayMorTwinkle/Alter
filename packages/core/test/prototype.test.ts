@@ -3,13 +3,17 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { obj } from "@earendil-works/pi-schema";
 import { contentText, type AssistantMessage, type Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, expect, it } from "vitest";
 import { answerUserPermission, Audit, Requests } from "../src/broker.ts";
-import { openAlter } from "../src/main.ts";
-import { context, LiveDoc, MemoryStorage, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { createMailPlugin } from "../../plugin-mail/src/index.ts";
+import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugin-mail/test/fake.ts";
+import type { AlterPlugin } from "../src/capabilities.ts";
+import { Events, openAlter } from "../src/main.ts";
+import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
 
 type Alter = Awaited<ReturnType<typeof openAlter>>;
@@ -26,7 +30,7 @@ function dispatch(brief: string, permission: Permission = "restricted", allow: s
 function finish(summary: string) {
   return call("finish", { summary, refs: [] });
 }
-async function open(route: Route, storage: Storage = new MemoryStorage()) {
+async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = []) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 160 }, () => ({ messages }) => {
     const tools = new Set<string>();
@@ -40,8 +44,8 @@ async function open(route: Route, storage: Storage = new MemoryStorage()) {
   }));
   const models = createModels();
   models.setProvider(faux.provider);
-  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" });
-  cleanup.push(() => app.harness.close(context));
+  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins });
+  cleanup.push(app.close);
   return app;
 }
 async function input(app: Alter, content: string) {
@@ -337,4 +341,109 @@ it("requires references in finish before reporting success", async () => {
   await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["validated"]);
   expect(rejected).toBe(true);
   expect((await incoming(app)).filter(line => line.includes(" finished: "))).toHaveLength(1);
+});
+
+it("parks the installed mail connector's auto send before SMTP and resumes it on user approval", async () => {
+  const mail = fakeMail();
+  const plugin = createMailPlugin(mailConfig, mail.clients);
+  let leaseResult = "";
+  const app = await open((text, last, _, offered) => {
+    if (text === "try lease") return call("enable_tool", { capability: "mail", reason: "read inbox" });
+    if (last.role === "toolResult" && last.toolName === "enable_tool") leaseResult = text;
+    if (text === "delegate") {
+      expect(offered).not.toContain("mail_send");
+      return dispatch("send mail", "auto", ["mail"]);
+    }
+    if (text === "send mail") {
+      expect(offered).toContain("mail_send");
+      return call("mail_send", outgoing);
+    }
+    if (last.role === "toolResult" && last.toolName === "mail_send") return finish(text);
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "try lease");
+  expect(leaseResult).toContain("not leasable");
+  await input(app, "delegate");
+  const request = await parked(app);
+  expect(request).toMatchObject({ audience: "user", capability: "mail", tool: "mail_send" });
+  expect(mail.clients.smtp).not.toHaveBeenCalled();
+  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  expect([...mail.sent.keys()]).toEqual([(await ledger(app))[0]!.summary]);
+  expect(mail.clients.smtp).toHaveBeenCalledTimes(1);
+  expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.tool === "mail_send")
+    .map(e => [e.effect, e.decision])).toEqual([["external-send", "park"], ["external-send", "allow"]]);
+});
+
+it("caps plugin events on main and lets an event source flush before harness close", async () => {
+  let stopped = 0;
+  const app = await open(() => say("OK"), new MemoryStorage(), [{
+    capability: { id: "fixture", mainLeasable: false, actions: [] }, tools: [],
+    async start(host) {
+      const emit = (i: number) => host.emit({ source: "fixture", kind: "received", summary: "external content",
+        ref: String(i), at: i, untrusted: true });
+      for (let i = 0; i <= 500; i++) await emit(i);
+      return async () => { await emit(501); stopped++; };
+    },
+  }]);
+  const doc = await app.harness.snapshot(Events, app.main.id, context);
+  expect(doc?.entries).toHaveLength(500);
+  expect(doc?.entries[0]?.ref).toBe("1");
+  expect(doc?.entries.at(-1)).toMatchObject({ ref: "500", untrusted: true });
+  expect(await incoming(app)).toEqual([]);
+  await Promise.all([app.close(), app.close()]);
+  expect(stopped).toBe(1);
+});
+
+it("replays an interrupted mail_send from SQLite and finds the server copy before SMTP", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-mail-crash-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const database = join(dir, "main.sqlite");
+  const worker = fork(new URL("./fixtures/mail-crash-worker.ts", import.meta.url), [database], { execArgv: [] });
+  const exited = once(worker, "exit");
+  cleanup.push(async () => {
+    if (worker.exitCode === null && worker.signalCode === null) worker.kill("SIGKILL");
+    await exited;
+  });
+  const [encoded] = await Promise.race([
+    once(worker, "message"),
+    exited.then(() => { throw new Error("Worker exited before fake SMTP accepted the message"); }),
+  ]);
+  worker.kill("SIGKILL");
+  expect(await exited).toEqual([null, "SIGKILL"]);
+
+  const raw = Buffer.from(encoded, "base64");
+  const id = messageId(raw);
+  const mail = fakeMail();
+  mail.sent.set(id, raw);
+  const app = await open((text, last) => last.role === "toolResult" && last.toolName === "mail_send" ? finish(text) : say("OK"),
+    await openNodeSqliteStorage(database), [createMailPlugin(mailConfig, mail.clients)]);
+  app.harness.resume();
+  await expect.poll(async () => (await ledger(app)).map(entry => entry.summary)).toEqual([id]);
+  expect(mail.sessions.find(session => session.selected === "custom/sent")?.search)
+    .toHaveBeenCalledWith({ header: { "Message-ID": id } }, { uid: true, strict: true });
+  expect(mail.clients.smtp).not.toHaveBeenCalled();
+  expect(mail.sessions.every(session => !session.append.mock.calls.length)).toBe(true);
+});
+
+it("leases a declared plugin only in the harness where it is installed", async () => {
+  const capability = { id: "clock", mainLeasable: true, actions: [{ name: "read", effect: "read" as const }] };
+  const plugin = { capability, tools: [defineTool({
+    name: "clock_read", description: "Test clock", parameters: obj({}), execute: async () => reply("noon"),
+  })] };
+  const results: string[] = [];
+  const route: Route = (text, last, _, offered) => {
+    if (text === "clock please") return call("enable_tool", { capability: "clock", reason: "check time" });
+    if (text === "time" && offered.includes("clock_read")) return call("clock_read", {});
+    if (text === "delegate") return dispatch("read clock", "restricted", ["clock"]);
+    if (last.role === "toolResult") results.push(text);
+    return say("OK");
+  };
+  const installed = await open(route, new MemoryStorage(), [plugin]);
+  const plain = await open(route);
+  await input(installed, "clock please");
+  await input(installed, "time");
+  await input(plain, "clock please");
+  await input(plain, "delegate");
+  expect(results).toEqual(["Enabled clock", "noon", "Capability is not leasable", "Unknown capability in allow"]);
 });

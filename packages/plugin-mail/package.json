@@ -1,0 +1,24 @@
+{
+  "name": "@alter/plugin-mail",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "live": "node scripts/live.ts"
+  },
+  "dependencies": {
+    "@alter/core": "workspace:*",
+    "imapflow": "2.12.2",
+    "mailparser": "3.15.0",
+    "nodemailer": "10.6.1"
+  },
+  "devDependencies": {
+    "@types/mailparser": "3.9.0",
+    "@types/nodemailer": "8.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

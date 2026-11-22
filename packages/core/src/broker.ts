@@ -1,5 +1,5 @@
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
-import { manifests, toolActions, type Effect } from "./capabilities.ts";
+import { type CapabilityRegistry, type Effect } from "./capabilities.ts";
 import {
   context, conversationDoc, defineExtension, defineSignal, defineTool, hook, reply, ToolTask,
   type Conversation, type TaskId, type Tx,
@@ -58,7 +58,7 @@ export function mainApprovalTool(main: () => Conversation) {
 }
 
 const riskOrder: Effect[] = ["read", "write-local", "external-send", "irreversible", "unknown"];
-function describeCall(name: string, args: Record<string, unknown>) {
+function describeCall({ manifests, toolActions }: CapabilityRegistry, name: string, args: Record<string, unknown>) {
   if (name === "finish") return { capability: "task", action: "finish", effect: "write-local" as const };
   if (name !== "request_capability") return toolActions.get(name);
   const manifest = manifests.find(item => item.id === args.capability);
@@ -67,7 +67,7 @@ function describeCall(name: string, args: Record<string, unknown>) {
   return { capability: manifest.id, action: "request", effect };
 }
 
-export function createBroker(getMain: () => Conversation) {
+export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry) {
   return defineExtension({
     name: "alter.broker",
     hooks: [hook(ToolTask, {
@@ -78,7 +78,7 @@ export function createBroker(getMain: () => Conversation) {
         const taskId = identity.taskId;
         const requestId = `permission-${api.taskId}`;
         const signal = await api.readSignal(Decision, requestId, ctx);
-        const descriptor = describeCall(call.name, call.arguments);
+        const descriptor = describeCall(registry, call.name, call.arguments);
         const { capability, action, effect } = descriptor ?? {
           capability: String(call.arguments.capability ?? "unknown"), action: call.name, effect: "unknown" as const,
         };

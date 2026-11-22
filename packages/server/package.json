@@ -9,6 +9,7 @@
     "start": "node src/main.ts"
   },
   "dependencies": {
-    "@alter/core": "workspace:*"
+    "@alter/core": "workspace:*",
+    "@alter/plugin-mail": "workspace:*"
   }
 }
