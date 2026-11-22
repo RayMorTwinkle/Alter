@@ -6,9 +6,9 @@ import { defaultTimeZone } from "./clock.ts";
 
 export const defaultApprovalTimeoutMs = 24 * 60 * 60_000;
 
-export function validateApprovalTimeout(ms: number) {
+export function validateApprovalTimeout(ms: number, variable = "ALTER_APPROVAL_TIMEOUT_MINUTES") {
   if (!Number.isSafeInteger(Date.now() + ms) || !Number.isSafeInteger(ms) || ms <= 0) {
-    throw new Error("Approval timeout must be a positive millisecond duration with a representable deadline (ALTER_APPROVAL_TIMEOUT_MINUTES)");
+    throw new Error(`Approval timeout must be a positive millisecond duration with a representable deadline (${variable})`);
   }
   return ms;
 }

@@ -38,7 +38,7 @@ export async function chatCommand({ main, harness }: AlterApp, line: string, pri
   } else if (/^\/(approve|deny)(?:\s|$)/.test(line)) {
     const [command, requestId, ...note] = line.split(/\s+/);
     if (!requestId) { print(`用法：${command} <id> [note]`); return; }
-    const answer = await answerUserPermission(main, { requestId, allow: command === "/approve", note: note.join(" ") || undefined });
+    const answer = await answerUserPermission(main, { requestId, decision: command === "/approve" ? "once" : "deny", note: note.join(" ") || undefined });
     print(contentText(answer.output));
   } else if (line) {
     await submitMessage(main, line);

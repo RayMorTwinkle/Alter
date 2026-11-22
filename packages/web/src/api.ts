@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, FeishuPairing, Funnel, MemoryItem, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, FeishuPairing, Funnel, MemoryItem, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -24,8 +24,8 @@ export const api = {
   logout: () => request<void>("/api/logout", { method: "POST", body: {} }),
   state: () => request<Snapshot>("/api/state"),
   send: (text: string) => request<{ id: string }>("/api/messages", { body: { text } }),
-  answer: (id: string, allow: boolean, note?: string) =>
-    request<void>(`/api/permissions/${encodeURIComponent(id)}`, { body: note ? { allow, note } : { allow } }),
+  answer: (id: string, decision: ApprovalDecision, note?: string) =>
+    request<void>(`/api/permissions/${encodeURIComponent(id)}`, { body: note ? { decision, note } : { decision } }),
   stop: () => request<void>("/api/stop", { method: "POST", body: {} }),
   transcript: (taskId: string) =>
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),

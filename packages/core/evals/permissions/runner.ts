@@ -40,10 +40,9 @@ function script(c: PermissionCase) {
   if (c.caller.kind === "lease") {
     if (c.caller.capability !== "fixture" || c.taint !== "main-read") main.push(lease(c.caller.capability));
   } else {
-    const { permission, allow, context } = c.caller;
-    main.push(call("dispatch", "dispatch_task", { brief: "eval-child", permission, allow, context }));
+    const { permission, context } = c.caller;
+    main.push(call("dispatch", "dispatch_task", { brief: "eval-child", permission, context }));
     if (c.taint === "task-read") child.push(call("seed-task", "fixture_untrusted"));
-    if (c.priorApproval === "capability") child.push(call("prior", "request_capability", { capability: "outbox", reason: "前置授权" }));
     if (c.priorApproval === "send" || c.priorApproval === "send-denied") child.push(call("prior", "outbox_send", { message: "第一条" }));
   }
   const callerSteps = c.caller.kind === "lease" ? main : child;
@@ -55,9 +54,6 @@ function script(c: PermissionCase) {
       const text = contentText(last.content).replace(/^\[当前时间 [^\n]*\]\n/, "");
       if (text === "eval-main") next = main[0];
       if (text === "eval-child") next = child[0];
-      if (text.startsWith("eval-approve ")) next = call("answer", "answer_permission_request", {
-        requestId: text.slice("eval-approve ".length), allow: true,
-      });
     }
     if (last.role === "toolResult" && (!last.isError || last.toolCallId === "target" || last.toolCallId === "prior")) {
       for (const steps of [main, child]) {
@@ -121,17 +117,15 @@ async function play(c: PermissionCase, signal: AbortSignal, plugins: AlterPlugin
         if (!id) continue;
         const live = await app.harness.snapshot(LiveDoc, id, ctx);
         const slot = live?.tools?.find(s => s.taskId === request.toolTask && s.status === "sleeping");
-        if (slot?.callId === "target") {
+        if (slot?.callId === "target" && request.audience === "user") {
           result = { actual: request.audience, evidence: `${request.tool} sleeping · ${request.audience}` +
             (request.taint ? " · " + request.taint.source : "") };
           break;
         }
         if (slot?.callId !== "prior" || approved) continue;
         if ((c.priorApproval === "send" || c.priorApproval === "send-denied") && request.audience === "user") {
-          const answer = await answerUserPermission(app.main, { requestId: request.id, allow: c.priorApproval === "send" });
+          const answer = await answerUserPermission(app.main, { requestId: request.id, decision: c.priorApproval === "send" ? "once" : "deny" });
           if (answer.isError) throw new Error("前置发送审批未送达");
-        } else if (c.priorApproval === "capability" && request.audience === "main") {
-          await app.main.submit({ type: "input", content: "eval-approve " + request.id }, ctx);
         } else throw new Error("前置审批对象错误：" + request.audience);
         approved = true;
       }

@@ -1,3 +1,4 @@
+import { isApprovalDecision, type ApprovalDecision } from "@alter/core";
 import { Client, Domain, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import type { FeishuConfig } from "./config.ts";
 
@@ -5,7 +6,7 @@ export type FeishuMessage = {
   id: string; openId?: string; chatId: string; chatType: string; type: string;
   text?: string; at: number;
 };
-type CardAction = { openId?: string; messageId?: string; requestId?: string; allow?: boolean };
+type CardAction = { openId?: string; messageId?: string; requestId?: string; decision?: ApprovalDecision };
 type Toast = { toast: { type: "success" | "error" | "info"; content: string } };
 export type FeishuHandlers = {
   message(message: FeishuMessage): Promise<void>;
@@ -21,7 +22,7 @@ export type FeishuTransport = {
 
 type RawAction = {
   operator?: { open_id?: string }; context?: { open_message_id?: string };
-  action?: { value?: { requestId?: unknown; allow?: unknown } };
+  action?: { value?: { requestId?: unknown; allow?: unknown; decision?: unknown } };
 };
 
 export function dispatcher(handlers: FeishuHandlers) {
@@ -44,7 +45,7 @@ export function dispatcher(handlers: FeishuHandlers) {
       const value = action?.value;
       return handlers.action({ openId: operator?.open_id, messageId: context?.open_message_id,
         requestId: typeof value?.requestId === "string" ? value.requestId : undefined,
-        allow: typeof value?.allow === "boolean" ? value.allow : undefined });
+        decision: isApprovalDecision(value?.decision) ? value.decision : value?.decision === undefined && typeof value?.allow === "boolean" ? (value.allow ? "once" : "deny") : undefined });
     },
   });
 }

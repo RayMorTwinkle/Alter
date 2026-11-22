@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.9).
+// Mirrors docs/architecture/web-api.md (v1.10).
 
 export type TimelineItem = {
   id: string;
@@ -10,15 +10,23 @@ export type TimelineItem = {
   source?: string;
 };
 
+export type ApprovalDecision = "once" | "statement" | "task-full" | "deny";
+export type Settings = { approvalModel: "shadow" | "auto" | "off" };
+export type ApprovalStats = { compared: number; agreed: number; agreementRate: number | null; deniedButInScope: number };
+export type PermissionItem = { tool: string; target: string; purpose: string; isNew: boolean };
+
 export type PermissionRequest = {
   id: string;
   taskId: string;
-  audience: "main" | "user";
+  audience: "main" | "user"; // v1.10 emits user. Older snapshots also contain main.
   capability: string;
   tool: string;
   arguments: unknown;
   reason: string;
   expiresAt: number;
+  defaultAt?: number;
+  deferred?: true;
+  statement?: PermissionItem[];
   tainted?: true;
   taint?: { source: string; capability: string; at: number };
 };
@@ -30,7 +38,7 @@ export type Task = {
   continuedFrom?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
-  allow: string[];
+  allow: string[]; // v1.10 compatibility field. The server sends [].
   status: "running" | "completed" | "failed";
   failure?: string;
   conversationId: string;

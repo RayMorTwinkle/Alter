@@ -12,7 +12,7 @@ faux.setResponses(Array.from({ length: 8 }, () => ({ messages }) => {
   const last = messages.findLast(message => message.role !== "system")!;
   if (last.role !== "user") return say("OK");
   const call = contentText(last.content) === "delegate"
-    ? fauxToolCall("dispatch_task", { brief: "send", permission: "full", context: "fresh", allow: [] })
+    ? fauxToolCall("dispatch_task", { brief: "send", permission: "full", context: "fresh" })
     : fauxToolCall("mail_send", outgoing);
   return say(call, { stopReason: "toolUse" });
 }));

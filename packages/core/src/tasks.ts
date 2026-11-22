@@ -4,20 +4,21 @@ import { calendarTime } from "./calendar-time.ts";
 import { addNotification } from "./notifications.ts";
 import { Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
-import type { CapabilityRegistry } from "./capabilities.ts";
 import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
   ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationHandle, type ConversationId, type Cursor, type Harness, type Extension, type ModelRef, type ModelThinkingLevel, type TaskId, type Tx, type YieldDecision,
 } from "./runtime.ts";
 import { budgetExhausted } from "./usage.ts";
 import { inheritTaint } from "./taint.ts";
-import { Ledger, TaskIdentity, Tasks, type TaskRecord } from "./state.ts";
+import { Ledger, ScopeDoc, TaskIdentity, Tasks, type TaskRecord } from "./state.ts";
 
 const nonempty = str({ minLength: 1 });
 const reminder = "Complete the task by calling finish with a summary and refs. Call finish alone.";
 const maxReminders = 3;
-const workerInstructions = "Carry out the assigned brief. Call tools directly even when they need approval: the system pauses the call " +
-  "and asks the approver, so never stop to ask for approval yourself. Request any missing capability. " + reminder;
+export const workerInstructions = "Carry out the assigned brief using the enabled plugin tools. " +
+  "Before sensitive operations, call declare_permissions with the tools, targets and purposes. Append changes to the plan. " +
+  "Call the tool directly; the system handles approval. If approval is pending, work on something else or finish and report. " +
+  "Do not retry a declined operation using another tool or task. " + reminder;
 
 const ReviewAnswer = defineTask<null, { phase: "review" }, YieldDecision>({
   name: "alter.review-answer", version: 1, initial: () => ({ phase: "review" }),
@@ -83,23 +84,27 @@ export const TaskTools = defineExtension({
   name: "alter.task-tools", tasks: [ReviewAnswer],
   hooks: [hook(GenerationTask, { onYield: () => ({ tasks: [hookTask(ReviewAnswer, null)] }) })],
   tools: [finish, defineTool({
-    name: "request_capability", description: "Request a capability and explain why it is needed.",
-    parameters: obj({ capability: nonempty, reason: nonempty }), replay: "safe",
-    async execute({ capability }, api, ctx) {
-      await api.commit(async tx => {
-        const { taskId } = await tx.doc(TaskIdentity, api.conversationId);
-        const task = (await tx.doc(Tasks, ROOT_CONVERSATION_ID)).byId[taskId]!;
-        if (task.status === "running" && task.permission === "restricted" && !task.allow.includes(capability)) task.allow.push(capability);
+    name: "declare_permissions", description: "Append the tools, targets and purposes planned for this task.",
+    parameters: obj({ items: arr(obj({ tool: nonempty, target: nonempty, purpose: nonempty }), { minItems: 1 }) }),
+    replay: "safe",
+    async execute({ items }, api, ctx) {
+      return api.commit(async tx => {
+        const scope = await tx.doc(ScopeDoc, api.conversationId);
+        const id = String(api.taskId);
+        if (!scope.declarations.includes(id)) {
+          scope.items.push(...items);
+          scope.declarations.push(id);
+        }
+        return reply("权限说明已追加");
       }, ctx);
-      return reply(`Approved: ${capability}`);
     },
   })],
 });
 
-async function clearRequests(tx: Tx, mainId: ConversationId, taskId: string) {
+async function clearRequests(tx: Tx, mainId: ConversationId, taskId: string, keepDeferred = false) {
   const { pending } = await tx.doc(Requests, mainId);
   for (const request of Object.values(pending)) {
-    if (request.taskId === taskId) delete pending[request.id];
+    if (request.taskId === taskId && !(keepDeferred && request.deferred)) delete pending[request.id];
   }
 }
 
@@ -108,7 +113,7 @@ async function failTask(tx: Tx, main: ConversationHandle, taskId: string, failur
   if (task.status !== "running") return;
   task.status = "failed";
   task.failure = failure;
-  await clearRequests(tx, main.id, taskId);
+  await clearRequests(tx, main.id, taskId, !aborted);
   if (!aborted || task.proactive) await report(tx, main, task, taskId, at, failure);
 }
 
@@ -162,7 +167,7 @@ export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }
   },
 });
 
-type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "allow" | "continuedFrom"> & { thinking?: ModelThinkingLevel };
+type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom"> & { thinking?: ModelThinkingLevel };
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
   resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
   return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs, goal?: TaskRecord["goal"]) => {
@@ -195,11 +200,20 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       provider.sessionId = `proactive-${provider.sessionId}`;
     }
     const identity = await tx.doc(TaskIdentity, childId);
+    if (previous) {
+      const scope = await tx.doc(ScopeDoc, childId);
+      scope.items = [];
+      scope.late = [];
+      scope.declarations = [];
+      delete scope.shown;
+      delete scope.approved;
+      delete scope.full;
+    }
     identity.taskId = taskId;
     identity.reminders = 0;
     tasks.byId[taskId] = {
       worker, conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
-      permission: args.permission, allow: [...args.allow], status: "running", ...(goal && { proactive: true, goal: { ...goal } }),
+      permission: args.permission, status: "running", ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),
     };
   };
@@ -209,32 +223,31 @@ function lookup<T>(byId: Record<string, T>, id: string) {
   return Object.hasOwn(byId, id) ? byId[id] : undefined;
 }
 
-export function dispatchTool({ manifests }: CapabilityRegistry, dispatch: ReturnType<typeof createDispatcher>) {
+export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>) {
   return defineTool({
-    name: "dispatch_task", description: "Start a task with context, permission and allow. To continue an ended task, supply continue_from instead; it keeps its conversation and permissions.",
+    name: "dispatch_task", description: "Start a task with context and permission. To continue an ended task, supply continue_from instead; it keeps its conversation.",
     parameters: obj({
       brief: nonempty, context: opt(oneOf(["fork", "fresh"])), permission: opt(oneOf(["restricted", "auto", "full"])),
-      allow: opt(arr(nonempty)), continue_from: opt(nonempty), thinking: opt(oneOf(["low", "medium", "high", "max"])),
+      continue_from: opt(nonempty), thinking: opt(oneOf(["low", "medium", "high", "max"])),
     }),
     replay: "safe",
-    async execute({ brief, context, permission, allow, continue_from, thinking }, api, ctx) {
+    async execute({ brief, context, permission, continue_from, thinking }, api, ctx) {
       const taskId = `task-${api.taskId}`;
       const tasks = (await api.snapshot(Tasks, api.conversationId, ctx))!.byId;
       if (tasks[taskId]) return reply(taskId);
       if (continue_from) {
         const previous = lookup(tasks, continue_from);
         if (!previous) return reply("Unknown task", true);
-        if (context || permission || allow) return reply("continue_from inherits context, permission and allow; omit those fields", true);
+        if (context || permission) return reply("continue_from inherits context and permission; omit those fields", true);
         const identity = (await api.snapshot(TaskIdentity, previous.conversationId, ctx))!;
         const latest = tasks[identity.taskId]!;
         if (latest.status === "running") return reply(`Task ${identity.taskId} is running; use task_message`, true);
         await api.waitForTask(latest.worker, ctx);
         await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, thinking, continuedFrom: continue_from,
-          context: previous.context, permission: previous.permission, allow: previous.allow }, previous.goal), ctx);
+          context: previous.context, permission: previous.permission }, previous.goal), ctx);
       } else {
-        if (!context || !permission || !allow) return reply("A new task requires context, permission and allow", true);
-        if (allow.some(id => !manifests.some(cap => cap.id === id))) return reply("Unknown capability in allow", true);
-        await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, context, permission, allow, thinking }), ctx);
+        if (!context || !permission) return reply("A new task requires context and permission", true);
+        await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, context, permission, thinking }), ctx);
       }
       return reply(taskId);
     },
@@ -278,7 +291,7 @@ export const taskStatus = defineTool({
     const task = lookup(tasks, taskId);
     if (!task) return reply("Unknown task", true);
     const { pending } = await tx.doc(Requests, api.conversationId);
-    const requests = Object.values(pending).filter(req => req.taskId === taskId).map(req => ({
+    const requests = Object.values(pending).filter(req => req.taskId === taskId && !req.checking).map(req => ({
       id: req.id, audience: req.audience, tool: req.tool, ...(req.tainted && { tainted: true }), arguments: clip(req.argumentsJson, 200),
       remainingMs: Math.max(0, req.expiresAt - api.now()),
     }));

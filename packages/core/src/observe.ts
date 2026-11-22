@@ -10,10 +10,10 @@ import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./t
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
-export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask"> & { arguments: unknown };
+export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "checking"> & { arguments: unknown };
 type Task = Omit<TaskRecord, "conversationId" | "worker" | "lastEntry" | "messages" | "status"> & {
   status: Exclude<TaskRecord["status"], "cancelled">;
-  taskId: string; conversationId: string; pending: PermissionRequest[];
+  taskId: string; conversationId: string; allow: string[]; pending: PermissionRequest[];
 };
 export type SurfaceState = {
   timeline: TimelineItem[]; tasks: Task[]; pending: PermissionRequest[]; ledger: LedgerEntry[];
@@ -53,7 +53,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
 
   function updateTasks() {
     state.tasks = Object.entries(records).map(([taskId, { worker, lastEntry, messages, status, ...task }]) => ({
-      ...task, taskId, status: status === "cancelled" ? "failed" : status, ...(status === "cancelled" && { failure: status }),
+      ...task, allow: [], taskId, status: status === "cancelled" ? "failed" : status, ...(status === "cancelled" && { failure: status }),
       conversationId: String(task.conversationId), pending: state.pending.filter(req => req.taskId === taskId),
     }));
     emit({ event: "tasks", data: state.tasks });
@@ -102,7 +102,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       let count = 0;
       function permissionAt(i: number) {
         const row = entries[i]!;
-        if (row.decision !== "park" || (!row.tainted && records[row.taskId]?.permission !== "auto")) return;
+        if (row.decision !== "park" || (!row.audience && !row.tainted && records[row.taskId]?.permission !== "auto")) return;
         add({ id: `approval-${i}`, kind: "permission", text: `请求用户审批：${row.tool}`, at: row.at, taskId: row.taskId }, !seeding);
         count++;
       }
@@ -115,7 +115,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     });
     seeding = false;
     await watch(Requests, value => {
-      state.pending = Object.values(value.pending).map(({ toolTask, argumentsJson, ...req }) => ({
+      state.pending = Object.values(value.pending).filter(req => !req.checking && req.audience === "user").map(({ toolTask, wakeKey, checking, argumentsJson, ...req }) => ({
         ...req, arguments: JSON.parse(argumentsJson),
       }));
       emit({ event: "pending", data: state.pending });

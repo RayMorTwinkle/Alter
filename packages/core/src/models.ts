@@ -9,7 +9,7 @@ import type { gatewayConfig } from "./config.ts";
 import { appendUsage, budgetExhausted, type ProactiveBudget, type UsageLine } from "./usage.ts";
 
 type Config = ReturnType<typeof gatewayConfig>;
-type Conversation = Exclude<UsageLine["conversation"], "triage">;
+type Conversation = Exclude<UsageLine["conversation"], "triage" | "judge">;
 export const gatewayDataDirectories = new WeakMap<Models, string>();
 const completions = openAICompletionsApi();
 
@@ -47,6 +47,31 @@ export function withProactiveUsage(models: Models, budget: ProactiveBudget): Mod
   };
   return { ...withClientIdentity(models, {}), streamSimple, completeSimple: (model, context, options) => options?.sessionId?.startsWith("proactive-")
     ? streamSimple(model, context, options).result() : models.completeSimple(model, context, options) };
+}
+
+export function judgeModels(models: Models, dir: string | undefined, now: () => number): Pick<Models, "getModel" | "completeSimple"> {
+  if (!dir || gatewayDataDirectories.has(models)) return models;
+  return {
+    getModel: (provider, id) => models.getModel(provider, id),
+    async completeSimple(model, context, options) {
+      const started = performance.now();
+      const line: UsageLine = { at: new Date(now()).toISOString(), conversation: "judge", model: model.id,
+        attempt: 1, latencyMs: 0, outcome: "error" };
+      try {
+        const message = await models.completeSimple(model, context, options);
+        line.model = message.model;
+        const { input, cacheRead, cacheWrite, output } = message.usage;
+        line.inputTokens = input + cacheRead + cacheWrite;
+        line.outputTokens = output;
+        if (message.stopReason === "error" || message.stopReason === "aborted") line.errorKind = message.stopReason;
+        else line.outcome = "ok";
+        return message;
+      } finally {
+        line.latencyMs = Math.round(performance.now() - started);
+        await appendUsage(dir, line);
+      }
+    },
+  };
 }
 
 function errorKind(status: number | undefined, networkError: boolean, message = "") {
@@ -128,7 +153,7 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
           if (!triage) {
             const record = proactiveAttempt.getStore() ?? ((line: UsageLine) => appendUsage(config.dataDir, line));
             await record({
-              at, conversation, model: id, attempt: index + 1, fallbackFrom: chain[index - 1],
+              at, conversation: options.metadata?.alterConversation === "judge" ? "judge" : conversation, model: id, attempt: index + 1, fallbackFrom: chain[index - 1],
               outcome: kind ? "error" : "ok", errorKind: kind, latencyMs: elapsed(), firstTokenMs,
               ...(reportedUsage ? {
                 inputTokens: usage.input + usage.cacheRead + usage.cacheWrite, outputTokens: usage.output,

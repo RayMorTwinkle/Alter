@@ -133,7 +133,7 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
       if (last.role === "tool") return toolCall(res, "finish", { summary: "已处理", refs: [] });
       return toolCall(res, "outbox_send", { message: "hello" });
     }
-    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send", context: mode, permission: "auto", allow: [] });
+    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send", context: mode, permission: "auto" });
     say(res, last.role === "tool" ? "已派单" : "收到报告");
   });
   const storage = () => mode === "fresh" ? new MemoryStorage() : openNodeSqliteStorage(join(app.dir, "main.sqlite"));
@@ -176,6 +176,7 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
   expect(lines.filter(l => l.startsWith("[回投]"))).toEqual([expect.stringMatching(/finished: 已处理/)]);
   expect(lines.filter(l => l.startsWith("[用户审批]"))).toHaveLength(1);
   expect(runtime.demo.outbox).toEqual(allow ? ["hello"] : []);
+  await expect.poll(async () => (await app.logs()).some(line => line.conversation === "judge" && line.model === taskBackup)).toBe(true);
   const logs = await app.logs();
   for (const conversation of ["main", "task"] as const) {
     const uses = logs.filter(l => l.conversation === conversation);
@@ -195,7 +196,7 @@ it("prints a queued task report immediately and only once when it enters the tra
       return toolCall(res, "finish", { summary: "ready", refs: [] });
     }
     if (last.content?.endsWith("\ndelegate")) {
-      return toolCall(res, "dispatch_task", { brief: "report", context: "fresh", permission: "restricted", allow: [] });
+      return toolCall(res, "dispatch_task", { brief: "report", context: "fresh", permission: "restricted" });
     }
     if (last.role === "tool") { release = res; return; }
     say(res, "handled");
@@ -239,7 +240,7 @@ it.each([[undefined, "high"], ["medium", "medium"], ["max", "high"]] as const)("
     const last = messages.at(-1)!;
     if (tools?.some(t => t.function.name === "finish")) return toolCall(res, "finish", { summary: "done", refs: [] });
     if (last.content === "delegate") {
-      return toolCall(res, "dispatch_task", { brief: "work", context: "fresh", permission: "full", allow: [], thinking });
+      return toolCall(res, "dispatch_task", { brief: "work", context: "fresh", permission: "full", thinking });
     }
     say(res, "ok");
   });
