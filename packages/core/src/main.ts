@@ -10,13 +10,15 @@ import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } fr
 import { defaultTimeZone, inputClock } from "./clock.ts";
 import { calendarTime } from "./calendar-time.ts";
 import { emitEvent, startEventBus } from "./events.ts";
-import { gatewayDataDirectories } from "./models.ts";
+import { registerGoalReview } from "./goal-review.ts";
+import { createProactiveBudget } from "./usage.ts";
+import { gatewayDataDirectories, withProactiveUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
 import { createMemory } from "./memory.ts";
 import { createScheduler } from "./scheduler.ts";
 import { mainInputContext } from "./timeline.ts";
 import { Tasks } from "./state.ts";
-import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
+import { BackgroundTask, createDispatcher, dispatchTool, TaskTools } from "./tasks.ts";
 
 export { Events } from "./events.ts";
 export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, number> }>(
@@ -58,6 +60,12 @@ export async function openAlter(
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
   const broker = createBroker(() => main, capabilities, timeout);
   const taskExtensions = [extension, TaskTools, broker];
+  const dispatch = createDispatcher(taskExtensions, taskModel, clock, thinking.task);
+  const currentModels = () => typeof models === "function" ? models() : models;
+  const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
+  const time = calendarTime(timeZone);
+  const budget = createProactiveBudget(time, proactive.budget, now, dir);
+  registerGoalReview(scheduler, memory, dispatch, budget, timeZone, capabilities.manifests.some(cap => cap.id === "browser"));
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
     const offered = tools.filter(tool => {
@@ -69,7 +77,7 @@ export async function openAlter(
 
   const controls: ToolRegistration[] = [
     ...scheduler.tools,
-    dispatchTool(capabilities, taskExtensions, taskModel, clock, thinking.task),
+    dispatchTool(capabilities, dispatch),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
       parameters: obj({ taskId: opt(str()) }), replay: "safe",
@@ -144,7 +152,8 @@ export async function openAlter(
   });
   for (const extension of [...taskExtensions, controlPlane]) registry.install(extension);
   const harness = await Harness.open(storage, {
-    models, registry, now: options.now, setTimer: options.setTimer, settings: { toolExecution: "sequential", retry: { enabled: false } },
+    models: typeof models === "function" ? () => withProactiveUsage(models(), budget) : withProactiveUsage(models, budget),
+    registry, now: options.now, setTimer: options.setTimer, settings: { toolExecution: "sequential", retry: { enabled: false } },
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
     extensions: [controlPlane, extension, broker], modelTools: controls,
@@ -184,11 +193,9 @@ export async function openAlter(
   }
   try {
     for (const plugin of plugins) if (plugin.start) stops.push(await plugin.start(host));
-    await scheduler.ensureDigest(proactive.digestTime);
-    const currentModels = () => typeof models === "function" ? models() : models;
-    const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
-    const time = calendarTime(timeZone);
-    const classify = createTriage(currentModels, taskModel, memory.summary, time, proactive.budget, dir);
+    await scheduler.ensureDaily("digest", "每日摘要", proactive.digestTime);
+    await scheduler.ensureDaily("goal-review", "每日目标复查", proactive.goalReviewTime);
+    const classify = createTriage(currentModels, taskModel, memory.summary, budget);
     stopEvents = await startEventBus(harness, main, time, now, proactive.mute, classify);
   } catch (error) {
     await shutdown();

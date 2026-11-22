@@ -124,6 +124,10 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             record("deny");
             return { block: "Unknown capability or inactive task" };
           }
+          if (task?.proactive && call.name !== "finish" && (call.name === "request_capability" || effect !== "read" || !task.allow.includes(capability))) {
+            record("deny");
+            return { block: "Proactive research is read-only and cannot request capabilities" };
+          }
           const refusal = `${taskId} ${call.name}`;
           if (signal) {
             const askedUser = requests.pending[requestId]?.audience === "user";
@@ -154,6 +158,10 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           const url = typeof value === "string" ? normalUrl(value) : undefined;
           const seen = !risky && descriptor.guarded && url !== undefined && state?.seen?.includes(url);
           const audience = approver(task?.permission ?? "full", call.name, task?.allow.includes(capability) ?? false, risky, !!taint && !seen);
+          if (task?.proactive && audience) {
+            record("deny");
+            return { block: "Proactive research cannot request approval" };
+          }
           // Prompts alone do not stop retries after a denial, so the user is never asked twice in one task.
           if ((audience === "user" || taint) && !isMain && audit.refused?.[refusal] && !requests.pending[requestId]) {
             record("deny");

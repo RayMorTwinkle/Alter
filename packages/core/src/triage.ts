@@ -1,10 +1,9 @@
 import { contentText, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
-import type { calendarTime } from "./calendar-time.ts";
 import type { ExternalEvent } from "./capabilities.ts";
 import type { Notification } from "./notifications.ts";
 import type { ModelRef } from "./runtime.ts";
-import { appendUsage, readUsage, type UsageLine } from "./usage.ts";
+import { budgetExhausted, type ProactiveBudget, type UsageLine } from "./usage.ts";
 
 export type Decision = { level: Notification["level"]; reason: string; filtered?: Notification["filtered"] };
 const instructions = "你负责外部事件分诊。结合用户记忆，紧急且需要立即关注选 now，可稍后查看选 digest，无需关注选 silent。" +
@@ -55,26 +54,14 @@ export async function classify(models: Models, ref: ModelRef, memory: string, ev
 }
 
 export function createTriage(models: () => Models, ref: ModelRef, summary: () => string,
-  time: ReturnType<typeof calendarTime>, budget: number, dir?: string) {
-  let day: number | undefined;
-  let used = 0;
-  return async (event: ExternalEvent, at: number, signal: AbortSignal): Promise<Decision> => {
-    const today = time.midnight(at);
-    if (day !== today) {
-      const tomorrow = time.midnight(at, 1);
-      const lines = dir ? await readUsage(dir) : [];
-      used = 0;
-      for (const line of lines) {
-        if (line.conversation !== "triage") continue;
-        const started = Date.parse(line.at);
-        if (started >= today && started < tomorrow) used += (line.inputTokens ?? 0) + (line.outputTokens ?? 0);
-      }
-      day = today;
-    }
-    if (used >= budget) return { level: "silent", reason: "今日主动预算已用完" };
-    const { decision, line } = await classify(models(), ref, summary(), event, at, signal);
-    used += (line.inputTokens ?? 0) + (line.outputTokens ?? 0);
-    if (dir) await appendUsage(dir, line);
-    return decision;
+  budget: ProactiveBudget) {
+  return async (event: ExternalEvent, signal: AbortSignal): Promise<Decision> => {
+    const permit = await budget.acquire(signal);
+    if (!permit) return { level: "silent", reason: budgetExhausted };
+    try {
+      const { decision, line } = await classify(models(), ref, summary(), event, permit.at, signal);
+      await permit.record(line);
+      return decision;
+    } finally { permit.release(); }
   };
 }

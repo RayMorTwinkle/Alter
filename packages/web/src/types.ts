@@ -37,7 +37,7 @@ export type Task = {
 };
 
 export type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number;
 };

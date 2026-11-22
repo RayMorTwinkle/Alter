@@ -5,12 +5,18 @@ import { DatabaseSync } from "node:sqlite";
 import { contentText } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { obj, str } from "@earendil-works/pi-schema";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ExternalEvent } from "../src/capabilities.ts";
+import { Audit } from "../src/broker.ts";
+import type { AlterPlugin, ExternalEvent } from "../src/capabilities.ts";
 import { funnel } from "../src/funnel.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { Notifications, updateNotification, type Notification } from "../src/notifications.ts";
-import { context, openNodeSqliteStorage } from "../src/runtime.ts";
+import { observeSurface } from "../src/observe.ts";
+import { Tasks } from "../src/state.ts";
+import { Taint } from "../src/taint.ts";
+import { readTranscript } from "../src/timeline.ts";
+import { context, defineTool, openNodeSqliteStorage, reply } from "../src/runtime.ts";
 import { appendUsage, readUsage, usageSummary, usageTotals } from "../src/usage.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -21,7 +27,7 @@ const label = (level: string, reason = "与目标相关") => say(JSON.stringify(
 const event = (ref: string, summary = ref, source = "mail"): ExternalEvent => ({
   source, ref, summary, kind: "received", at: 1, untrusted: true,
 });
-async function setup() {
+async function setup(plugins: AlterPlugin[] = []) {
   const dir = await mkdtemp(join(tmpdir(), "alter-proactive-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const clock = { now: Date.parse("2026-12-01T02:00Z") };
@@ -30,7 +36,7 @@ async function setup() {
   models.setProvider(task.provider);
   async function open(file = "main.sqlite") {
     const app = await openAlter(await openNodeSqliteStorage(join(dir, file)), models, { provider: "unused", modelId: "main" },
-      { provider: "worker", modelId: "faux-1" }, {}, { now: () => clock.now, timeZone: "Asia/Taipei" });
+      { provider: "worker", modelId: "faux-1" }, {}, { plugins, now: () => clock.now, timeZone: "Asia/Taipei" });
     cleanup.push(app.close);
     const rows = async () => (await app.harness.snapshot(Notifications, app.main.id, context))?.entries ?? [];
     const wait = (ref: string) => expect.poll(async () => (await rows())[0]?.ref).toBe(ref);
@@ -175,7 +181,7 @@ it("schedules one deterministic digest for today's unread items and skips empty 
   expect((await g.rows())[0]).toMatchObject({ title: "今日摘要（1 条）", body: "• [mail] 邮件主题 — 稍后处理", level: "now", source: "schedule" });
   f.clock.now += 86_400_000;
   g.app.harness.resume();
-  await expect.poll(() => g.app.harness.wake().at).toBe(f.clock.now + 86_400_000);
+  await expect.poll(() => g.app.harness.wake().at).toBe(Date.parse("2026-12-04T01:00Z"));
   expect((await g.rows()).filter(n => n.kind === "digest")).toHaveLength(1);
   expect(f.task.state.callCount).toBe(5);
 });
@@ -183,19 +189,160 @@ it("schedules one deterministic digest for today's unread items and skips empty 
 it("updates the managed digest time on restart without duplicating or reviving a cancelled schedule", async () => {
   vi.stubEnv("ALTER_DIGEST_TIME", "21:00");
   const f = await setup();
-  const [initial] = await f.app.scheduler.list();
+  const digests = async (app: typeof f.app) => (await app.scheduler.list()).filter(s => s.kind === "digest");
+  const [initial] = await digests(f.app);
   expect(initial?.at).toBe(Date.parse("2026-12-01T13:00Z"));
   await f.app.close();
   vi.stubEnv("ALTER_DIGEST_TIME", "18:30");
   const g = await f.open();
   const at = Date.parse("2026-12-01T10:30Z");
-  expect(await g.app.scheduler.list()).toMatchObject([{ id: initial!.id, at, repeat: { daily: "18:30" } }]);
+  expect(await digests(g.app)).toMatchObject([{ id: initial!.id, at, repeat: { daily: "18:30" } }]);
   g.app.harness.resume();
   await expect.poll(() => g.app.harness.wake().at).toBe(at);
   await g.app.scheduler.cancel(initial!.id);
   await g.app.close();
   const h = await f.open();
-  expect(await h.app.scheduler.list()).toMatchObject([{ id: initial!.id, status: "cancelled" }]);
+  expect(await digests(h.app)).toMatchObject([{ id: initial!.id, status: "cancelled" }]);
+});
+
+const browser: AlterPlugin = {
+  capability: { id: "browser", mainLeasable: false, actions: [
+    { name: "open", effect: "read", guarded: true, seenArg: "url" }, { name: "fill", effect: "external-send" },
+  ] },
+  tools: [
+    defineTool({ name: "browser_open", description: "Read", parameters: obj({ url: str() }),
+      execute: async () => ({ ...reply("来源 https://example.org/reference"), details: { untrusted: true } }) }),
+    defineTool({ name: "browser_fill", description: "Fill", parameters: obj({}), execute: async () => reply("filled") }),
+  ],
+};
+const call = (name: string, args: Parameters<typeof fauxToolCall>[1]) => say(fauxToolCall(name, args), { stopReason: "toolUse" });
+const summary = "新资料见 https://example.org/reference";
+const refs = [{ kind: "link", ref: "https://example.org/reference" }];
+const finishGoal = () => call("finish", { summary, refs });
+
+it("delivers a read-only goal's finish to the ledger and digest without waking main", async () => {
+  vi.stubEnv("ALTER_GOAL_REVIEW_TIME", "10:15");
+  const f = await setup([browser]);
+  const surface = await observeSurface(f.app, () => {});
+  cleanup.push(async () => surface.detach());
+  f.app.memory.save({ kind: "goal", text: "准备考试", due: Date.parse("2026-12-12T08:00Z") });
+  f.task.setResponses([call("browser_open", { url: "https://example.org" }),
+    call("request_capability", { capability: "browser", reason: "需要更多权限" }),
+    call("request_capability", { capability: "outbox", reason: "发资料" }),
+    call("browser_fill", {}), call("browser_open", { url: "https://unseen.example" }), finishGoal()]);
+  f.clock.now = Date.parse("2026-12-01T02:15Z");
+  f.app.harness.resume();
+  await expect.poll(() => surface.snapshot().ledger.length).toBe(1);
+  const { tasks, ledger, notifications, busy, timeline, pending } = surface.snapshot();
+  expect(tasks).toHaveLength(1);
+  const task = tasks[0]!;
+  expect(task).toMatchObject({ proactive: true, context: "fresh", permission: "restricted", allow: ["browser"], status: "completed" });
+  for (const part of ["目标「准备考试」", "期限 2026-12-12T16:00", "只读调研", "1～3 条", "用户可能不知道", "每条附链接", "不要发送任何内容"]) {
+    expect(task.brief).toContain(part);
+  }
+  expect(ledger).toMatchObject([{ taskId: task.taskId, summary, refs }]);
+  expect(notifications).toMatchObject([{ title: "目标：准备考试", body: summary, ref: task.taskId, kind: "goal", source: "goal", level: "digest" }]);
+  expect({ busy, timeline, pending }).toEqual({ busy: false, timeline: [], pending: [] });
+  expect(await readTranscript(f.app.main)).toEqual([]);
+  const audit = (await f.app.harness.snapshot(Audit, f.app.main.id, context))!.entries;
+  expect(audit.map(a => [a.tool, a.decision])).toEqual([["browser_open", "allow"], ["request_capability", "deny"],
+    ["request_capability", "deny"], ["browser_fill", "deny"], ["browser_open", "deny"], ["finish", "allow"]]);
+  expect(audit.at(-2)?.tainted).toBe(true);
+  expect((await f.app.harness.snapshot(Taint, f.app.main.id, context))?.first).toBeUndefined();
+  const usage = await readUsage(f.dir);
+  expect(usage).toHaveLength(6);
+  expect(usage.every(line => line.proactive && line.conversation === "task" && line.inputTokens! > 0)).toBe(true);
+  f.clock.now = Date.parse("2026-12-01T13:00Z");
+  f.app.harness.resume();
+  await expect.poll(async () => (await f.rows())[0]?.kind).toBe("digest");
+  expect((await f.rows())[0]?.body).toContain("• [goal] 目标：准备考试 — " + summary);
+});
+
+it("reviews two active goals by deadline, persisting the daily limit and 72-hour cooldown across reopens", async () => {
+  const f = await setup([browser]);
+  const start = Date.parse("2026-12-02T01:00Z");
+  const day = 86_400_000;
+  const save = (text: string, due?: number) => f.app.memory.save({ kind: "goal", text, ...(due !== undefined && { due }) });
+  save("无期限"); save("较远", start + 10 * day); save("最近", start + 8 * day); save("已过期", start - 1);
+  f.app.memory.update(save("已完成"), { status: "done" });
+  f.app.memory.update(save("待确认"), { status: "pending" });
+  f.app.memory.save({ kind: "fact", text: "事实" });
+  f.task.setResponses(Array.from({ length: 5 }, finishGoal));
+  let app = f.app;
+  const records = async () => Object.values((await app.harness.snapshot(Tasks, app.main.id, context))!.byId);
+  async function tick(at: number) {
+    f.clock.now = at;
+    app.harness.resume();
+    await expect.poll(() => app.harness.wake().active).toBe(false);
+  }
+  await tick(start);
+  expect((await records()).map(t => t.goal?.text)).toEqual(["最近", "较远"]);
+  await app.close();
+  app = (await f.open()).app;
+  const review = (await app.scheduler.list()).filter(s => s.kind === "goal-review");
+  expect(review).toMatchObject([{ at: start + day, repeat: { daily: "09:00" } }]);
+  await app.scheduler.create({ kind: "goal-review", text: "同日重试", at: new Date(start).toISOString() });
+  await tick(start);
+  expect(await records()).toHaveLength(2);
+  await tick(start + day);
+  expect((await records()).map(t => t.goal?.text)).toEqual(["最近", "较远", "无期限"]);
+  await tick(start + 2 * day);
+  expect(await records()).toHaveLength(3);
+  await tick(start + 3 * day);
+  expect((await records()).map(t => t.goal?.text)).toEqual(["最近", "较远", "无期限", "最近", "较远"]);
+  expect(f.task.state.callCount).toBe(5);
+});
+
+it.each(["triage", "goal"] as const)("shares today's %s spend with goal dispatch and triage before and after restart", async first => {
+  vi.stubEnv("ALTER_PROACTIVE_DAILY_TOKENS", "1");
+  const f = await setup([browser]);
+  const at = Date.parse("2026-12-01T02:05Z");
+  f.app.memory.save({ kind: "goal", text: "目标一" });
+  if (first === "triage") {
+    f.task.setResponses([label("digest")]);
+    await f.emit(event("first"));
+    await f.wait("first");
+  } else {
+    f.task.setResponses([finishGoal()]);
+    await f.app.scheduler.create({ kind: "goal-review", text: "复查", at: new Date(at).toISOString() });
+  }
+  f.clock.now = at;
+  f.app.harness.resume();
+  if (first === "goal") await expect.poll(async () => (await f.rows())[0]?.kind).toBe("goal");
+  f.app.memory.save({ kind: "goal", text: "目标二" });
+  async function expectSkipped(current: Awaited<ReturnType<typeof f.open>>, ref: string) {
+    await current.app.scheduler.create({ kind: "goal-review", text: "预算复查", at: new Date(at).toISOString() });
+    current.app.harness.resume();
+    await expect.poll(async () => (await current.rows())[0]?.title).toBe("已跳过目标复查");
+    expect((await current.rows())[0]).toMatchObject({ level: "silent", body: "今日主动预算已用完" });
+    expect(Object.values((await current.app.harness.snapshot(Tasks, current.app.main.id, context))!.byId)).toHaveLength(first === "goal" ? 1 : 0);
+    await current.emit(event(ref));
+    await current.wait(ref);
+    expect((await current.rows())[0]).toMatchObject({ level: "silent", body: "今日主动预算已用完" });
+    await current.app.close();
+  }
+  await expectSkipped(f, "当天");
+  await expectSkipped(await f.open(), "重启后");
+  expect(f.task.state.callCount).toBe(1);
+});
+
+it("checks the shared budget again between model calls when two goals start together", async () => {
+  vi.stubEnv("ALTER_PROACTIVE_DAILY_TOKENS", "1");
+  const f = await setup([browser]);
+  for (const text of ["准备考试", "整理复习资料"]) f.app.memory.save({ kind: "goal", text });
+  f.task.setResponses([finishGoal()]);
+  f.clock.now = Date.parse("2026-12-02T01:00Z");
+  f.app.harness.resume();
+  await expect.poll(async () => (await f.rows()).length).toBe(2);
+  const tasks = Object.values((await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId);
+  expect(tasks.map(t => t.status).sort()).toEqual(["completed", "failed"]);
+  expect(await f.rows()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "goal", level: "digest", body: summary }),
+    expect.objectContaining({ kind: "goal", level: "silent", body: expect.stringContaining("今日主动预算已用完") }),
+  ]));
+  expect(await readTranscript(f.app.main)).toEqual([]);
+  expect(f.task.state.callCount).toBe(1);
+  expect(await readUsage(f.dir)).toHaveLength(1);
 });
 
 it("counts event feedback separately from digests and reminders across a DST transition", () => {
