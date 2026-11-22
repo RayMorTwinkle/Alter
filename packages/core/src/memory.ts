@@ -2,7 +2,9 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { compile, int, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
+import { calendarTime } from "./calendar-time.ts";
 import type { Capability } from "./capabilities.ts";
+import { defaultTimeZone } from "./clock.ts";
 import { defineTool, reply } from "./runtime.ts";
 
 const kind = oneOf(["profile", "goal", "fact"]);
@@ -14,6 +16,8 @@ const validSave = compile(saveSchema);
 const patchFields = { text: opt(text), status: opt(status), due: opt(nullable(due)) };
 const patch = compile(obj(patchFields));
 const id = str({ minLength: 1 });
+// Models get dates wrong as epoch numbers (seconds vs milliseconds), so tools take ISO text.
+const dueText = str({ description: "Goal deadline as an ISO date (YYYY-MM-DD, meaning the end of that local day) or date-time. Times without an offset use the user's time zone." });
 
 export type MemoryItem = {
   id: string; kind: Static<typeof kind>; text: string; due?: number; status: Static<typeof status>;
@@ -27,7 +31,14 @@ const capability: Capability = { id: "memory", mainLeasable: true, actions: [
   { name: "update", effect: "write-local", guarded: true }, { name: "delete", effect: "write-local", guarded: true },
 ] };
 
-export function createMemory(dataDir?: string, now = Date.now) {
+export function createMemory(dataDir?: string, now = Date.now, timeZone = defaultTimeZone) {
+  const time = calendarTime(timeZone);
+  function deadline(value: string) {
+    try {
+      const { ms } = time.parse(value);
+      return value.length === 10 ? time.midnight(ms, 1) : ms;
+    } catch (error) { throw new MemoryInputError((error as Error).message); }
+  }
   let db: DatabaseSync;
   const listeners = new Set<(items: MemoryItem[]) => void>();
   function select(where = "1", ...params: SQLInputValue[]): MemoryItem[] {
@@ -62,15 +73,16 @@ export function createMemory(dataDir?: string, now = Date.now) {
   }
   function update(id: string, changes: unknown) {
     if (!patch.check(changes) || !Object.keys(changes).length) throw new MemoryInputError("Expected text, status or due");
-    if (changes.due != null) {
-      const row = db.prepare("SELECT kind FROM memory WHERE id=?").get(id);
-      if (row && row.kind !== "goal") throw new MemoryInputError("Only goals have deadlines");
-    }
-    const result = db.prepare(`UPDATE memory SET text=coalesce(?,text), status=coalesce(?,status),
+    const row = db.prepare("SELECT kind, status FROM memory WHERE id=?").get(id);
+    if (!row) return false;
+    if (changes.due != null && row.kind !== "goal") throw new MemoryInputError("Only goals have deadlines");
+    // A goal that expired by mistake comes back when its deadline moves into the future.
+    const revived = row.status === "pending" && typeof changes.due === "number" && changes.due > now();
+    db.prepare(`UPDATE memory SET text=coalesce(?,text), status=coalesce(?,status),
       due=CASE WHEN ? THEN ? ELSE due END, updatedAt=? WHERE id=?`)
-      .run(changes.text ?? null, changes.status ?? null, Number(changes.due !== undefined), changes.due ?? null, now(), id);
-    if (result.changes) refresh(true);
-    return !!result.changes;
+      .run(changes.text ?? null, changes.status ?? (revived ? "active" : null), Number(changes.due !== undefined), changes.due ?? null, now(), id);
+    refresh(true);
+    return true;
   }
   function remove(id: string) {
     const result = db.prepare("DELETE FROM memory WHERE id=?").run(id);
@@ -84,8 +96,8 @@ export function createMemory(dataDir?: string, now = Date.now) {
       WHERE kind='profile' OR (kind='goal' AND status IN ('active','pending'))
       ORDER BY updatedAt DESC, id DESC`).iterate()) {
       const label = row.kind === "profile" ? "画像" : row.status === "pending" ? "目标（已过期，待确认）" : "目标";
-      const deadline = typeof row.due === "number" ? `（期限 ${new Date(row.due).toISOString()}）` : "";
-      result += (result ? "\n" : "[记忆摘要]\n") + label + deadline + "：" + row.text;
+      const due = typeof row.due === "number" ? `（期限 ${time.describe(row.due).label}）` : "";
+      result += (result ? "\n" : "[记忆摘要]\n") + label + due + "：" + row.text;
       if (result.length >= 1200) return result.slice(0, 1200).replace(/[\uD800-\uDBFF]$/, "");
     }
     return result;
@@ -103,9 +115,12 @@ export function createMemory(dataDir?: string, now = Date.now) {
         parameters: obj({ query: str(), kind: opt(kind) }), replay: "safe",
         execute: async args => reply(JSON.stringify(search(args.query, args.kind))) }),
       defineTool({ name: "memory_save", description: "Save a lasting preference, goal or important fact. Only goals have deadlines.",
-        parameters: saveSchema, execute: async args => reply(save(args)) }),
+        parameters: obj({ kind, text, due: opt(dueText) }),
+        execute: async ({ due, ...args }) => reply(save({ ...args, ...(due !== undefined && { due: deadline(due) }) })) }),
       defineTool({ name: "memory_update", description: "Edit a memory by ID. Set due to null to clear a goal deadline.",
-        parameters: obj({ id, ...patchFields }), execute: async ({ id, ...changes }) => update(id, changes) ? reply(id) : reply("Unknown memory", true) }),
+        parameters: obj({ id, text: opt(text), status: opt(status), due: opt(nullable(dueText)) }),
+        execute: async ({ id, due, ...changes }) =>
+          update(id, { ...changes, ...(due !== undefined && { due: due === null ? null : deadline(due) }) }) ? reply(id) : reply("Unknown memory", true) }),
       defineTool({ name: "memory_delete", description: "Delete a memory by ID.",
         parameters: obj({ id }), execute: async ({ id }) => remove(id) ? reply(id) : reply("Unknown memory", true) }),
     ],
