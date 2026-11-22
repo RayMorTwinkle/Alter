@@ -21,9 +21,9 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const { models, mainModel, taskModel } = await createGatewayModels(gatewayConfig({ ALTER_LLM_BASE_URL: gateway.baseUrl,
     ALTER_LLM_API_KEY: "offline-key", ALTER_MAIN_MODEL: "offline/main", ALTER_TASK_MODEL: "offline/task", ALTER_DATA_DIR: dir }));
-  const clock = { now: Date.now() };
+  const clock = { now: Date.parse("2026-12-01T02:00Z") };
   async function open() {
-    const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel);
+    const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel, {}, { now: () => clock.now });
     const transport = {
       start: vi.fn(async (_handlers: FeishuHandlers) => {}),
       sendText: vi.fn(async (_chatId: string, _text: string) => {}),
@@ -102,7 +102,8 @@ it("locks five wrong attempts until rotation, rejects an expired code and persis
   expect(f.surface.pairing()).toMatchObject({ paired: false, expiresAt: f.clock.now + 600_000 });
   expect(f.transport.sendText).not.toHaveBeenCalled();
   await f.pair();
-  expect(f.gateway.requests).toHaveLength(0);
+  await expect.poll(() => f.feed.snapshot().notifications.length).toBe(7);
+  expect(f.gateway.requests.map(r => r.model)).toEqual(Array(7).fill("offline/task"));
   expect(f.transport.sendText).toHaveBeenCalledExactlyOnceWith("private", "配对成功");
   expect((await stat(join(f.dir, "feishu.json"))).mode & 0o777).toBe(0o600);
   expect(JSON.parse(await readFile(join(f.dir, "feishu.json"), "utf8")).owner).toEqual({ openId: "owner", chatId: "private" });
@@ -118,13 +119,14 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
   expect((await f.app.harness.snapshot(Events, f.app.main.id, context))?.entries).toEqual(
     ["stranger", "group", "mention", "unverified"].map(ref => expect.objectContaining({ ref, kind: "message", source: "feishu", untrusted: true })));
   expect(f.feed.snapshot().timeline).toEqual([]);
-  expect(f.gateway.requests).toHaveLength(0);
+  await expect.poll(() => f.feed.snapshot().notifications.length).toBe(4);
+  expect(f.gateway.requests.map(r => r.model)).toEqual(Array(4).fill("offline/task"));
   expect(f.transport.sendText).toHaveBeenCalledTimes(1);
   await f.send("image", "", { type: "image" });
   expect(f.transport.sendText).toHaveBeenLastCalledWith("private", "目前只支持文字");
   await Promise.all([f.send("trusted", "你好"), f.send("trusted", "你好")]);
   await f.app.main.waitForIdle(context);
-  expect(f.gateway.requests).toHaveLength(1);
+  expect(f.gateway.requests.map(r => r.model)).toEqual([...Array(4).fill("offline/task"), "offline/main"]);
   expect(f.feed.snapshot().timeline.filter(item => item.kind === "user")).toMatchObject([{ source: "feishu", text: "你好" }]);
   await expect.poll(() => f.transport.sendText.mock.calls.at(-1)).toEqual(["private", "收到"]);
   await f.close();
@@ -132,7 +134,7 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
   expect(restarted.surface.pairing()).toEqual({ paired: true });
   await restarted.send("trusted", "你好");
   await restarted.send("pair", "旧配对消息");
-  expect(f.gateway.requests).toHaveLength(1);
+  expect(f.gateway.requests.map(r => r.model)).toEqual([...Array(4).fill("offline/task"), "offline/main"]);
   expect(restarted.transport.sendText).not.toHaveBeenCalled();
 });
 
@@ -277,4 +279,20 @@ it("delivers only unread now notifications to the paired owner and remembers IDs
   await next.close();
   expect(next.transport.sendText.mock.calls).toEqual([["private", "提醒\n下班"]]);
   expect(f.gateway.requests).toHaveLength(0);
+});
+
+it("pushes a triaged external event to the paired owner exactly once", async () => {
+  const f = await setup((_, res) => say(res, JSON.stringify({ level: "now", reason: "会议即将开始" })));
+  await f.pair();
+  await f.send("meeting", "会议改到十点", { chatType: "group" });
+  await expect.poll(() => f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "会议改到十点\n会议即将开始"]]);
+  await expect.poll(() => f.feed.snapshot().notifications).toMatchObject([
+    { kind: "event", source: "feishu", ref: "meeting", level: "now", pushedAt: f.clock.now },
+  ]);
+  expect(f.feed.snapshot().timeline).toEqual([]);
+  expect(f.gateway.requests).toMatchObject([{ model: "offline/task" }]);
+  expect(f.gateway.requests[0]!.tools ?? []).toEqual([]);
+  await f.close();
+  const next = await f.reopen();
+  expect(next.transport.sendText).not.toHaveBeenCalled();
 });

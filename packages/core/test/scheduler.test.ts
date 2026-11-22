@@ -89,11 +89,11 @@ it("sleeps durably, fires once per occurrence, catches up once and resumes regis
     await expectWake("2026-12-06T02:00Z");
     expect(surface.snapshot().notifications).toEqual(caughtUp);
     advance("2026-12-06T02:00Z");
-    await expectWake("2026-12-07T02:00Z");
+    await expectWake("2026-12-06T13:00Z");
     expect(new Set(surface.snapshot().notifications.map(item => item.id)).size).toBe(4);
     expect(surface.snapshot()).toMatchObject({ busy: false, timeline: [], tasks: [], ledger: [] });
     expect(await app.scheduler.cancel(repeat)).toBe(true);
-    await expect.poll(() => app.harness.wake().at).toBeUndefined();
+    await expectWake("2026-12-06T13:00Z");
   } finally { surface.detach(); }
 });
 

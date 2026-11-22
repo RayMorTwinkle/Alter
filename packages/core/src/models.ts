@@ -2,12 +2,13 @@ import { mkdir } from "node:fs/promises";
 import type { Api, AssistantMessageEvent, Model, ProviderStreams, StreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
 import type { gatewayConfig } from "./config.ts";
 import { appendUsage, type UsageLine } from "./usage.ts";
 
 type Config = ReturnType<typeof gatewayConfig>;
-type Conversation = UsageLine["conversation"];
+type Conversation = Exclude<UsageLine["conversation"], "triage">;
+export const gatewayDataDirectories = new WeakMap<Models, string>();
 const completions = openAICompletionsApi();
 
 function errorKind(status: number | undefined, networkError: boolean, message = "") {
@@ -26,7 +27,9 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
   async function* attempts(
     send: ProviderStreams["stream"], route: Model<Api>, ctx: TranscriptContext, options: StreamOptions = {},
   ) {
-    const chain = route.id === "chain" ? config[conversation] : [route.id];
+    const candidates = route.id === "chain" ? config[conversation] : [route.id];
+    const triage = options.metadata?.alterConversation === "triage";
+    const chain = triage ? candidates.slice(0, 1) : candidates;
     for (const [index, id] of chain.entries()) {
       options.signal?.throwIfAborted();
       const model = { ...route, id, name: id };
@@ -83,7 +86,8 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
           // even when zero) only when the gateway supplies a usage chunk.
           const { usage } = message;
           const reportedUsage = usage.totalTokens > 0 || usage.reasoning !== undefined;
-          await appendUsage(config.dataDir, {
+          // The tool-free caller accounts for triage across gateway and local providers alike.
+          if (!triage) await appendUsage(config.dataDir, {
             at, conversation, model: id, attempt: index + 1, fallbackFrom: chain[index - 1],
             outcome: kind ? "error" : "ok", errorKind: kind, latencyMs: elapsed(), firstTokenMs,
             ...(reportedUsage ? {
@@ -109,6 +113,7 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
 export async function createGatewayModels(config: Config) {
   await mkdir(config.dataDir, { recursive: true });
   const models = createModels();
+  gatewayDataDirectories.set(models, config.dataDir);
   function register(conversation: Conversation) {
     const provider = `alter-${conversation}`;
     const catalog = Array.from(new Set(["chain", ...config[conversation]]), (id): Model<"openai-completions"> => ({

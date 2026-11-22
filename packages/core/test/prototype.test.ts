@@ -903,14 +903,15 @@ it("offers schedules without leases and parks tainted reminder creation and canc
   await input(app, "lease");
   await input(app, "read");
   await input(app, "list");
+  const reminders = async () => (await app.scheduler.list()).filter(item => item.kind === "reminder");
   for (const action of ["create", "cancel"]) {
     await app.main.submit({ type: "input", content: action }, context);
     const request = await parked(app);
     expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action, tainted: true });
-    expect((await app.scheduler.list()).map(item => item.status)).toEqual(action === "create" ? [] : ["scheduled"]);
+    expect((await reminders()).map(item => item.status)).toEqual(action === "create" ? [] : ["scheduled"]);
     await answerUserPermission(app.main, { requestId: request.id, allow: true });
     await app.main.waitForIdle(context);
-    id = (await app.scheduler.list())[0]!.id;
+    id = (await reminders())[0]!.id;
   }
-  expect(await app.scheduler.list()).toMatchObject([{ id, text: "回电话", status: "cancelled" }]);
+  expect(await reminders()).toMatchObject([{ id, text: "回电话", status: "cancelled" }]);
 });
