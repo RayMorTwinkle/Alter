@@ -33,6 +33,12 @@ importers:
         specifier: 1.6.0
         version: 1.6.0
 
+  packages/plugin-browser:
+    dependencies:
+      '@alter/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/plugin-mail:
     dependencies:
       '@alter/core':
