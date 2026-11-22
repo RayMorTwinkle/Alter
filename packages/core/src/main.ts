@@ -37,7 +37,7 @@ export async function openAlter(
   const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
     (leasable.has("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
     `多步或探索性工作用 dispatch_task 派单，可用能力有 ${available.join("、")}。` +
-    "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。";
+    "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
   const { toolActions } = capabilities;
   const tools = [...demo.tools, ...plugins.flatMap(plugin => plugin.tools)];
   const extension = defineExtension({ name: demo.extension.name, tools });

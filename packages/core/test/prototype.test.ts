@@ -121,6 +121,51 @@ it("dispatches a fresh notes task and delivers its ledger summary to the main mo
   }]);
 });
 
+it("never asks the user twice in one task after a denial, while a new task asks again", async () => {
+  const results: string[] = [];
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("send greeting", "restricted", ["outbox"]);
+    if (text === "again") return dispatch("send again", "restricted", ["outbox"]);
+    if (text === "send greeting" || text === "send again") return call("outbox_send", { message: "hello" });
+    if (last.role === "toolResult" && last.toolName === "outbox_send") {
+      results.push(text);
+      // Retry once, as models sometimes do despite the denial message.
+      return results.length === 1 ? call("outbox_send", { message: "hello again" }) : finish(text);
+    }
+    return say("OK");
+  });
+  await input(app, "delegate");
+  const first = await parked(app);
+  await answerUserPermission(app.main, { requestId: first.id, allow: false });
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  expect(results[1]).toContain("already declined outbox_send");
+  const audit = await app.harness.snapshot(Audit, app.main.id, context);
+  expect(audit?.entries.filter(e => e.tool === "outbox_send").map(e => e.decision)).toEqual(["park", "deny", "deny"]);
+  expect((await app.harness.snapshot(Requests, app.main.id, context))!.pending).toEqual({});
+
+  await input(app, "again");
+  const second = await parked(app);
+  expect(second).toMatchObject({ audience: "user", tool: "outbox_send" });
+});
+
+it("keeps asking for each send after an approval", async () => {
+  let sends = 0;
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("send twice", "restricted", ["outbox"]);
+    if (text === "send twice") return call("outbox_send", { message: "one" });
+    if (last.role === "toolResult" && last.toolName === "outbox_send") {
+      return ++sends === 1 ? call("outbox_send", { message: "two" }) : finish("sent");
+    }
+    return say("OK");
+  });
+  await input(app, "delegate");
+  const first = await parked(app);
+  await answerUserPermission(app.main, { requestId: first.id, allow: true });
+  await expect.poll(async () => Object.values((await app.harness.snapshot(Requests, app.main.id, context))?.pending ?? {})
+    .filter(r => r.audience === "user" && r.id !== first.id).length).toBe(1);
+  expect(app.demo.outbox).toEqual(["one"]);
+});
+
 it.each([true, false])("routes a restricted send to the user even when main allowed outbox, allow=%s", async allow => {
   let sendResult = "";
   const app = await open((text, last) => {

@@ -43,7 +43,7 @@ function script(c: PermissionCase) {
     main.push(call("dispatch", "dispatch_task", { brief: "eval-child", permission, allow, context }));
     if (c.taint === "task-read") child.push(call("seed-task", "fixture_untrusted"));
     if (c.priorApproval === "capability") child.push(call("prior", "request_capability", { capability: "outbox", reason: "前置授权" }));
-    if (c.priorApproval === "send") child.push(call("prior", "outbox_send", { message: "第一条" }));
+    if (c.priorApproval === "send" || c.priorApproval === "send-denied") child.push(call("prior", "outbox_send", { message: "第一条" }));
   }
   const callerSteps = c.caller.kind === "lease" ? main : child;
   callerSteps.push(call("target", c.tool, c.args));
@@ -58,7 +58,7 @@ function script(c: PermissionCase) {
         requestId: text.slice("eval-approve ".length), allow: true,
       });
     }
-    if (last.role === "toolResult" && (!last.isError || last.toolCallId === "target")) {
+    if (last.role === "toolResult" && (!last.isError || last.toolCallId === "target" || last.toolCallId === "prior")) {
       for (const steps of [main, child]) {
         const index = steps.findIndex(step => step.id === last.toolCallId);
         if (index !== -1) next = steps[index + 1];
@@ -68,7 +68,7 @@ function script(c: PermissionCase) {
   };
 }
 
-function completed(entry: EntryRecord): Observation | undefined {
+function completed(entry: EntryRecord, expectedErrors: string[]): Observation | undefined {
   if (!ToolResultEntry.is(entry)) return;
   const message = entry.model?.[0];
   if (message?.role !== "toolResult") return;
@@ -78,7 +78,7 @@ function completed(entry: EntryRecord): Observation | undefined {
     const diagnostic = entry.data.diagnostics.find(d => d.code === "tool_unavailable" || d.code === "blocked");
     if (diagnostic) return { actual: "deny", evidence: diagnostic.code + " · " + diagnostic.message };
   }
-  if (message.isError && message.toolCallId !== "report") throw new Error(message.toolName + " · " + text);
+  if (message.isError && message.toolCallId !== "report" && !expectedErrors.includes(message.toolCallId)) throw new Error(message.toolName + " · " + text);
 }
 
 async function play(c: PermissionCase, signal: AbortSignal): Promise<Observation> {
@@ -98,7 +98,7 @@ async function play(c: PermissionCase, signal: AbortSignal): Promise<Observation
       for (const change of changes) {
         if (change.type !== "entry") continue;
         try {
-          const observed = completed(change.value);
+          const observed = completed(change.value, c.priorApproval === "send-denied" ? ["prior"] : []);
           if (observed) result = observed;
         } catch (e) { error = e; }
       }
@@ -126,8 +126,8 @@ async function play(c: PermissionCase, signal: AbortSignal): Promise<Observation
           break;
         }
         if (slot?.callId !== "prior" || approved) continue;
-        if (c.priorApproval === "send" && request.audience === "user") {
-          const answer = await answerUserPermission(app.main, { requestId: request.id, allow: true });
+        if ((c.priorApproval === "send" || c.priorApproval === "send-denied") && request.audience === "user") {
+          const answer = await answerUserPermission(app.main, { requestId: request.id, allow: c.priorApproval === "send" });
           if (answer.isError) throw new Error("前置发送审批未送达");
         } else if (c.priorApproval === "capability" && request.audience === "main") {
           await app.main.submit({ type: "input", content: "eval-approve " + request.id }, ctx);
