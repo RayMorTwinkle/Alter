@@ -21,12 +21,12 @@ export const leaseWindow = 30;
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { leasing?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number } = {},
+  options: { leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number } = {},
 ) {
   const leasing = options.leasing ?? true;
   const clock = inputClock(options.timeZone, options.now);
   const plugins = options.plugins ?? [];
-  const capabilities = createCapabilityRegistry(plugins);
+  const capabilities = createCapabilityRegistry(plugins, options.demos ?? true);
   const demo = createDemoCapabilities(capabilities.activeDemos);
   const descriptions: Record<string, string> = {
     calendar: "calendar（示例日历，仅标题）", notes: "notes（示例笔记 welcome）", outbox: "outbox（模拟发送）",

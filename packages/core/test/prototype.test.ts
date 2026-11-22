@@ -38,7 +38,7 @@ function finish(summary: string) {
   return call("finish", { summary, refs: [] });
 }
 async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = [], approvalTimeoutMs?: number,
-  clock: { timeZone?: string; now?: () => number } = {}) {
+  clock: { timeZone?: string; now?: () => number } = {}, demos?: boolean) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 160 }, () => ({ messages }) => {
     const tools = new Set<string>();
@@ -53,7 +53,7 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
   }));
   const models = createModels();
   models.setProvider(faux.provider);
-  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins, approvalTimeoutMs, ...clock });
+  const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, undefined, {}, { plugins, approvalTimeoutMs, demos, ...clock });
   cleanup.push(app.close);
   return app;
 }
@@ -72,6 +72,27 @@ async function incoming(app: Alter) {
 
 const controls = ["answer_permission_request", "dispatch_task", "enable_tool", "task_status"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", "notes_read", "outbox_send", "request_capability"];
+
+it("offers only real plugins when demos are off, so no simulated send exists", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-no-demos-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  let system = "";
+  let taskSeen: string[] = [];
+  const app = await open((text, last, messages, tools) => {
+    if (text === "go") {
+      system = messages.map(m => m.role === "system" ? JSON.stringify(m) : "").join("");
+      return dispatch("look");
+    }
+    if (text === "look") { taskSeen = tools; return finish("done"); }
+    return say("ok");
+  }, new MemoryStorage(), [createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" })], undefined, {}, false);
+  expect(app.capabilities.manifests.map(cap => cap.id)).toEqual(["calendar"]);
+  await input(app, "go");
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  expect(system).toContain("calendar（日历");
+  expect(system).not.toMatch(/outbox|notes|示例/);
+  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "finish", "request_capability"]);
+});
 
 it("dispatches a fresh notes task and delivers its ledger summary to the main model", async () => {
   const seen: string[] = [];
