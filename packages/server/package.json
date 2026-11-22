@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@alter/core": "workspace:*",
+    "@alter/plugin-browser": "workspace:*",
     "@alter/plugin-mail": "workspace:*"
   }
 }

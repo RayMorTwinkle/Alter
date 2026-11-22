@@ -144,3 +144,10 @@ const app = await openAlter(storage, models, mainModel, taskModel, thinking, { p
 SMTP 接收、Sent 归档和本地事务无法原子提交。服务器延迟生成 Sent 副本可能导致同一投递出现两份归档。模型重新发起一次工具调用会获得新的任务 ID，遇到投递状态未知须先核对原 Message-ID。离线恢复测试在模拟 SMTP 接收后、插件取得确认前用 SIGKILL 终止子进程，重开 SQLite 后从模拟 Sent 找回原邮件，验证恢复期间 SMTP 调用数为零。
 
 真机验证由仓库根目录运行 `pnpm -C packages/plugin-mail live`。脚本加载根目录的 `.env`，列邮箱目录，查询最近五封并试读最新一封，存一份草稿，给本账号发送一封测试邮件，按 Message-ID 验证 Sent。出现 IDLE 提示后，在 30 秒内从另一个邮箱寄入一封新邮件，核对事件中的发件人、主题和 UID。脚本产生的草稿和邮件留在账号内供核对。
+
+### ego 浏览器插件（#5）
+
+Web 服务默认注册 `browser`，设置 `ALTER_BROWSER=off` 可关闭。主会话通过派单使用它。每个任务会话使用名为 `Alter <conversationId>` 的 ego TaskSpace 和页面 `p1`。`alter.browser-space` 文档保存空间编号。若空间已被关闭，下次操作会重新创建。
+打开、读取快照和滚动为 `read`，点击和关闭为 `write-local`，填写与按键为 `external-send`。打开页面后，即使任务为 full，填写与按键也须用户批准。点击本身可能触发表单提交，按 ADR-0008 的决定放行。
+
+页面快照和错误消息均经过转义，默认保留前 12,000 个字符，带浏览器来源与不可信标记。`browser_close` 返回关闭前的最后一个视口。后台任务结束或中止时，宿主调用插件可选的 `onTaskEnd` 回收空间。进程正常停止时，插件也会尝试关闭仍在使用的空间。真机冒烟入口为 `pnpm -C packages/plugin-browser live`。

@@ -85,7 +85,9 @@ async function failTask(tx: Tx, mainId: ConversationId, taskId: string, failure:
 }
 
 // The background task owns the conversation and sleeps until its brief settles. Main stays available.
-export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | "settled" }, null>({
+export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | "settled" }, null, {
+  onTaskEnd(taskId: string): Promise<void>;
+}>({
   name: "alter.background-task", version: 1, initial: () => ({ phase: "start" }),
   phases: {
     async start({ input }, runtime, ctx) {
@@ -102,6 +104,7 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
     async settled({ input }, runtime, ctx) {
       const receipt = await runtime.readSignal(SubmissionSettled, "settled", ctx);
       const main = (await runtime.conversation(runtime.conversationId, ctx))!;
+      await runtime.hooks.each("onTaskEnd", end => end(input.taskId));
       await runtime.commit(async tx => {
         const failure = receipt && "value" in receipt && receipt.value.status === "unanswered"
           ? receipt.value.reason : "No finish after the reminder limit";
@@ -118,10 +121,13 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
       }, ctx);
     },
   },
-  abort: ({ input }, runtime, ctx) => runtime.commit(async tx => {
-    await failTask(tx, runtime.conversationId, input.taskId, "aborted");
-    return { status: "terminal", outcome: { status: "aborted" } };
-  }, ctx),
+  async abort({ input }, runtime, ctx) {
+    await runtime.hooks.each("onTaskEnd", end => end(input.taskId));
+    return runtime.commit(async tx => {
+      await failTask(tx, runtime.conversationId, input.taskId, "aborted");
+      return { status: "terminal", outcome: { status: "aborted" } };
+    }, ctx);
+  },
 });
 
 export function dispatchTool(

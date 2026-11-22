@@ -1,5 +1,5 @@
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineExtension, defineTool, reply, type ToolRegistration } from "./runtime.ts";
+import { defineExtension, defineTool, reply, type Conversation, type ToolRegistration } from "./runtime.ts";
 
 export type Effect = "read" | "write-local" | "external-send" | "irreversible" | "unknown";
 export type Capability = {
@@ -24,6 +24,7 @@ export type PluginHost = { emit(event: ExternalEvent): Promise<void> };
 export type AlterPlugin = {
   capability: Capability;
   tools: ToolRegistration[];
+  onTaskEnd?(conversation: Pick<Conversation, "id" | "commit">): Promise<void>;
   start?(host: PluginHost): Promise<() => Promise<void>>;
 };
 
