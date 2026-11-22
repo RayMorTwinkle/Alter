@@ -1,0 +1,14 @@
+{
+  "name": "@alter/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@alter/core": "workspace:*"
+  }
+}
