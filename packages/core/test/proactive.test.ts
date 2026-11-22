@@ -7,8 +7,9 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ExternalEvent } from "../src/capabilities.ts";
+import { funnel } from "../src/funnel.ts";
 import { Events, openAlter } from "../src/main.ts";
-import { Notifications, updateNotification } from "../src/notifications.ts";
+import { Notifications, updateNotification, type Notification } from "../src/notifications.ts";
 import { context, openNodeSqliteStorage } from "../src/runtime.ts";
 import { appendUsage, readUsage, usageSummary, usageTotals } from "../src/usage.ts";
 
@@ -195,4 +196,32 @@ it("updates the managed digest time on restart without duplicating or reviving a
   await g.app.close();
   const h = await f.open();
   expect(await h.app.scheduler.list()).toMatchObject([{ id: initial!.id, status: "cancelled" }]);
+});
+
+it("counts event feedback separately from digests and reminders across a DST transition", () => {
+  const at = Date.parse("2026-03-09T04:10Z"); // New York just after midnight, after a 23-hour day
+  const item = (stamp: string, fields: Partial<Notification> = {}): Notification => ({
+    id: stamp, at: Date.parse(stamp), kind: "event", level: "now", source: "mail", title: "", status: "unread", ...fields,
+  });
+  const notifications = [
+    item("2026-03-07T04:59Z", { feedback: "useless" }),
+    item("2026-03-07T05:00Z", { status: "read", feedback: "useful", pushedAt: 0 }),
+    item("2026-03-07T21:00Z", { feedback: "useful" }),
+    item("2026-03-08T04:59Z", { filtered: "marketing", level: "silent" }),
+    item("2026-03-09T04:00Z", { level: "digest", feedback: "useless" }),
+    item("2026-03-09T04:01Z", { kind: "digest", feedback: "useless", pushedAt: at }),
+    item("2026-03-09T04:02Z", { kind: "reminder", status: "read" }),
+  ];
+  const zero = { triggered: 0, passed: 0, pushed: 0, read: 0, useful: 0, useless: 0, digests: 0, reminders: 0 };
+  expect(funnel(notifications, "America/New_York", 3, { at, feishu: true })).toEqual({
+    timeZone: "America/New_York", precision: 2 / 3, days: [
+      { ...zero, date: "2026-03-07", triggered: 3, passed: 2, pushed: 1, read: 1, useful: 2 },
+      { ...zero, date: "2026-03-08" },
+      { ...zero, date: "2026-03-09", triggered: 1, passed: 1, useless: 1, digests: 1, reminders: 1 },
+    ],
+  });
+  expect(funnel(notifications, "America/New_York").days).toHaveLength(7);
+  expect(funnel(notifications, "America/New_York", 3)).toEqual(funnel(notifications, "America/New_York", 3, { at, feishu: true }));
+  expect(funnel(notifications, "America/New_York", 3, { at, feishu: false }).days[0]?.pushed).toBe(2);
+  expect(funnel([], "UTC", 7, { at })).toMatchObject({ precision: null, days: Array(7).fill(zero) });
 });

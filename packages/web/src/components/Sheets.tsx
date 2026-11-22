@@ -4,7 +4,7 @@ import { api } from "../api.ts";
 import { clock, compactNumber, pretty, seconds } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Markdown } from "../markdown.tsx";
-import type { Notification, Task, TranscriptItem, UsageRow } from "../types.ts";
+import type { Funnel, Notification, Task, TranscriptItem, UsageRow } from "../types.ts";
 import { StatusChip } from "./Panels.tsx";
 
 export function Sheet({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
@@ -124,8 +124,20 @@ export function NotificationsSheet({ items, onClose, onFeedback }: {
 }) {
   const t = useT();
   const ordered = [...items].sort((a, b) => b.at - a.at);
+  const [funnel, setFunnel] = useState<Funnel | null>(null);
+  useEffect(() => { api.funnel().then(setFunnel, () => {}); }, []);
+  const total = (key: "triggered" | "pushed" | "read" | "useful") => funnel?.days.reduce((sum, day) => sum + day[key], 0) ?? 0;
   return (
     <Sheet title={t.notifications} onClose={onClose}>
+      {funnel && total("triggered") > 0 && (
+        <div className="funnel" aria-label={t.funnel}>
+          <span className="funnel-label">{t.funnel}</span>
+          {(["triggered", "pushed", "read", "useful"] as const).map((key, i) => (
+            <span key={key}>{i > 0 && <i>→</i>}{t.funnelSteps[key]} <b>{total(key)}</b></span>
+          ))}
+          {funnel.precision !== null && <span className="funnel-precision">{t.precision} <b>{Math.round(funnel.precision * 100)}%</b></span>}
+        </div>
+      )}
       {ordered.length === 0 && <p className="empty">{t.emptyNotifications}</p>}
       <ul className="rows">
         {ordered.map(item => (

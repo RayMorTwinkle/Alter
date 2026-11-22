@@ -183,6 +183,9 @@ createServer(async (req, res) => {
   if (transcript) return json(res, 200, { items: transcripts[decodeURIComponent(transcript[1]!)] ?? [] });
   if (path === "/api/stop") { setBusy(false); return json(res, 204); }
   if (path === "/api/calendar") return json(res, 200, agenda());
+  if (path.startsWith("/api/funnel")) return json(res, 200, { timeZone: "Asia/Shanghai", precision: 0.75,
+    days: [{ date: "2026-11-21", triggered: 18, passed: 9, pushed: 2, read: 2, useful: 2, useless: 0, digests: 1, reminders: 1 },
+      { date: "2026-11-22", triggered: 23, passed: 12, pushed: 3, read: 2, useful: 1, useless: 1, digests: 1, reminders: 2 }] });
   if (path === "/api/memory") return json(res, 200, memory);
   const notice = /^\/api\/notifications\/(.+)$/.exec(path);
   if (notice) {

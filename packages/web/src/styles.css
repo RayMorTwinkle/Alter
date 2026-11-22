@@ -210,6 +210,11 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .agenda-day h3 { margin: 4px 4px 0; display: flex; gap: 8px; align-items: baseline; font-size: 13px; font-weight: 500; color: var(--muted); }
 .bell { position: relative; }
 .bell .badge { position: absolute; top: 0; right: -2px; min-width: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+.funnel { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 12px; margin-bottom: 8px; border-radius: var(--radius); background: var(--fill); font-size: 13px; color: var(--muted); }
+.funnel b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.funnel i { font-style: normal; margin-right: 10px; color: var(--faint); }
+.funnel-label { color: var(--ink-2); font-weight: 550; }
+.funnel-precision { margin-left: auto; }
 .notice { text-align: left; color: var(--ink); background: var(--paper); border-radius: var(--radius); padding: 10px 12px; border-left: 3px solid transparent; }
 .notice.unread { border-left-color: var(--accent); }
 .notice-title { font-size: 14px; font-weight: 550; }

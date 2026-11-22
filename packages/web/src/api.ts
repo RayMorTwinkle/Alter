@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, FeishuPairing, MemoryItem, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, FeishuPairing, Funnel, MemoryItem, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -34,6 +34,7 @@ export const api = {
   feishu: () => request<FeishuPairing>("/api/feishu"),
   disconnectFeishu: () => request<void>("/api/feishu/account/disconnect", { method: "POST", body: {} }),
   memory: () => request<MemoryItem[]>("/api/memory"),
+  funnel: (days = 7) => request<Funnel>(`/api/funnel?days=${days}`),
   updateNotification: (id: string, patch: { status?: "read"; feedback?: "useful" | "useless" }) =>
     request<void>(`/api/notifications/${encodeURIComponent(id)}`, { body: patch }),
   updateMemory: (id: string, patch: Partial<Pick<MemoryItem, "text" | "status">>) =>
