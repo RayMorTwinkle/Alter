@@ -256,3 +256,12 @@ it("rejects an unknown thinking level", () => {
   expect(() => gatewayConfig({ ALTER_LLM_BASE_URL: "http://x/v1", ALTER_LLM_API_KEY: "k", ALTER_MAIN_MODEL: "a/b",
     ALTER_TASK_MODEL: "a/b", ALTER_MAIN_THINKING: "extreme" })).toThrow(/ALTER_MAIN_THINKING/);
 });
+
+it("reads the configurable approval timeout in minutes", () => {
+  const env = { ALTER_LLM_BASE_URL: "http://x/v1", ALTER_LLM_API_KEY: "k", ALTER_MAIN_MODEL: "a/b", ALTER_TASK_MODEL: "a/b" };
+  expect(gatewayConfig(env).approvalTimeoutMs).toBe(86_400_000);
+  expect(gatewayConfig({ ...env, ALTER_APPROVAL_TIMEOUT_MINUTES: "0.5" }).approvalTimeoutMs).toBe(30_000);
+  for (const value of ["0", "-1", "never", "Infinity"]) {
+    expect(() => gatewayConfig({ ...env, ALTER_APPROVAL_TIMEOUT_MINUTES: value })).toThrow(/ALTER_APPROVAL_TIMEOUT_MINUTES/);
+  }
+});

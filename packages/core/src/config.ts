@@ -2,6 +2,15 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
+export const defaultApprovalTimeoutMs = 24 * 60 * 60_000;
+
+export function validateApprovalTimeout(ms: number) {
+  if (!Number.isSafeInteger(Date.now() + ms) || !Number.isSafeInteger(ms) || ms <= 0) {
+    throw new Error("Approval timeout must be a positive millisecond duration with a representable deadline (ALTER_APPROVAL_TIMEOUT_MINUTES)");
+  }
+  return ms;
+}
+
 const thinkingLevels: readonly ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -52,6 +61,8 @@ export function gatewayConfig(env = process.env) {
     apiKey: required("ALTER_LLM_API_KEY"),
     main: chain("ALTER_MAIN_MODEL"), task: chain("ALTER_TASK_MODEL"),
     thinking: { main: thinking("ALTER_MAIN_THINKING", "medium"), task: thinking("ALTER_TASK_THINKING", "high") },
+    approvalTimeoutMs: validateApprovalTimeout(env.ALTER_APPROVAL_TIMEOUT_MINUTES === undefined
+      ? defaultApprovalTimeoutMs : Number(env.ALTER_APPROVAL_TIMEOUT_MINUTES) * 60_000),
     firstTokenMs, dataDir: dataDirectory(env),
   };
 }

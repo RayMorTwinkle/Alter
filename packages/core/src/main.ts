@@ -6,6 +6,7 @@ import {
   GenerationTask, Harness, hook, hookTask, reply, ToolTask, type Conversation,
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
+import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
@@ -21,7 +22,7 @@ const mainInstructions = "你是 Alter 的主助手，负责与用户对话，�
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { plugins?: AlterPlugin[] } = {},
+  options: { plugins?: AlterPlugin[]; approvalTimeoutMs?: number } = {},
 ) {
   const demo = createDemoCapabilities();
   const plugins = options.plugins ?? [];
@@ -30,7 +31,8 @@ export async function openAlter(
   const tools = [...demo.tools, ...plugins.flatMap(plugin => plugin.tools)];
   const extension = defineExtension({ name: demo.extension.name, tools });
   const leasable = new Set(manifests.filter(cap => cap.mainLeasable).map(cap => cap.id));
-  const broker = createBroker(() => main, capabilities);
+  const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
+  const broker = createBroker(() => main, capabilities, timeout);
   const taskExtensions = [extension, TaskTools, broker];
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
@@ -50,7 +52,8 @@ export async function openAlter(
         const tasks = (await api.snapshot(Tasks, api.conversationId, ctx))?.byId ?? {};
         const requests = (await api.snapshot(Requests, api.conversationId, ctx))?.pending ?? {};
         const status = Object.entries(tasks).filter(([id]) => !taskId || id === taskId).map(([id, task]) => ({
-          taskId: id, ...task, pending: Object.values(requests).filter(request => request.taskId === id),
+          taskId: id, ...task, pending: Object.values(requests).filter(request => request.taskId === id)
+            .map(request => ({ ...request, remainingMs: Math.max(0, request.expiresAt - api.now()) })),
         }));
         return reply(JSON.stringify(status));
       },
@@ -121,6 +124,9 @@ export async function openAlter(
     const leases = await tx.doc(Leases, main.id);
     for (const id of Object.keys(leases.lastUsed)) if (!leasable.has(id)) delete leases.lastUsed[id];
     await updateOffered(tx, main.id, leases.lastUsed);
+    // Pre-timeout requests get one approval window at upgrade. On resume the runtime rechecks parked gates.
+    const requests = await tx.doc(Requests, main.id);
+    for (const request of Object.values(requests.pending)) request.expiresAt ??= Date.now() + timeout;
     const tasks = await tx.doc(Tasks, main.id);
     for (const [id, task] of Object.entries(tasks.byId)) {
       if (task.context === undefined || task.createdAt === undefined) {

@@ -16,6 +16,7 @@ type Request = {
   tool: string;
   reason: string;
   argumentsJson: string;
+  expiresAt: number;
 };
 type AuditEntry = {
   taskId: string;
@@ -40,6 +41,7 @@ async function deliver(tx: Tx, main: Conversation, audience: Audience, answer: A
   const { pending } = await tx.doc(Requests, main.id);
   const request = Object.hasOwn(pending, answer.requestId) ? pending[answer.requestId] : undefined;
   if (!request || request.audience !== audience) return reply("No pending request for this approver", true);
+  if (Date.now() >= request.expiresAt) return reply("Approval expired without a decision", true);
   const value = answer.note === undefined ? { allow: answer.allow } : { allow: answer.allow, note: answer.note };
   const result = await tx.signal(request.toolTask, Decision, request.id, value);
   return reply(result, result !== "delivered" && result !== "duplicate");
@@ -67,7 +69,7 @@ function describeCall({ manifests, toolActions }: CapabilityRegistry, name: stri
   return { capability: manifest.id, action: "request", effect };
 }
 
-export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry) {
+export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number) {
   return defineExtension({
     name: "alter.broker",
     hooks: [hook(ToolTask, {
@@ -97,9 +99,18 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           }
           if (signal) {
             delete requests.pending[requestId];
-            if ("expired" in signal || !signal.value.allow) {
+            if ("expired" in signal) {
+              const reason = "Approval expired without a decision";
+              await main.submit(tx, {
+                type: "input", whenBusy: "followUp", requestId: `expired-${requestId}`,
+                content: `Notify the user: task ${taskId}, request ${requestId} (${call.name}): ${reason}`,
+              });
               record("deny");
-              return { block: "expired" in signal ? "Request expired" : signal.value.note ?? "Permission denied" };
+              return { block: reason };
+            }
+            if (!signal.value.allow) {
+              record("deny");
+              return { block: signal.value.note ?? "Permission denied" };
             }
             record("allow");
             return;
@@ -120,7 +131,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             const reason = call.name === "request_capability" ? String(call.arguments.reason) : task.brief;
             requests.pending[requestId] = {
               id: requestId, toolTask: api.taskId, taskId, audience, reason, capability,
-              tool: call.name, argumentsJson: JSON.stringify(call.arguments),
+              expiresAt: api.now() + timeout, tool: call.name, argumentsJson: JSON.stringify(call.arguments),
             };
             if (audience === "main") {
               await main.submit(tx, {
@@ -130,7 +141,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             }
             record("park");
           }
-          return { sleep: { signals: [Decision.key(requestId)] } };
+          return { sleep: { until: requests.pending[requestId]!.expiresAt, signals: [Decision.key(requestId)] } };
         }, ctx);
       },
     })],

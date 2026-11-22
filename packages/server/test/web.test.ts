@@ -169,7 +169,8 @@ it.each([
     context: "fresh", brief: "send greeting", permission, status: "running", allow: [], pending: [request] });
   expect(task.createdAt).toBeGreaterThan(0);
   expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience,
-    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason });
+    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason, expiresAt: expect.any(Number) });
+  expect(request.expiresAt).toBeGreaterThan(task.createdAt);
   expect(feed.events).toContainEqual({ event: "tasks", data: [task] });
   const decide = () => web.post("/api/permissions/" + request.id, { allow: true, note: "OK" });
   if (audience === "main") {
