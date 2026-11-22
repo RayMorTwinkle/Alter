@@ -7,6 +7,7 @@ import {
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
+import { restoreTaint, Taint } from "./taint.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
@@ -112,15 +113,16 @@ export async function openAlter(
     models, registry, settings: { toolExecution: "sequential", retry: { enabled: false } },
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
-    extensions: [controlPlane, extension], modelTools: controls,
+    extensions: [controlPlane, extension, broker], modelTools: controls,
   } });
+  const legacyTaint = !(await harness.snapshot(Taint, main.id, context));
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases, granted capabilities and the conversational history.
   await main.commit(async tx => {
     const instructions = plugins.length
       ? mainInstructions + " 可派给任务的插件能力：" + plugins.map(p => p.capability.id).join("、") + "。"
       : mainInstructions;
-    await configure(tx, main.id, { model: mainModel, thinkingLevel: thinking.main, instructions });
+    await configure(tx, main.id, { extensions: [controlPlane, extension, broker], model: mainModel, thinkingLevel: thinking.main, instructions });
     const leases = await tx.doc(Leases, main.id);
     for (const id of Object.keys(leases.lastUsed)) if (!leasable.has(id)) delete leases.lastUsed[id];
     await updateOffered(tx, main.id, leases.lastUsed);
@@ -137,6 +139,7 @@ export async function openAlter(
       }
       if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: thinking.task });
     }
+    if (legacyTaint) await restoreTaint(tx, main.id, tasks.byId, capabilities);
   }, context);
   const host: PluginHost = {
     emit: event => main.commit(async tx => {

@@ -1,4 +1,4 @@
-# Web API 契约（v1.1）
+# Web API 契约（v1.2）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -48,11 +48,14 @@ type Task = {
 type PermissionRequest = {
   id: string;
   taskId: string;
+  // 主会话自己的租约审批使用 taskId = "main"，只出现在顶层 pending
   audience: "main" | "user";  // 只有 user 的请求在网页上可操作
   capability: string;
   tool: string;
   arguments: unknown;         // 解析后的参数
   reason: string;
+  tainted?: true;             // v1.2 新增，调用受污点规则约束
+  taint?: { source: string; capability: string; at: number }; // 首次不可信结果的工具名、能力和 Unix 毫秒时间
   expiresAt: number;          // v1.1 新增，截止时间（Unix 毫秒）
 };
 

@@ -13,8 +13,10 @@ import { createMailPlugin } from "../../plugin-mail/src/index.ts";
 import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugin-mail/test/fake.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
-import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { context, createRegistry, defineTool, Harness, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { Taint } from "../src/taint.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
+import { observeSurface, stopMainTurn } from "../src/observe.ts";
 import { unescapeNewlines } from "../src/tasks.ts";
 
 type Alter = Awaited<ReturnType<typeof openAlter>>;
@@ -121,8 +123,9 @@ async function parked(app: Alter) {
     const request = Object.values(requests?.pending ?? {})[0];
     if (!request) return;
     const task = (await app.harness.snapshot(Tasks, app.main.id, context))?.byId[request.taskId];
-    if (!task) return;
-    const live = await app.harness.snapshot(LiveDoc, task.conversationId, context);
+    const conversation = request.taskId === "main" ? app.main.id : task?.conversationId;
+    if (!conversation) return;
+    const live = await app.harness.snapshot(LiveDoc, conversation, context);
     if (live?.tools?.some(slot => slot.taskId === request.toolTask && slot.status === "sleeping")) return request;
   };
   await expect.poll(find).toBeDefined();
@@ -488,4 +491,164 @@ it("unescapes newlines only when a summary has none", () => {
   expect(unescapeNewlines("a\\n\\nb")).toBe("a\n\nb");
   expect(unescapeNewlines("a\nuse \\n in code")).toBe("a\nuse \\n in code");
   expect(unescapeNewlines("plain")).toBe("plain");
+});
+
+function externalPlugin() {
+  const actions = [{ name: "send", effect: "external-send" }, { name: "delete", effect: "irreversible" },
+    { name: "run", effect: "unknown" }] as const;
+  const execute = vi.fn(async () => reply("executed"));
+  const plugin: AlterPlugin = {
+    capability: { id: "remote", mainLeasable: true, actions: [{ name: "read", effect: "read" }, ...actions] },
+    tools: [
+      defineTool({ name: "remote_read", description: "Read external text", parameters: obj({}),
+        execute: async () => ({ ...reply("external text"), details: { untrusted: true } }) }),
+      ...actions.map(({ name }) => defineTool({ name: `remote_${name}`, description: name, parameters: obj({}), execute })),
+    ],
+  };
+  return { plugin, execute };
+}
+
+it.each(["send", "delete", "run"])("requires user approval for a tainted full task's remote_%s", async action => {
+  const { plugin, execute } = externalPlugin();
+  const tool = "remote_" + action;
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("read then act", "full");
+    if (text === "read then act") return call("remote_read", {});
+    if (last.role === "toolResult") {
+      if (last.toolName === "remote_read") return call("request_capability", { capability: "remote", reason: "use remote" });
+      if (last.toolName === "request_capability") return call(tool, {});
+      if (last.toolName === tool) return finish(text);
+    }
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  const surface = await observeSurface(app, () => {});
+  cleanup.push(async () => surface.detach());
+  await input(app, "delegate");
+  const request = await parked(app);
+  expect(request).toMatchObject({ audience: "user", tool, tainted: true,
+    taint: { source: "remote_read", capability: "remote", at: expect.any(Number) } });
+  expect(surface.snapshot().pending).toMatchObject([{ id: request.id, tainted: true, taint: request.taint }]);
+  expect(surface.snapshot().tasks[0]?.pending).toEqual(surface.snapshot().pending);
+  expect(execute).not.toHaveBeenCalled();
+  expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries).toContainEqual(
+    expect.objectContaining({ tool, decision: "park", tainted: true }));
+  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["executed"]);
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("propagates a mail report to main and into both fork and fresh tasks across SQLite reopens", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-taint-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const storage = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
+  const plugin = createMailPlugin(mailConfig, fakeMail().clients);
+  const route: Route = (text, last) => {
+    if (text === "read mail") return dispatch("search mail", "full");
+    if (text === "search mail") return call("mail_search", {});
+    if (last.role === "toolResult" && last.toolName === "mail_search") return finish("mail report");
+    if (text === "fork" || text === "fresh") return dispatch("send report", "full", [], text);
+    if (text === "send report") return call("outbox_send", { message: "report" });
+    if (last.role === "toolResult" && last.toolName === "outbox_send") return finish(text);
+    return say("OK");
+  };
+  const first = await open(route, await storage(), [plugin]);
+  await input(first, "read mail");
+  await expect.poll(async () => (await ledger(first)).length).toBe(1);
+  await first.main.waitForIdle(context);
+  const source = (await first.harness.snapshot(Taint, first.main.id, context))?.first;
+  expect(source).toEqual({ source: "mail_search", capability: "mail", at: expect.any(Number) });
+  await input(first, "fork");
+  const forked = await parked(first);
+  expect(forked).toMatchObject({ audience: "user", tainted: true, taint: source });
+  await first.close();
+  const app = await open(route, await storage(), [plugin]);
+  app.harness.resume();
+  const tasks = (await app.harness.snapshot(Tasks, app.main.id, context))!.byId;
+  for (const id of [app.main.id, ...Object.values(tasks).map(task => task.conversationId)]) {
+    expect((await app.harness.snapshot(Taint, id, context))?.first).toEqual(source);
+  }
+  expect(await parked(app)).toEqual(forked);
+  await answerUserPermission(app.main, { requestId: forked.id, allow: false });
+  await expect.poll(async () => (await ledger(app)).length).toBe(2);
+  await input(app, "fresh");
+  expect(await parked(app)).toMatchObject({ audience: "user", tool: "outbox_send", tainted: true, taint: source });
+  expect(app.demo.outbox).toEqual([]);
+});
+
+it("gates a leased main tool after an external result, including when the user stops the turn", async () => {
+  const { plugin, execute } = externalPlugin();
+  const app = await open(text => {
+    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "use remote" });
+    if (text === "read") return call("remote_read", {});
+    if (text === "send") return call("remote_send", {});
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "lease");
+  await input(app, "send");
+  expect(execute).toHaveBeenCalledTimes(1);
+  await input(app, "read");
+  await app.main.submit({ type: "input", content: "send" }, context);
+  const req = await parked(app);
+  expect(req).toMatchObject({ taskId: "main", audience: "user", tool: "remote_send", tainted: true,
+    taint: { source: "remote_read" } });
+  expect(execute).toHaveBeenCalledTimes(1);
+  await answerUserPermission(app.main, { requestId: req.id, allow: true });
+  await app.main.waitForIdle(context);
+  expect(execute).toHaveBeenCalledTimes(2);
+  await app.main.submit({ type: "input", content: "send" }, context);
+  await parked(app);
+  await stopMainTurn(app);
+  expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
+  expect(execute).toHaveBeenCalledTimes(2);
+});
+
+it("restores pre-tracking SQLite results and report propagation before any new dispatch", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-legacy-taint-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const storage = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
+  const legacy = await Harness.open(await storage(), { models: createModels(), registry: createRegistry() }, context);
+  const main = await legacy.root(context);
+  try {
+    await main.commit(async tx => {
+      const task = await tx.createConversation({ ownership: { kind: "ownerless" } });
+      (await tx.doc(Tasks, main.id)).byId["task-legacy"] = {
+        conversationId: task.id, brief: "read mail", createdAt: 1, context: "fresh", allow: [], permission: "full", status: "completed",
+      };
+      await tx.appendEntry(task.id, { kind: "pi.tool-result", model: [{ role: "toolResult", toolCallId: "legacy",
+        toolName: "remote_read", content: [{ type: "text", text: "mail" }], isError: false, timestamp: 2, details: { untrusted: true } }] });
+      await tx.appendEntry(main.id, { kind: "alter.task-report", data: { taskId: "task-legacy", at: 3 },
+        model: [{ role: "user", content: "task task-legacy finished: mail", timestamp: 3 }] });
+    }, context);
+  } finally { await legacy.close(context); }
+  const app = await open(text => {
+    if (text === "delegate") return dispatch("send", "full");
+    if (text === "send") return call("outbox_send", { message: "mail" });
+    return say("OK");
+  }, await storage(), [externalPlugin().plugin]);
+  await input(app, "delegate");
+  expect(await parked(app)).toMatchObject({ audience: "user", tainted: true, taint: { source: "remote_read", capability: "remote", at: 2 } });
+  expect(app.demo.outbox).toEqual([]);
+});
+
+it("withholds an external result if its taint cannot be persisted", async () => {
+  const observed: string[] = [];
+  const plugin: AlterPlugin = {
+    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },
+    tools: [defineTool({ name: "fixture_read", description: "Read external data", parameters: obj({}), execute: async () => {
+      vi.spyOn(app.main, "commit").mockRejectedValueOnce(new Error("storage unavailable"));
+      return { ...reply("untracked content"), details: { untrusted: true } };
+    } })],
+  };
+  const app: Alter = await open((text, last) => {
+    if (text === "delegate") return dispatch("read", "full");
+    if (text === "read") return call("fixture_read", {});
+    if (last.role === "toolResult" && last.toolName === "fixture_read") {
+      observed.push(text);
+      return finish(text);
+    }
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "delegate");
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  expect(observed).toEqual(["External content withheld because its source could not be recorded"]);
 });

@@ -5,6 +5,7 @@ import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, LiveDoc, reply,
   ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationId, type Extension, type ModelRef, type ModelThinkingLevel, type Tx, type YieldDecision,
 } from "./runtime.ts";
+import { inheritTaint } from "./taint.ts";
 import { Ledger, TaskIdentity, Tasks } from "./state.ts";
 
 const nonempty = str({ minLength: 1 });
@@ -42,6 +43,7 @@ const finish = defineTool({
       if (task.status === "completed") return;
       const ledger = await tx.doc(Ledger, main.id);
       const at = api.now();
+      await inheritTaint(tx, api.conversationId, main.id);
       await main.submit(tx, {
         entry: { kind: "alter.task-report", data: { taskId, at } },
         type: "input", whenBusy: "followUp", requestId: `report-${taskId}`, content: `task ${taskId} finished: ${summary}`,
@@ -104,6 +106,8 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
         const failure = receipt && "value" in receipt && receipt.value.status === "unanswered"
           ? receipt.value.reason : "No finish after the reminder limit";
         if (await failTask(tx, main.id, input.taskId, failure)) {
+          const task = (await tx.doc(Tasks, main.id)).byId[input.taskId]!;
+          await inheritTaint(tx, task.conversationId, main.id);
           await main.submit(tx, {
             entry: { kind: "alter.task-report", data: { taskId: input.taskId, at: runtime.now() } },
             type: "input", whenBusy: "followUp", requestId: `failure-${input.taskId}`,
@@ -149,6 +153,7 @@ export function dispatchTool(
           instructions: "Carry out the assigned brief. Call tools directly even when they need approval: the system pauses the call " +
             "and asks the approver, so never stop to ask for approval yourself. Request any missing capability. " + reminder,
         });
+        await inheritTaint(tx, api.conversationId, child.id);
         (await tx.doc(TaskIdentity, child.id)).taskId = taskId;
         tasks.byId[taskId] = {
           conversationId: child.id, brief: args.brief, context: args.context, createdAt: api.now(),
