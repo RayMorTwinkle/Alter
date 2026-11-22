@@ -29,7 +29,7 @@ async function setup() {
     const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
     calls.push({ method: req.method, url, bearer: req.headers.authorization, body });
     function respond(value: object) { res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(value)); }
-    if (url.pathname === "/oauth/v3/token") {
+    if (url.pathname === "/open-apis/authen/v2/oauth/token") {
       const refresh = body.grant_type === "refresh_token";
       if (refresh ? failRefresh : failExchange) return respond({ code: 20024, error: "invalid_grant" });
       return respond({ access_token: refresh ? "user-2" : "user-1", refresh_token: refresh ? "refresh-2" : "refresh-1", expires_in: 7200 });
@@ -100,7 +100,7 @@ it("uses the configured domain and callback, exchanges with PKCE, and rejects ex
   await expect(f.account.callback(failed, "code")).rejects.toThrow();
   expect(await f.account.callback(failed, "code")).toBe(false);
   expect(await f.account.status()).toEqual({ connected: true, name: "林" });
-  expect(f.calls.filter(c => c.url.pathname === "/oauth/v3/token")).toHaveLength(2);
+  expect(f.calls.filter(c => c.url.pathname === "/open-apis/authen/v2/oauth/token")).toHaveLength(2);
 });
 
 it("lists both chat types across pages, reads newest messages as untrusted data and sends text with the user's bearer", async () => {
