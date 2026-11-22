@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
-  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Tasks, type SurfaceEvent, type SurfaceState,
+  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Tasks, type MemoryItem, type SurfaceEvent, type SurfaceState,
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import type { FeishuPairing } from "@alter/plugin-feishu";
@@ -16,7 +16,7 @@ import { createCalendarPlugin } from "@alter/plugin-calendar";
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 
-async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false, feishu?: { pairing(): FeishuPairing }) {
+async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false, feishu?: { pairing(): FeishuPairing }, now = Date.now) {
   const gateway = await fakeGateway(route);
   cleanup.push(gateway.close);
   const dir = await mkdtemp(join(tmpdir(), "alter-web-"));
@@ -28,8 +28,8 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
   async function open() {
     const calendar = withCalendar ? createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" }) : undefined;
     const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel, {},
-      { plugins: calendar ? [calendar] : [] });
-    cleanup.push(() => app.harness.close(context));
+      { plugins: calendar ? [calendar] : [], now });
+    cleanup.push(app.close);
     const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, calendar, feishu });
     cleanup.push(web.close);
     web.server.listen(0, "127.0.0.1");
@@ -51,14 +51,14 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
     const read = (path: string) => fetch(base + path, { headers: { cookie } });
     return {
       app, post, read, login, base, dist, dir, sessionCookie: () => cookie,
-      async close() { await web.close(); await app.harness.close(context); },
+      async close() { await web.close(); await app.close(); },
       async state(): Promise<SurfaceState> { return (await read("/api/state")).json(); },
     };
   }
   return { ...await open(), reopen: open };
 }
 
-type Event = SurfaceEvent | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown };
+type Event = SurfaceEvent | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
 
 async function stream(read: (path: string) => Promise<Response>) {
   const response = await read("/api/events");
@@ -316,4 +316,46 @@ it("exposes the current Feishu pairing only to authenticated clients", async () 
   expect(await response.json()).toEqual(state);
   state = { paired: true };
   expect(await (await web.read("/api/feishu")).json()).toEqual(state);
+});
+
+it("authenticates memory routes and streams full lists for tool writes, expiry and web edits", async () => {
+  let at = 100;
+  const web = await setup(({ messages }, res) => {
+    if (messages.at(-1)?.content?.endsWith("\n记下")) return toolCall(res, "memory_save", { kind: "goal", text: "考试", due: 101 });
+    say(res, "已记录");
+  }, false, undefined, () => at);
+  const edit = (method: string, id: string, value?: unknown) => fetch(web.base + "/api/memory/" + id, {
+    method, headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value),
+  });
+  expect((await web.read("/api/memory")).status).toBe(401);
+  expect((await edit("PATCH", "1", { text: "test" })).status).toBe(401);
+  expect((await edit("DELETE", "1")).status).toBe(401);
+  await web.login();
+  expect(await (await web.read("/api/memory")).json()).toEqual([]);
+  const feed = await stream(web.read);
+  const profile = web.app.memory.save({ kind: "profile", text: "用中文回答" });
+  await web.post("/api/messages", { text: "记下" });
+  await feed.seen(e => e.event === "memory" && e.data.length === 2 && e.data[0]?.status === "active");
+  const [goal, other] = await (await web.read("/api/memory")).json() as MemoryItem[];
+  expect(other?.id).toBe(profile);
+  expect(goal).toMatchObject({ kind: "goal", text: "考试", due: 101 });
+  at = 102;
+  const expired = await (await web.read("/api/memory")).json();
+  expect(expired[0]).toMatchObject({ id: goal!.id, status: "pending", updatedAt: at });
+  await feed.seen(e => e.event === "memory" && e.data[0]?.status === "pending");
+  for (const invalid of [{}, { text: " " }, { status: "bad" }, { due: "123" }, { kind: "fact" }]) {
+    expect((await edit("PATCH", goal!.id, invalid)).status).toBe(400);
+  }
+  expect((await edit("PATCH", profile, { due: 205 })).status).toBe(400);
+  expect((await edit("PATCH", goal!.id, { text: "期末考试", status: "active", due: 200 })).status).toBe(204);
+  await feed.seen(e => e.event === "memory" && e.data.length === 2 && e.data[0]?.text === "期末考试" && e.data[0]?.due === 200);
+  expect((await edit("DELETE", profile)).status).toBe(204);
+  await feed.seen(e => e.event === "memory" && e.data.length === 1 && e.data[0]?.id === goal!.id);
+  expect((await edit("PATCH", profile, { text: "已删除" })).status).toBe(404);
+  expect((await edit("DELETE", profile)).status).toBe(404);
+  await web.app.main.waitForIdle(context);
+  await web.close();
+  const reopened = await web.reopen();
+  await reopened.login();
+  expect(await (await reopened.read("/api/memory")).json()).toEqual([{ ...goal, text: "期末考试", status: "active", due: 200, updatedAt: at }]);
 });

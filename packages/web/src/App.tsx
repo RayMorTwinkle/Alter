@@ -1,9 +1,10 @@
-import { CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
+import { Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
 import { useCallback, useEffect, useReducer, useState } from "react";
 import { api, connect, Unauthorized } from "./api.ts";
 import { AgendaPanel } from "./components/Agenda.tsx";
 import { Chat } from "./components/Chat.tsx";
 import { Login } from "./components/Login.tsx";
+import { MemoryPanel } from "./components/Memory.tsx";
 import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx";
 import { TaskSheet, UsageSheet } from "./components/Sheets.tsx";
 import { I18n, useT } from "./i18n.tsx";
@@ -11,7 +12,7 @@ import { initialState, reduce, userPending } from "./store.ts";
 import { defaultLocale, strings, type Locale } from "./strings.ts";
 
 type Auth = "checking" | "out" | "in";
-type Tab = "chat" | "tasks" | "approvals" | "agenda" | "ledger";
+type Tab = "chat" | "tasks" | "approvals" | "agenda" | "memory" | "ledger";
 
 export function App() {
   const [locale, setLocale] = useState<Locale>(defaultLocale);
@@ -88,6 +89,8 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
     tasks: <TasksPanel tasks={state.tasks} leases={state.leases} onOpen={setOpenTask} />,
     approvals: <ApprovalsPanel pending={state.pending} onAnswer={onAnswer} />,
     agenda: state.agenda && <AgendaPanel agenda={state.agenda} />,
+    memory: <MemoryPanel items={state.memory}
+      onUpdate={(id, patch) => guard(() => api.updateMemory(id, patch))} onDelete={id => guard(() => api.deleteMemory(id))} />,
     ledger: <LedgerPanel ledger={state.ledger} onOpen={setOpenTask} />,
   };
   const tabs: { id: Tab; label: string; icon: typeof ChatCircle; count?: number }[] = [
@@ -95,6 +98,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
     { id: "tasks", label: t.tasks, icon: ListChecks, count: state.tasks.filter(task => task.status === "running").length },
     { id: "approvals", label: t.approvals, icon: SealCheck, count: waiting },
     ...state.agenda ? [{ id: "agenda" as const, label: t.agenda, icon: CalendarBlank }] : [],
+    { id: "memory", label: t.memory, icon: Brain, count: state.memory.filter(item => item.status === "pending").length },
     { id: "ledger", label: t.ledger, icon: Notebook },
   ];
 

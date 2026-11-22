@@ -20,12 +20,12 @@ export type TranscriptItem =
 const inputKind = "alter.user-input";
 
 const defaultClock = inputClock();
-// Keep the public submitMessage(main, text) API while each open host supplies its own clock.
-export const mainClocks = new WeakMap<Conversation, typeof defaultClock>();
+// Keep the public submitMessage(main, text) API while each open host supplies the model input prefix.
+export const mainInputContext = new WeakMap<Conversation, typeof defaultClock>();
 
 export async function submitMessage(main: Conversation, text: string, source = "web", requestId?: string) {
   const id = requestId ?? randomUUID();
-  const { at, prefix } = (mainClocks.get(main) ?? defaultClock)();
+  const { at, prefix } = (mainInputContext.get(main) ?? defaultClock)();
   await main.submit({ type: "input", requestId, content: prefix + "\n" + text, whenBusy: "followUp",
     entry: { kind: inputKind, data: { id, at, text, source } } }, context);
   return id;

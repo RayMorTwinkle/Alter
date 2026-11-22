@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, context, observeSurface, readTranscript, stopMainTurn, submitMessage,
-  Tasks, usageSummary, type AlterApp,
+  MemoryInputError, Tasks, usageSummary, type AlterApp,
 } from "@alter/core";
 import type { FeishuPairing } from "@alter/plugin-feishu";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
@@ -93,7 +93,10 @@ export async function createWebServer(app: AlterApp, options: { password: string
     } else if (method === "GET" && path === "/api/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" });
       clients.set(res, token!);
-      res.on("close", () => clients.delete(res));
+      const stopMemory = app.memory.subscribe(items => {
+        if (clients.has(res)) write(res, frame("memory", items));
+      });
+      res.on("close", () => { clients.delete(res); stopMemory(); });
       write(res, frame("snapshot", surface.snapshot()));
       if (surface.partial) write(res, frame("delta", surface.partial));
       return;
@@ -116,6 +119,12 @@ export async function createWebServer(app: AlterApp, options: { password: string
       return json(res, 200, { items: await readTranscript(conversation) });
     } else if (method === "POST" && path === "/api/stop") {
       await stopMainTurn(app);
+    } else if (method === "GET" && path === "/api/memory") {
+      return json(res, 200, app.memory.list());
+    } else if ((method === "PATCH" || method === "DELETE") && /^\/api\/memory\/[^/]+$/.test(path)) {
+      const id = path.split("/")[3]!;
+      const found = method === "PATCH" ? app.memory.update(id, await body(req)) : app.memory.delete(id);
+      if (!found) throw new HttpError(404, "Unknown memory");
     } else if (method === "GET" && path === "/api/calendar" && calendar) {
       return json(res, 200, agenda());
     } else if (method === "GET" && path === "/api/feishu" && options.feishu) {
@@ -127,7 +136,8 @@ export async function createWebServer(app: AlterApp, options: { password: string
   }
 
   const server = createServer((req, res) => {
-    handle(req, res).catch((error: unknown) => {
+    handle(req, res).catch((cause: unknown) => {
+      const error = cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);
       if (res.headersSent) { res.destroy(); return; }
       if (error instanceof HttpError) json(res, error.status, { error: error.message });

@@ -1,5 +1,5 @@
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
-import { type CapabilityRegistry, type Effect } from "./capabilities.ts";
+import { type CapabilityRegistry, type Effect, type ToolAction } from "./capabilities.ts";
 import {
   context, conversationDoc, defineExtension, defineSignal, defineTool, hook, reply, ToolTask,
   type Conversation, type TaskId, type Tx,
@@ -70,7 +70,7 @@ export function mainApprovalTool(main: () => Conversation) {
 }
 
 const riskOrder: Effect[] = ["read", "write-local", "external-send", "irreversible", "unknown"];
-function describeCall({ manifests, toolActions }: CapabilityRegistry, name: string, args: Record<string, unknown>) {
+function describeCall({ manifests, toolActions }: CapabilityRegistry, name: string, args: Record<string, unknown>): ToolAction | undefined {
   if (name === "finish") return { capability: "task", action: "finish", effect: "write-local" as const };
   if (name !== "request_capability") return toolActions.get(name);
   const manifest = manifests.find(item => item.id === args.capability);
@@ -81,7 +81,7 @@ function describeCall({ manifests, toolActions }: CapabilityRegistry, name: stri
 
 function approver(permission: Permission, tool: string, listed: boolean, risky: boolean, tainted: boolean): Audience | undefined {
   if (tool === "finish") return;
-  if (tool !== "request_capability" && risky && tainted) return "user";
+  if (tainted) return "user";
   if (permission === "full") return;
   if (risky && (tool !== "request_capability" || permission === "auto")) return "user";
   if (permission === "restricted" && !listed) return "main";
@@ -107,7 +107,8 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         return main.commit(async tx => {
           const task = (await tx.doc(Tasks, main.id)).byId[taskId];
           const risky = effect === "external-send" || effect === "irreversible" || effect === "unknown";
-          const taint = risky && call.name !== "request_capability" ? (await tx.doc(Taint, api.conversationId)).first : undefined;
+          const taint = (risky || descriptor?.guarded) && call.name !== "request_capability"
+            ? (await tx.doc(Taint, api.conversationId)).first : undefined;
           const audit = await tx.doc(Audit, main.id);
           const requests = await tx.doc(Requests, main.id);
           function record(decision: AuditEntry["decision"]) {
@@ -157,7 +158,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             return;
           }
           if (audience && !requests.pending[requestId]) {
-            const reason = call.name === "request_capability" ? String(call.arguments.reason) : task?.brief ?? "Main session tool lease";
+            const reason = call.name === "request_capability" ? String(call.arguments.reason) : task?.brief ?? "Main session tool call";
             requests.pending[requestId] = {
               id: requestId, toolTask: api.taskId, taskId, audience, reason, capability,
               ...(taint && { tainted: true as const, taint: { ...taint } }),

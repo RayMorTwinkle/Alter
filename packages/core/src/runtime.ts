@@ -1,5 +1,7 @@
 // Keep the experimental runtime's imports and shared document conventions here.
-import { defineDoc, type JsonObject } from "@earendil-works/pi-durable";
+import { dirname, resolve } from "node:path";
+import { openNodeSqliteStorage as openSqlite } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { defineDoc, type JsonObject, type Storage } from "@earendil-works/pi-durable";
 export type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export {
@@ -9,8 +11,15 @@ export {
   type Conversation, type ConversationDocToken, type ConversationId, type Cursor, type EntryRecord, type JsonObject, type LiveState, type InboxState, type Extension, type HarnessOptions, type ModelRef,
   type Storage, type TaskId, type ToolRegistration, type Tx, type YieldDecision,
 } from "@earendil-works/pi-durable";
-export { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 export { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+
+// Storage itself exposes no path. Keep sibling databases with the host that opened it.
+export const storageDirectories = new WeakMap<Storage, string>();
+export async function openNodeSqliteStorage(path: string, options?: Parameters<typeof openSqlite>[1]) {
+  const storage = await openSqlite(path, options);
+  if (path && path !== ":memory:") storageDirectories.set(storage, dirname(resolve(path)));
+  return storage;
+}
 
 export function conversationDoc<T extends JsonObject>(name: string, initial: () => T) {
   return defineDoc<T>({

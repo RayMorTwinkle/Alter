@@ -1,4 +1,4 @@
-# Web API 契约（v1.4）
+# Web API 契约（v1.5）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -70,6 +70,16 @@ type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt
 type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
 
+type MemoryItem = {
+  id: string;
+  kind: "profile" | "goal" | "fact";
+  text: string;
+  due?: number;
+  status: "active" | "done" | "pending";
+  createdAt: number;
+  updatedAt: number;
+};
+
 type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
 
 type TranscriptItem =
@@ -90,7 +100,12 @@ type TranscriptItem =
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
 | `GET` | `/api/feishu` | `FeishuPairing`（v1.4）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
 | `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
+| `GET` | `/api/memory` | `MemoryItem[]`，按 `updatedAt` 倒序。读取时将已过期的 active 目标转为 pending |
+| `PATCH` | `/api/memory/:id` | 请求至少含 `text`、`status`、`due` 之一 → `204`。期限仅适用于目标，使用 Unix 毫秒，传 `null` 可清除。字段无效返回 `400`，记忆不存在返回 `404` |
+| `DELETE` | `/api/memory/:id` | 删除记忆 → `204`；记忆不存在返回 `404` |
 | `GET` | `/api/events` | SSE，见下 |
+
+v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直接执行。
 
 `timeline` 返回最近 200 条；更早的用 `GET /api/state?before=<id>` 分页（v1 可不实现）。
 
@@ -107,6 +122,7 @@ type TranscriptItem =
 | `pending` | `PermissionRequest[]` | 待审批列表整体替换 |
 | `ledger` | `LedgerEntry[]` | 账本整体替换 |
 | `busy` | `{ busy: boolean }` | 主会话是否在生成 |
+| `memory` | `MemoryItem[]` | v1.5：工具写入、网页修改或删除、读取触发过期转换后推送全量列表。首次连接与重连后请求 `GET /api/memory` 获取当前列表 |
 | `calendar` | `Agenda` | v1.3：日程变化时整体替换。不包含在 `snapshot` 中，重连后前端重新请求 `/api/calendar` |
 
 每 20 秒发一次注释行 `: ping` 保活。前端断线后用 `EventSource` 自动重连，并以收到的 `snapshot` 为准重建状态。

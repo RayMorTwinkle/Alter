@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.4).
+// Mirrors docs/architecture/web-api.md (v1.5).
 
 export type TimelineItem = {
   id: string;
@@ -34,6 +34,16 @@ export type Task = {
   conversationId: string;
   createdAt: number;
   pending: PermissionRequest[];
+};
+
+export type MemoryItem = {
+  id: string;
+  kind: "profile" | "goal" | "fact";
+  text: string;
+  due?: number;
+  status: "active" | "done" | "pending";
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };

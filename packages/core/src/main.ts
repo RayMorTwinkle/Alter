@@ -3,12 +3,13 @@ import { createBroker, mainApprovalTool, Requests } from "./broker.ts";
 import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type ExternalEvent, type PluginHost } from "./capabilities.ts";
 import {
   configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
-  GenerationTask, Harness, hook, hookTask, reply, ToolTask, type Conversation,
+  GenerationTask, Harness, hook, hookTask, reply, storageDirectories, ToolTask, type Conversation,
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
 import { inputClock } from "./clock.ts";
-import { mainClocks } from "./timeline.ts";
+import { createMemory } from "./memory.ts";
+import { mainInputContext } from "./timeline.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
@@ -21,11 +22,12 @@ export const leaseWindow = 30;
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number } = {},
+  options: { dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number } = {},
 ) {
   const leasing = options.leasing ?? true;
   const clock = inputClock(options.timeZone, options.now);
-  const plugins = options.plugins ?? [];
+  const memory = createMemory(options.dataDir ?? storageDirectories.get(storage), options.now);
+  const plugins: AlterPlugin[] = [memory, ...(options.plugins ?? [])];
   const capabilities = createCapabilityRegistry(plugins, options.demos ?? true);
   const demo = createDemoCapabilities(capabilities.activeDemos);
   const descriptions: Record<string, string> = {
@@ -36,6 +38,7 @@ export async function openAlter(
   const leasable = new Set(capabilities.manifests.filter(cap => leasing && cap.mainLeasable).map(cap => cap.id));
   const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
     (leasable.has("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
+    "用户说出长期偏好、目标（有期限时一并保存）或重要事实时，用 memory_save 记下；一次性的事不要记。" +
     `多步或探索性工作用 dispatch_task 派单，可用能力有 ${available.join("、")}。` +
     "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
   const { toolActions } = capabilities;
@@ -46,11 +49,11 @@ export async function openAlter(
   const taskExtensions = [extension, TaskTools, broker];
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
-    const leased = tools.filter(tool => {
+    const offered = tools.filter(tool => {
       const id = toolActions.get(tool.name)!.capability;
-      return leasable.has(id) && Object.hasOwn(lastUsed, id);
+      return id === "memory" || (leasable.has(id) && Object.hasOwn(lastUsed, id));
     });
-    await configure(tx, id, { modelTools: [...controls, ...leased] });
+    await configure(tx, id, { modelTools: [...controls, ...offered] });
   }
 
   const controls: ToolRegistration[] = [
@@ -75,6 +78,7 @@ export async function openAlter(
       name: "enable_tool", description: "Lease a main-leasable capability for direct use.",
       parameters: obj({ capability: str(), reason: str({ minLength: 1 }) }), replay: "safe",
       async execute({ capability }, api, ctx) {
+        if (capability === "memory") return reply("Memory is always available");
         if (!leasable.has(capability)) return reply("Capability is not leasable", true);
         await api.commit(async tx => {
           const leases = await tx.doc(Leases, api.conversationId);
@@ -116,7 +120,7 @@ export async function openAlter(
       hook(GenerationTask, { afterRun: () => ({ tasks: [hookTask(AdvanceLeases, null)] }) }),
       hook(ToolTask, { async beforeTool(call, _, ctx) {
         const action = toolActions.get(call.name);
-        if (!action) return;
+        if (!action || action.capability === "memory") return;
         return main.commit(async tx => {
           const leases = await tx.doc(Leases, main.id);
           if (!leasable.has(action.capability) || !Object.hasOwn(leases.lastUsed, action.capability)) return { block: "No active lease" };
@@ -175,6 +179,10 @@ export async function openAlter(
     await shutdown();
     throw error;
   }
-  mainClocks.set(main, clock);
-  return { harness, main, demo, capabilities, events: host, close: () => closing ??= shutdown() };
+  mainInputContext.set(main, () => {
+    const stamp = clock();
+    const summary = memory.summary();
+    return { at: stamp.at, prefix: summary ? stamp.prefix + "\n" + summary : stamp.prefix };
+  });
+  return { harness, main, demo, memory, capabilities, events: host, close: () => closing ??= shutdown() };
 }

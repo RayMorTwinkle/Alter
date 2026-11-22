@@ -70,8 +70,9 @@ async function incoming(app: Alter) {
   return page.items.flatMap(entry => (entry.model ?? []).flatMap(msg => msg.role === "user" ? [contentText(msg.content)] : []));
 }
 
-const controls = ["answer_permission_request", "dispatch_task", "enable_tool", "task_status"];
-const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", "notes_read", "outbox_send", "request_capability"];
+const memoryTools = ["memory_delete", "memory_save", "memory_search", "memory_update"];
+const controls = ["answer_permission_request", "dispatch_task", "enable_tool", ...memoryTools, "task_status"];
+const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send", "request_capability"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
   const dir = await mkdtemp(join(tmpdir(), "alter-no-demos-"));
@@ -86,12 +87,12 @@ it("offers only real plugins when demos are off, so no simulated send exists", a
     if (text === "look") { taskSeen = tools; return finish("done"); }
     return say("ok");
   }, new MemoryStorage(), [createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" })], undefined, {}, false);
-  expect(app.capabilities.manifests.map(cap => cap.id)).toEqual(["calendar"]);
+  expect(app.capabilities.manifests.map(cap => cap.id)).toEqual(["memory", "calendar"]);
   await input(app, "go");
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(system).toContain("calendar（日历");
   expect(system).not.toMatch(/outbox|notes|示例/);
-  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "finish", "request_capability"]);
+  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "finish", ...memoryTools, "request_capability"]);
 });
 
 it("dispatches a fresh notes task and delivers its ledger summary to the main model", async () => {
@@ -825,4 +826,65 @@ it("stamps each model input at submission or dispatch and preserves the original
   expect(history.snapshot().timeline.find(item => item.id === id)?.text).toBe(raw);
   const child = await app.harness.conversation(task!.conversationId, context);
   expect(await readTranscript(child!)).toContainEqual({ kind: "user", text: "查日历", at: expect.any(Number) });
+});
+
+it("adds only profiles and current or pending goals between the clock and the original user text", async () => {
+  let at = 100;
+  const app = await open(() => say("OK"), new MemoryStorage(), [], undefined, { now: () => at }, false);
+  const { memory } = app;
+  expect(memory.summary()).toBe("");
+  const old = memory.save({ kind: "profile", text: "旧画像" });
+  memory.update(old, { status: "done" });
+  memory.save({ kind: "fact", text: "私人事实" });
+  const done = memory.save({ kind: "goal", text: "已完成目标" });
+  memory.update(done, { status: "done" });
+  memory.save({ kind: "goal", text: "参加考试", due: at });
+  at++;
+  memory.save({ kind: "goal", text: "找实习" });
+  at++;
+  memory.save({ kind: "profile", text: "回答简短" });
+  const raw = "今天安排什么？";
+  await submitMessage(app.main, raw);
+  await app.main.waitForIdle(context);
+  const content = (await incoming(app)).at(-1)!;
+  expect(content).toMatch(/^\[当前时间 [^\n]+\]\n\[记忆摘要\]/);
+  expect(content).toMatch(/目标（已过期，待确认）.*参加考试/);
+  expect(content.indexOf("回答简短")).toBeLessThan(content.indexOf("找实习"));
+  expect(content).toContain("旧画像");
+  expect(content).not.toMatch(/私人事实|已完成目标/);
+  expect(content.endsWith("\n" + raw)).toBe(true);
+  expect(await readTranscript(app.main)).toContainEqual({ kind: "user", text: raw, at: expect.any(Number) });
+  at++;
+  memory.save({ kind: "profile", text: "习".repeat(2000) });
+  await submitMessage(app.main, raw);
+  await app.main.waitForIdle(context);
+  const capped = (await incoming(app)).at(-1)!.split("\n").slice(1, -1).join("\n");
+  expect(capped).toHaveLength(1200);
+});
+
+it("lets a tainted main search memory but requires a separate user decision for each write", async () => {
+  let id = "";
+  const app = await open((text, last) => {
+    if (last.role !== "user") return say("OK");
+    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "read" });
+    if (text === "read") return call("remote_read", {});
+    if (text === "search") return call("memory_search", { query: "考试" });
+    if (text === "save") return call("memory_save", { kind: "goal", text: "考试" });
+    if (text === "update") return call("memory_update", { id, text: "参加考试" });
+    return call("memory_delete", { id });
+  }, new MemoryStorage(), [externalPlugin().plugin], undefined, {}, false);
+  await input(app, "lease");
+  await input(app, "read");
+  await input(app, "search");
+  for (const action of ["save", "update", "delete"]) {
+    await app.main.submit({ type: "input", content: action }, context);
+    const request = await parked(app);
+    expect(request).toMatchObject({ taskId: "main", audience: "user", tool: "memory_" + action,
+      tainted: true, taint: { source: "remote_read" } });
+    expect(app.memory.list().map(item => item.text)).toEqual(action === "save" ? [] : [action === "update" ? "考试" : "参加考试"]);
+    await answerUserPermission(app.main, { requestId: request.id, allow: action !== "delete" });
+    await app.main.waitForIdle(context);
+    id = app.memory.list()[0]!.id;
+  }
+  expect(app.memory.list()).toMatchObject([{ id, text: "参加考试" }]);
 });
