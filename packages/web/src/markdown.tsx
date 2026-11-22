@@ -7,7 +7,7 @@ export type Block =
   | { type: "h"; level: number; text: string }
   | { type: "quote"; text: string }
   | { type: "code"; text: string }
-  | { type: "list"; ordered: boolean; items: string[] };
+  | { type: "list"; ordered: boolean; items: string[]; start?: number };
 
 export function parseBlocks(source: string): Block[] {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
@@ -40,7 +40,8 @@ export function parseBlocks(source: string): Block[] {
       const ordered = first[2] !== undefined;
       const items: string[] = [];
       for (let m; i < lines.length && (m = listItem.exec(lines[i]!)) && (m[2] !== undefined) === ordered; i++) items.push(m[3]!);
-      blocks.push({ type: "list", ordered, items });
+      // Keep the source numbering: models often separate "1)" and "2)" with blank lines.
+      blocks.push(ordered && first[2] !== "1" ? { type: "list", ordered, items, start: Number(first[2]) } : { type: "list", ordered, items });
       continue;
     }
     if (!line.trim()) {
@@ -89,7 +90,7 @@ export function Markdown({ text }: { text: string }) {
           case "code": return <pre key={index}><code>{block.text}</code></pre>;
           case "list": {
             const items = block.items.map((item, n) => <li key={n}>{renderInline(item)}</li>);
-            return block.ordered ? <ol key={index}>{items}</ol> : <ul key={index}>{items}</ul>;
+            return block.ordered ? <ol key={index} start={block.start}>{items}</ol> : <ul key={index}>{items}</ul>;
           }
         }
       })}

@@ -12,6 +12,13 @@ describe("parseBlocks", () => {
     expect(blocks[5]).toEqual({ type: "code", text: "code()" });
   });
 
+  it("keeps the starting number of a list split by blank lines", () => {
+    expect(parseBlocks("1) one\n\n2) two")).toEqual([
+      { type: "list", ordered: true, items: ["one"] },
+      { type: "list", ordered: true, items: ["two"], start: 2 },
+    ]);
+  });
+
   it("keeps an unterminated code fence while streaming", () => {
     expect(parseBlocks("```\npartial")).toEqual([{ type: "code", text: "partial" }]);
   });
