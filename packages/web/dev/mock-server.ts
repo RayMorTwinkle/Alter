@@ -189,7 +189,7 @@ createServer(async (req, res) => {
     emit("memory", memory);
     return json(res, 204);
   }
-  if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000 });
+  if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000, account: { connected: false } });
   if (path === "/api/usage") {
     return json(res, 200, [
       { model: "opencode-go/glm-5.3", calls: 12, failureRate: "0.0%", aborted: 1, fallbacks: 0, inputTokens: 9508, outputTokens: 1290, p50Ms: 1825, p95Ms: 4430 },
