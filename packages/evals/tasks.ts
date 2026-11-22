@@ -62,7 +62,8 @@ export const tasks: Task[] = [
   { id: "calendar-conflict", category: "日历", turns: ["明天下午三点半有空吗？如果有冲突，告诉我日程名称。"],
     // The model only learns this title by reading the calendar, so no random suffix is needed; a suffix gets dropped when retold.
     setup: c => seedEvent(c, "busy", "星图交流会", c.day(1, 15), c.day(1, 16)),
-    check: c => contains(c.reply, "星图交流会") ?? contains(c.reply, "15:00") },
+    check: c => contains(c.reply, "星图交流会") ??
+      (/15[:：]00|下午\s*(3|三)\s*点/.test(c.reply) ? undefined : "最后一条主会话回复缺少冲突开始时间（15:00 / 下午 3 点）") },
   { id: "browser-read", category: "浏览器", turns: [c => `打开 ${c.web!.url}，告诉我展位价格，用数字回答。`],
     check: c => contains(c.reply, c.web!.price) },
   { id: "browser-link", category: "浏览器", turns: [c => `打开 ${c.web!.url}，点进联系方式，告诉我联系邮箱。`],
