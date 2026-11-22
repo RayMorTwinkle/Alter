@@ -103,7 +103,7 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   await web.login();
   expect((await web.post("/api/messages", { text: "no" }, "text/plain")).status).toBe(415);
   expect((await web.post("/api/messages", { text: " " })).status).toBe(400);
-  const state = { timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state = { timeline: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   expect(await web.state()).toEqual(state);
   expect((await web.read("/api/feishu")).status).toBe(404);
   const feed = await stream(web.read);
@@ -446,4 +446,28 @@ it("authenticates memory routes and streams full lists for tool writes, expiry a
   const reopened = await web.reopen();
   await reopened.login();
   expect(await (await reopened.read("/api/memory")).json()).toEqual([{ ...goal, text: "期末考试", status: "active", due: 200, updatedAt: at }]);
+});
+
+it("publishes the notification list and persists independent read and feedback updates", async () => {
+  const now = Date.parse("2026-11-22T02:00:00Z");
+  const web = await setup(undefined, false, undefined, () => now);
+  expect((await web.post("/api/notifications/missing", { status: "read" })).status).toBe(401);
+  await web.login();
+  const feed = await stream(web.read);
+  await web.app.scheduler.create({ kind: "reminder", at: new Date(now).toISOString(), text: "出门" });
+  await feed.seen(event => event.event === "notifications" && event.data[0]?.body === "出门");
+  const [item] = (await web.state()).notifications;
+  const path = "/api/notifications/" + item!.id;
+  for (const patch of [{}, { title: "changed" }, { status: "unread" }, { feedback: "bad" }]) {
+    expect((await web.post(path, patch)).status).toBe(400);
+  }
+  expect((await web.post("/api/notifications/missing", { status: "read" })).status).toBe(404);
+  for (const patch of [{ feedback: "useless" }, { status: "read" }, { status: "read", feedback: "useful" }]) {
+    expect((await web.post(path, patch)).status).toBe(204);
+  }
+  await feed.seen(event => event.event === "notifications" && event.data[0]?.feedback === "useful");
+  await web.close();
+  const next = await web.reopen();
+  await next.login();
+  expect((await next.state()).notifications).toEqual([{ ...item, status: "read", feedback: "useful" }]);
 });

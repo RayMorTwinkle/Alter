@@ -1,9 +1,13 @@
 // A contract-faithful fake of packages/server for UI work (docs/architecture/web-api.md). Password: "alter".
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AgendaEvent, LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem, TranscriptItem } from "../src/types.ts";
+import type { AgendaEvent, LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem, TranscriptItem, Notification } from "../src/types.ts";
 
 const port = Number(process.env.PORT ?? 4318);
 const now = Date.now();
+const notifications: Notification[] = [
+  { id: "n1", at: now - 600_000, kind: "reminder", level: "now", title: "提醒：交實驗報告", body: "操作系統實驗三，今晚 23:59 截止", source: "schedule", status: "unread" },
+  { id: "n2", at: now - 86_400_000, kind: "reminder", level: "digest", title: "提醒：給王老師回郵件", source: "schedule", status: "read", feedback: "useful" },
+];
 const memory = [
   { id: "1", kind: "goal", text: "12 月中旬的操作系统期末考试", due: now + 21 * 86_400_000, status: "active", createdAt: now - 86_400_000, updatedAt: now - 86_400_000 },
   { id: "2", kind: "goal", text: "投完 3 家后端实习", due: now - 2 * 86_400_000, status: "pending", createdAt: now - 9 * 86_400_000, updatedAt: now - 2 * 86_400_000 },
@@ -52,7 +56,7 @@ const clients = new Set<ServerResponse>();
 const pending = () => tasks.flatMap(task => task.pending);
 const snapshot = (): Snapshot => ({
   timeline: timeline.slice(-200), tasks, pending: pending(), ledger,
-  leases: [{ capability: "calendar", idleTurns: 3, window: 30 }], busy,
+  notifications, leases: [{ capability: "calendar", idleTurns: 3, window: 30 }], busy,
 });
 
 function emit(event: string, data: unknown) {
@@ -180,6 +184,14 @@ createServer(async (req, res) => {
   if (path === "/api/stop") { setBusy(false); return json(res, 204); }
   if (path === "/api/calendar") return json(res, 200, agenda());
   if (path === "/api/memory") return json(res, 200, memory);
+  const notice = /^\/api\/notifications\/(.+)$/.exec(path);
+  if (notice) {
+    const item = notifications.find(n => n.id === decodeURIComponent(notice[1]!));
+    if (!item) return json(res, 404, { error: "Unknown notification" });
+    Object.assign(item, await body(req));
+    emit("notifications", notifications);
+    return json(res, 204);
+  }
   const memoryItem = /^\/api\/memory\/(.+)$/.exec(path);
   if (memoryItem) {
     const index = memory.findIndex(item => item.id === decodeURIComponent(memoryItem[1]!));

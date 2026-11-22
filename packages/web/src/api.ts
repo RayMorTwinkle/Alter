@@ -34,12 +34,14 @@ export const api = {
   feishu: () => request<FeishuPairing>("/api/feishu"),
   disconnectFeishu: () => request<void>("/api/feishu/account/disconnect", { method: "POST", body: {} }),
   memory: () => request<MemoryItem[]>("/api/memory"),
+  updateNotification: (id: string, patch: { status?: "read"; feedback?: "useful" | "useless" }) =>
+    request<void>(`/api/notifications/${encodeURIComponent(id)}`, { body: patch }),
   updateMemory: (id: string, patch: Partial<Pick<MemoryItem, "text" | "status">>) =>
     request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -72,6 +74,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "busy": return dispatch({ type: "busy", busy: data.busy });
         case "calendar": return dispatch({ type: "agenda", agenda: data });
         case "memory": return dispatch({ type: "memory", memory: data });
+        case "notifications": return dispatch({ type: "notifications", notifications: data });
       }
     });
   }

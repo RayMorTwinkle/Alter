@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { Events, context, observeSurface, submitMessage, type AlterApp, type AlterSurface } from "@alter/core";
+import { Events, context, observeSurface, submitMessage, type AlterApp, type AlterSurface, type Notification } from "@alter/core";
 import { approvalCards } from "./cards.ts";
 import type { FeishuConfig } from "./config.ts";
 import { openState } from "./state.ts";
@@ -58,6 +58,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
           attempts.clear();
           cards.schedule();
           await transport.sendText(chatId, "配对成功");
+          pushNotifications();
           return;
         }
         attempts.set(openId, Math.min(5, failures + 1));
@@ -75,10 +76,28 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
     }
     let inbox = Promise.resolve();
     let outbox = Promise.resolve();
+    let ready = false;
+    let notifications: Notification[] = [];
+    const queued = new Set<string>();
+    function pushNotifications() {
+      const chatId = store.value.owner?.chatId;
+      if (!ready || !chatId) return;
+      for (const item of [...notifications].reverse()) {
+        if (item.level !== "now" || item.status !== "unread" || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
+        queued.add(item.id);
+        outbox = outbox.then(async () => {
+          // Reserve before sending: a crash after Feishu accepts the message must never replay it.
+          if (store.claimNotification(item.id)) await transport.sendText(chatId, [item.title, item.body].filter(Boolean).join("\n"));
+        }).catch((error: unknown) => {
+          console.warn("Alter Feishu notification delivery failed:", error instanceof Error ? error.message : "unknown error");
+        }).finally(() => queued.delete(item.id));
+      }
+    }
     const actions = new Set<Promise<unknown>>();
     let stopped = false;
     let observation: Awaited<ReturnType<typeof observeSurface>> | undefined;
     const observe = () => observeSurface(app, (event, source) => {
+      if (event.event === "notifications") { notifications = event.data; pushNotifications(); }
       if (event.event === "pending") cards.update(event.data);
       if (event.event !== "timeline" || event.data.kind !== "assistant" || source !== "feishu") return;
       const chatId = store.value.owner?.chatId;
@@ -92,11 +111,10 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
       observation?.detach();
       clearTimeout(timer);
       try {
-        await transport.close();
-      } finally {
-        await Promise.allSettled([inbox, outbox, ...actions]);
+        await Promise.allSettled([inbox, ...actions]);
+        await outbox;
         await cards.close();
-      }
+      } finally { await transport.close(); }
     }
     try {
       observation = await observe();
@@ -115,6 +133,8 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
           try { return await result; } finally { actions.delete(result); }
         },
       });
+      ready = true;
+      pushNotifications();
     } catch (error) { await stop(); throw error; }
     return stop;
   }

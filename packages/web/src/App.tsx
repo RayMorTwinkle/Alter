@@ -1,4 +1,4 @@
-import { Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
+import { Bell, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
 import { useCallback, useEffect, useReducer, useState } from "react";
 import { api, connect, Unauthorized } from "./api.ts";
 import { AgendaPanel } from "./components/Agenda.tsx";
@@ -6,7 +6,7 @@ import { Chat } from "./components/Chat.tsx";
 import { Login } from "./components/Login.tsx";
 import { MemoryPanel } from "./components/Memory.tsx";
 import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx";
-import { TaskSheet, UsageSheet } from "./components/Sheets.tsx";
+import { NotificationsSheet, TaskSheet, UsageSheet } from "./components/Sheets.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
 import type { FeishuPairing } from "./types.ts";
@@ -48,6 +48,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [side, setSide] = useState<Exclude<Tab, "chat">>("tasks");
   const [openTask, setOpenTask] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
+  const [showNotices, setShowNotices] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
@@ -90,6 +91,14 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const onAnswer = (id: string, allow: boolean, note?: string) => guard(() => api.answer(id, allow, note));
   const onStop = () => void guard(() => api.stop()).catch(() => {});
   const onLogout = () => void api.logout().finally(onSignedOut);
+  const notices = state.notifications ?? [];
+  const unread = notices.filter(item => item.status === "unread");
+  // Opening the list counts as reading it; this is the funnel's "opened" step.
+  const openNotices = () => {
+    setShowNotices(true);
+    for (const item of unread) void api.updateNotification(item.id, { status: "read" }).catch(() => {});
+  };
+  const onFeedback = (id: string, feedback: "useful" | "useless") => void guard(() => api.updateNotification(id, { feedback })).catch(() => {});
 
   const panels = {
     tasks: <TasksPanel tasks={state.tasks} leases={state.leases} onOpen={setOpenTask} />,
@@ -130,6 +139,9 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
               <span className="pair-label">{t.viaFeishu}</span><b>{feishu.account.name ?? t.feishuConnected}</b>
             </button>
           )}
+          <button className="icon-btn ghost bell" onClick={openNotices} title={t.notifications} aria-label={t.notifications}>
+            <Bell />{unread.length > 0 && <span className="badge">{unread.length}</span>}
+          </button>
           <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.usage} aria-label={t.usage}><ChartBar /></button>
           <button className="text-btn" onClick={onToggleLocale}>{t.language}</button>
           <button className="icon-btn ghost" onClick={onLogout} title={t.logout} aria-label={t.logout}><SignOut /></button>
@@ -166,6 +178,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
       {showUsage && <UsageSheet onClose={() => setShowUsage(false)} />}
+      {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>
   );
 }

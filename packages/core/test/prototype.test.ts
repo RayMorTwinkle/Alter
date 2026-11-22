@@ -71,7 +71,7 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_save", "memory_search", "memory_update"];
-const controls = ["answer_permission_request", "dispatch_task", "enable_tool", ...memoryTools, "task_status"];
+const controls = ["answer_permission_request", "dispatch_task", "enable_tool", ...memoryTools, "schedule_cancel", "schedule_create", "schedule_list", "task_status"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send", "request_capability"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
@@ -87,7 +87,7 @@ it("offers only real plugins when demos are off, so no simulated send exists", a
     if (text === "look") { taskSeen = tools; return finish("done"); }
     return say("ok");
   }, new MemoryStorage(), [createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" })], undefined, {}, false);
-  expect(app.capabilities.manifests.map(cap => cap.id)).toEqual(["memory", "calendar"]);
+  expect(app.capabilities.manifests.map(cap => cap.id)).toEqual(["memory", "calendar", "schedule"]);
   await input(app, "go");
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(system).toContain("calendar（日历");
@@ -887,4 +887,30 @@ it("lets a tainted main search memory but requires a separate user decision for 
     id = app.memory.list()[0]!.id;
   }
   expect(app.memory.list()).toMatchObject([{ id, text: "参加考试" }]);
+});
+
+it("offers schedules without leases and parks tainted reminder creation and cancellation for the user", async () => {
+  let id = "";
+  const at = Date.parse("2026-11-22T03:00Z");
+  const app = await open((text, last) => {
+    if (last.role !== "user") return say("OK");
+    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "read" });
+    if (text === "read") return call("remote_read", {});
+    if (text === "list") return call("schedule_list", {});
+    if (text === "create") return call("schedule_create", { text: "回电话", at: "2027-01-01T11:30", daily: "11:30" });
+    return call("schedule_cancel", { id });
+  }, new MemoryStorage(), [externalPlugin().plugin], undefined, { now: () => at }, false);
+  await input(app, "lease");
+  await input(app, "read");
+  await input(app, "list");
+  for (const action of ["create", "cancel"]) {
+    await app.main.submit({ type: "input", content: action }, context);
+    const request = await parked(app);
+    expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action, tainted: true });
+    expect((await app.scheduler.list()).map(item => item.status)).toEqual(action === "create" ? [] : ["scheduled"]);
+    await answerUserPermission(app.main, { requestId: request.id, allow: true });
+    await app.main.waitForIdle(context);
+    id = (await app.scheduler.list())[0]!.id;
+  }
+  expect(await app.scheduler.list()).toMatchObject([{ id, text: "回电话", status: "cancelled" }]);
 });

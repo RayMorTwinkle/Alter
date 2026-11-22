@@ -42,11 +42,13 @@ const Decision = defineSignal({
 });
 type Answer = { requestId: string; allow: boolean; note?: string };
 
+export const approvalClocks = new WeakMap<Conversation, () => number>();
+
 async function deliver(tx: Tx, main: Conversation, audience: Audience, answer: Answer) {
   const { pending } = await tx.doc(Requests, main.id);
   const request = Object.hasOwn(pending, answer.requestId) ? pending[answer.requestId] : undefined;
   if (!request || request.audience !== audience) return reply("No pending request for this approver", true);
-  if (Date.now() >= request.expiresAt) return reply("Approval expired without a decision", true);
+  if ((approvalClocks.get(main) ?? Date.now)() >= request.expiresAt) return reply("Approval expired without a decision", true);
   const value = answer.note === undefined ? { allow: answer.allow } : { allow: answer.allow, note: answer.note };
   const result = await tx.signal(request.toolTask, Decision, request.id, value);
   return reply(result, result !== "delivered" && result !== "duplicate");
