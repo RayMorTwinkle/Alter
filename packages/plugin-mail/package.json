@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "live": "node scripts/live.ts"
   },
   "dependencies": {
     "@alter/core": "workspace:*",
@@ -16,5 +17,8 @@
   "devDependencies": {
     "@types/mailparser": "3.9.0",
     "@types/nodemailer": "8.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts"
   }
 }
