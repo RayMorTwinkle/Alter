@@ -36,10 +36,12 @@ const finish = defineTool({
       const task = (await tx.doc(Tasks, main.id)).byId[taskId]!;
       if (task.status === "completed") return;
       const ledger = await tx.doc(Ledger, main.id);
+      const at = api.now();
       await main.submit(tx, {
+        entry: { kind: "alter.task-report", data: { taskId, at } },
         type: "input", whenBusy: "followUp", requestId: `report-${taskId}`, content: `task ${taskId} finished: ${summary}`,
       });
-      ledger.entries.push({ taskId, summary, refs, at: api.now() });
+      ledger.entries.push({ taskId, summary, refs, at });
       task.status = "completed";
     }, ctx);
     return { ...reply(summary), control: { terminate: true } };
@@ -98,6 +100,7 @@ export const BackgroundTask = defineTask<{ taskId: string }, { phase: "start" | 
           ? receipt.value.reason : "No finish after the reminder limit";
         if (await failTask(tx, main.id, input.taskId, failure)) {
           await main.submit(tx, {
+            entry: { kind: "alter.task-report", data: { taskId: input.taskId, at: runtime.now() } },
             type: "input", whenBusy: "followUp", requestId: `failure-${input.taskId}`,
             content: `task ${input.taskId} failed: ${failure}`,
           });
@@ -140,7 +143,8 @@ export function dispatchTool(taskExtensions: Extension[], taskModel: ModelRef, t
         });
         (await tx.doc(TaskIdentity, child.id)).taskId = taskId;
         tasks.byId[taskId] = {
-          conversationId: child.id, brief: args.brief, permission: args.permission, allow: args.allow, status: "running",
+          conversationId: child.id, brief: args.brief, context: args.context, createdAt: api.now(),
+          permission: args.permission, allow: args.allow, status: "running",
         };
       }, ctx);
       return reply(taskId);
