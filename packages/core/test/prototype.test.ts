@@ -15,6 +15,7 @@ import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
+import { unescapeNewlines } from "../src/tasks.ts";
 
 type Alter = Awaited<ReturnType<typeof openAlter>>;
 type Route = (text: string, last: Message, history: Message[], offered: string[]) => AssistantMessage;
@@ -450,4 +451,10 @@ it("leases a declared plugin only in the harness where it is installed", async (
   await input(plain, "clock please");
   await input(plain, "delegate");
   expect(results).toEqual(["Enabled clock", "noon", "Capability is not leasable", "Unknown capability in allow"]);
+});
+
+it("unescapes newlines only when a summary has none", () => {
+  expect(unescapeNewlines("a\\n\\nb")).toBe("a\n\nb");
+  expect(unescapeNewlines("a\nuse \\n in code")).toBe("a\nuse \\n in code");
+  expect(unescapeNewlines("plain")).toBe("plain");
 });

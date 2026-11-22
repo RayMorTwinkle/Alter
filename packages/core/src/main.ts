@@ -16,7 +16,7 @@ export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, 
 export const leaseWindow = 30;
 const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。简短、频繁的日程操作可用 enable_tool 租用 calendar。" +
   "多步或探索性工作用 dispatch_task 派单，可用能力有 calendar、notes（示例笔记 welcome）、outbox（模拟发送）。" +
-  "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替。";
+  "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。";
 
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
