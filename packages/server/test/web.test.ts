@@ -10,11 +10,12 @@ import {
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import { createWebServer } from "../src/server.ts";
+import { createCalendarPlugin } from "@alter/plugin-calendar";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 
-async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok")) {
+async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false) {
   const gateway = await fakeGateway(route);
   cleanup.push(gateway.close);
   const dir = await mkdtemp(join(tmpdir(), "alter-web-"));
@@ -24,9 +25,11 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
     ALTER_MAIN_MODEL: "offline/main", ALTER_TASK_MODEL: "offline/task", ALTER_DATA_DIR: dir });
   const { models, mainModel, taskModel } = await createGatewayModels(config);
   async function open() {
-    const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel);
+    const calendar = withCalendar ? createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" }) : undefined;
+    const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel, {},
+      { plugins: calendar ? [calendar] : [] });
     cleanup.push(() => app.harness.close(context));
-    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir });
+    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, calendar });
     cleanup.push(web.close);
     web.server.listen(0, "127.0.0.1");
     await once(web.server, "listening");
@@ -54,7 +57,7 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
   return { ...await open(), reopen: open };
 }
 
-type Event = SurfaceEvent | { event: "snapshot"; data: SurfaceState };
+type Event = SurfaceEvent | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown };
 
 async function stream(read: (path: string) => Promise<Response>) {
   const response = await read("/api/events");
@@ -275,4 +278,28 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
   expect(restored.timeline).toEqual(before.timeline);
   expect(restored.tasks[0]).toEqual({ ...task, createdAt: brief.at, context: "fork" });
   expect(restored.leases).toEqual([{ capability: "calendar", idleTurns: 2, window: 30 }]);
+});
+
+it("serves the calendar agenda and pushes it when a leased calendar call changes it", async () => {
+  const start = new Date(Date.now() + 86_400_000).toISOString();
+  const web = await setup(({ messages }, res) => {
+    const tools = messages.filter(m => m.role === "tool").length;
+    if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar", reason: "book" });
+    if (tools === 1) return toolCall(res, "calendar_create", { title: "周会", start, location: "A" });
+    say(res, "booked");
+  }, true);
+  await web.login();
+  expect(await (await web.read("/api/calendar")).json()).toEqual({ timeZone: "Asia/Shanghai", events: [] });
+  const feed = await stream(web.read);
+  await web.post("/api/messages", { text: "book" });
+  await feed.seen(e => e.event === "calendar");
+  const event = { id: expect.stringMatching(/^evt_/), title: "周会", start: Date.parse(start), end: Date.parse(start) + 3_600_000, allDay: false, location: "A" };
+  expect(feed.events.find(e => e.event === "calendar")?.data).toEqual({ timeZone: "Asia/Shanghai", events: [event] });
+  expect(await (await web.read("/api/calendar")).json()).toEqual({ timeZone: "Asia/Shanghai", events: [event] });
+});
+
+it("has no calendar endpoint without the calendar plugin", async () => {
+  const web = await setup();
+  await web.login();
+  expect((await web.read("/api/calendar")).status).toBe(404);
 });

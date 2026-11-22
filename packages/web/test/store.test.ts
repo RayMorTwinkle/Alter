@@ -49,6 +49,17 @@ describe("reduce", () => {
   });
 });
 
+describe("agenda", () => {
+  it("stays null until the calendar loads, and later pushes replace it", () => {
+    expect(initialState.agenda).toBeNull();
+    const first = reduce(initialState, { type: "agenda", agenda: { timeZone: "Asia/Shanghai", events: [] } });
+    const event = { id: "evt_1", title: "周会", start: 1, end: 2, allDay: false };
+    const next = reduce(first, { type: "agenda", agenda: { timeZone: "Asia/Shanghai", events: [event] } });
+    expect(next.agenda?.events).toEqual([event]);
+    expect(reduce(next, { type: "snapshot", snapshot: { timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false } }).agenda).toBe(next.agenda);
+  });
+});
+
 describe("remaining", () => {
   it("rounds up and switches to hours from two hours", async () => {
     const { remaining } = await import("../src/format.ts");

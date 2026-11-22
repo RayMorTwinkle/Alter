@@ -1,4 +1,4 @@
-# Web API 契约（v1.2）
+# Web API 契约（v1.3）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -59,6 +59,10 @@ type PermissionRequest = {
   expiresAt: number;          // v1.1 新增，截止时间（Unix 毫秒）
 };
 
+// v1.3 新增，仅在加载了日历插件时提供
+type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
+type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
+
 type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
 
 type TranscriptItem =
@@ -77,6 +81,7 @@ type TranscriptItem =
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
+| `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
 | `GET` | `/api/events` | SSE，见下 |
 
 `timeline` 返回最近 200 条；更早的用 `GET /api/state?before=<id>` 分页（v1 可不实现）。
@@ -94,6 +99,7 @@ type TranscriptItem =
 | `pending` | `PermissionRequest[]` | 待审批列表整体替换 |
 | `ledger` | `LedgerEntry[]` | 账本整体替换 |
 | `busy` | `{ busy: boolean }` | 主会话是否在生成 |
+| `calendar` | `Agenda` | v1.3：日程变化时整体替换。不包含在 `snapshot` 中，重连后前端重新请求 `/api/calendar` |
 
 每 20 秒发一次注释行 `: ping` 保活。前端断线后用 `EventSource` 自动重连，并以收到的 `snapshot` 为准重建状态。
 

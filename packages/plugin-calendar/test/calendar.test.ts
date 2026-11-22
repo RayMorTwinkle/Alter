@@ -120,3 +120,27 @@ it("handles a half-hour fold and a local day whose first valid time is 01:00", a
   const day = await santiago.call("create", { title: "全天", start: "2024-09-08", allDay: true });
   expect(day.event).toMatchObject({ start: "2024-09-08T01:00:00.000-03:00", end: "2024-09-09T00:00:00.000-03:00" });
 });
+
+it("lists the next seven local days for the web agenda and notifies subscribers of changes", async () => {
+  const { plugin, call } = await setup();
+  let changes = 0;
+  const unsubscribe = plugin.subscribe(() => changes++);
+  const kept = await call("create", { title: "周会", start: "2026-11-23T10:00", location: "A" });
+  const gone = await call("create", { title: "取消", start: "2026-11-24T10:00" });
+  await call("create", { title: "太远", start: "2026-11-30T10:00" });
+  await call("create", { title: "团建", start: "2026-11-25", allDay: true });
+  await call("delete", { id: gone.event.id });
+  expect(changes).toBe(5);
+  await call("list");
+  expect(changes).toBe(5);
+  unsubscribe();
+  await call("restore", { id: gone.event.id });
+  expect(changes).toBe(5);
+  await call("delete", { id: gone.event.id });
+
+  const agenda = plugin.agenda();
+  expect(agenda.map(e => e.title)).toEqual(["周会", "团建"]);
+  expect(agenda[0]).toEqual({ id: kept.event.id, title: "周会", start: Date.parse("2026-11-23T02:00Z"),
+    end: Date.parse("2026-11-23T03:00Z"), allDay: false, location: "A" });
+  expect(agenda[1]).toMatchObject({ allDay: true, start: Date.parse("2026-11-24T16:00Z") });
+});

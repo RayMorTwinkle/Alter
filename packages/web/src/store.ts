@@ -1,8 +1,9 @@
-import type { LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem } from "./types.ts";
+import type { Agenda, LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem } from "./types.ts";
 
 export type State = Snapshot & {
   draft: { id: string; text: string } | null;
   connection: "connecting" | "open" | "lost";
+  agenda: Agenda | null; // null until loaded, and when the server has no calendar
 };
 
 export type Action =
@@ -13,10 +14,11 @@ export type Action =
   | { type: "pending"; pending: PermissionRequest[] }
   | { type: "ledger"; ledger: LedgerEntry[] }
   | { type: "busy"; busy: boolean }
-  | { type: "connection"; connection: State["connection"] };
+  | { type: "connection"; connection: State["connection"] }
+  | { type: "agenda"; agenda: Agenda };
 
 export const initialState: State = {
-  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting",
+  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null,
 };
 
 function upsert(timeline: TimelineItem[], item: TimelineItem) {
@@ -49,6 +51,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, busy: action.busy, draft: action.busy ? state.draft : null };
     case "connection":
       return { ...state, connection: action.connection };
+    case "agenda":
+      return { ...state, agenda: action.agenda };
   }
 }
 
