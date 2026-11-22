@@ -11,8 +11,9 @@ import { submitMessage } from "../src/timeline.ts";
 import { readUsage, type UsageLine } from "../src/usage.ts";
 
 const messages = {
-  "rename-twice": ["帮我在日历上建一个叫「站会」的日程。", "把刚才那个改名叫「晨会」。", "再改成「晨会（10:00）」。"],
-  "batch-create": ["在日历上建三个日程：「周报」、「一对一」、「复盘」。"],
+  // The demo calendar only stores titles. Saying so removes clarifying questions, which are not what this eval compares.
+  "rename-twice": ["帮我在日历上建一个叫「站会」的日程，只要标题，不用时间。", "把刚才那个改名叫「晨会」。", "再改成「晨会（10:00）」。"],
+  "batch-create": ["在日历上建三个日程：「周报」、「一对一」、「复盘」，只要标题，不用时间。"],
   list: ["我日历上现在有哪些日程？"],
 };
 type Scenario = keyof typeof messages;
@@ -113,7 +114,9 @@ async function playTurns(app: AlterApp, scenario: Scenario, tools: ToolCounts, t
         turnLatencyMs.push(Math.round(lastActivity - start));
       }
     }
-    const mismatch = judge(scenario, demo.calendar, lastReply);
+    const judged = judge(scenario, demo.calendar, lastReply);
+    const idle = scenario !== "list" && tools.enable_tool + tools.dispatch_task === 0;
+    const mismatch = judged && idle ? `未执行：主会话没有租用也没有派单（${judged}）` : judged;
     return mismatch && modelError ? `异常：${modelError}（${mismatch}）` : mismatch;
   } finally {
     commits.detach();
@@ -153,22 +156,25 @@ type Result = Awaited<ReturnType<typeof runScenario>> & { repeat: number };
 
 function summary(results: Result[], scenarios: Scenario[]) {
   const rows = ["# 工具租约与全派任务评测", "",
-    "统计包含全部运行。每轮延迟计至最后一次活动，P90 取最近秩。调用次数包含中止与回退尝试。", "",
+    "正确率按全部运行计算；token、调用次数、延迟只统计正确运行（失败运行常常什么都没做，会把成本拉低）。" +
+    "每轮延迟计至最后一次活动，P90 取最近秩。调用次数包含中止与回退尝试。", "",
     "| 场景 | 模式 | 运行数 | 正确率 | token 中位数（main / task / 总） | 调用次数中位数 | 延迟中位数（秒） | P90（秒） | enable_tool 平均次数 | dispatch_task 平均次数 |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"];
   for (const scenario of [...scenarios, "全部场景"]) {
     for (const mode of modes) {
-      const group = results.filter(r => r.mode === mode && (scenario === "全部场景" || r.scenario === scenario));
+      const all = results.filter(r => r.mode === mode && (scenario === "全部场景" || r.scenario === scenario));
+      const group = all.filter(r => r.correct);
       const sorted = (get: (r: Result) => number) => group.map(get).sort((a, b) => a - b);
       const n = group.length;
       const median = (values: number[]) => (values[Math.floor((n - 1) / 2)]! + values[Math.floor(n / 2)]!) / 2;
-      const meanCalls = (tool: keyof Result["tools"]) => +(group.reduce((a, r) => a + r.tools[tool], 0) / n).toFixed(2);
+      const meanCalls = (tool: keyof Result["tools"]) => +(all.reduce((a, r) => a + r.tools[tool], 0) / all.length).toFixed(2);
       const tokens = (["main", "task", "total"] as const).map(role => Math.round(median(sorted(r => r.usage[role].tokens))));
       const seconds = sorted(r => r.latencyMs / 1000);
-      const accuracy = Number((100 * group.filter(r => r.correct).length / n).toFixed(1));
-      rows.push(`| ${[scenario, mode, n, `${accuracy}%`,
-        tokens.join(" / "), median(sorted(r => r.usage.total.calls)), median(seconds).toFixed(1),
-        seconds[Math.ceil(n * 0.9) - 1]!.toFixed(1), meanCalls("enable_tool"), meanCalls("dispatch_task")].join(" | ")} |`);
+      const accuracy = Number((100 * n / all.length).toFixed(1));
+      const cost = n ? [tokens.join(" / "), median(sorted(r => r.usage.total.calls)), median(seconds).toFixed(1),
+        seconds[Math.ceil(n * 0.9) - 1]!.toFixed(1)] : ["—", "—", "—", "—"];
+      rows.push(`| ${[scenario, mode, all.length, `${accuracy}%`, ...cost,
+        meanCalls("enable_tool"), meanCalls("dispatch_task")].join(" | ")} |`);
     }
   }
   const failures = results.filter(r => !r.correct);
