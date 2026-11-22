@@ -12,8 +12,10 @@ async function step(label: string, action: string, close = false) {
 }
 try {
   await step("open", actions.open("https://example.com"));
-  const snapshot = await step("snapshot", "");
+  // example.com lists several languages, so the link sits below the first viewport.
+  const snapshot = await step("scroll", actions.scroll("down"));
   const link = snapshot.match(/Learn more|More information/i)?.[0];
+  console.log("link", link);
   if (!link) throw new Error("Example Domain link missing from viewport");
   await step("click", actions.click("text=" + link));
 } finally {

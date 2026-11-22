@@ -15,7 +15,7 @@ function child() {
   return child;
 }
 
-it("passes the script only on stdin and collects UTF-8 stdout", async () => {
+it("passes the script only on stdin and collects UTF-8 output from both streams", async () => {
   const proc = child();
   const script = 'console.log("some argument")';
   const running = runEgo(script);
@@ -24,8 +24,9 @@ it("passes the script only on stdin and collects UTF-8 stdout", async () => {
   const bytes = Buffer.from("示例");
   proc.stdout.write(bytes.subarray(0, 2));
   proc.stdout.write(bytes.subarray(2));
+  proc.stderr.write("ALTER_BROWSER 1\n");
   proc.emit("close", 0, null);
-  await expect(running).resolves.toBe("示例");
+  await expect(running).resolves.toBe("示例\nALTER_BROWSER 1\n");
 });
 
 it("reports a failing exit with only the last 2048 stderr characters", async () => {

@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 
 export type EgoRunner = (script: string) => Promise<string>;
 
+// When spawned, ego-browser forwards the script's console output on stderr, so both streams carry frames.
+const outputLimit = 4 * 1024 * 1024;
 export const runEgo: EgoRunner = script => new Promise((resolve, reject) => {
   const child = spawn("ego-browser", ["nodejs"], { stdio: "pipe" });
   let stdout = "";
@@ -11,14 +13,14 @@ export const runEgo: EgoRunner = script => new Promise((resolve, reject) => {
     child.kill("SIGKILL");
     reject(new Error("ego-browser timed out after 90 seconds"));
   }, 90_000);
-  child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
-  child.stderr.setEncoding("utf8").on("data", chunk => { stderr = (stderr + chunk).slice(-2048); });
+  child.stdout.setEncoding("utf8").on("data", chunk => { stdout = (stdout + chunk).slice(-outputLimit); });
+  child.stderr.setEncoding("utf8").on("data", chunk => { stderr = (stderr + chunk).slice(-outputLimit); });
   child.once("error", reject);
   child.once("close", (code, signal) => {
     clearTimeout(timeout);
-    if (code !== 0) reject(new Error(`ego-browser exited (${signal ?? code}): ${stderr.trim()}`));
+    if (code !== 0) reject(new Error(`ego-browser exited (${signal ?? code}): ${stderr.trim().slice(-2048)}`));
     else if (stdinError) reject(stdinError);
-    else resolve(stdout);
+    else resolve(stdout + "\n" + stderr);
   });
   child.stdin.on("error", error => { stdinError = error; });
   child.stdin.end(script);
