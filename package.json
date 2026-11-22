@@ -8,6 +8,7 @@
   },
   "scripts": {
     "eval:triage": "node packages/evals/triage.ts",
+    "eval:judge": "node packages/evals/judge.ts",
     "eval:injection": "node packages/evals/injection.ts",
     "eval:e2e": "node packages/evals/e2e.ts",
     "typecheck": "pnpm -r typecheck",

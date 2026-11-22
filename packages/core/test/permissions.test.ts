@@ -20,7 +20,7 @@ it("runs the annotated permission calls and fails on missed protections or runne
 it.each(["restricted", "auto", "full"] as const)("requires user approval for a tainted guarded write under %s", async permission => {
   for (const tainted of [false, true]) {
     const result = await runCase({
-      id: "guarded", note: "", caller: { kind: "task", permission, allow: ["memory", "fixture"], context: "fresh" },
+      id: "guarded", note: "", caller: { kind: "task", permission, context: "fresh" },
       taint: tainted ? "task-read" : "clean", tool: "memory_save", args: { kind: "fact", text: "重要事实" },
       effect: "write-local", expected: tainted ? "user" : "allow",
     });
@@ -29,12 +29,12 @@ it.each(["restricted", "auto", "full"] as const)("requires user approval for a t
   }
 });
 
-it("preserves main approval for a clean restricted task without a memory grant", async () => {
+it("allows a clean restricted task to use memory", async () => {
   const result = await runCase({
-    id: "unlisted-memory", note: "", caller: { kind: "task", permission: "restricted", allow: [], context: "fresh" },
-    taint: "clean", tool: "memory_save", args: { kind: "profile", text: "偏好" }, effect: "write-local", expected: "main",
+    id: "unlisted-memory", note: "", caller: { kind: "task", permission: "restricted", context: "fresh" },
+    taint: "clean", tool: "memory_save", args: { kind: "profile", text: "偏好" }, effect: "write-local", expected: "allow",
   });
-  expect(result.actual).toBe("main");
+  expect(result.actual).toBe("allow");
 });
 
 const links: AlterPlugin = {
@@ -51,9 +51,9 @@ it.each([
   ["send", "task-read", "full", "fresh", "user"],
   ["open", "main-read", "full", "fresh", "user"],
   ["open", "main-read", "full", "fork", "user"],
-  ["open", "task-read", "restricted", "fresh", "main"],
+  ["open", "task-read", "restricted", "fresh", "allow"],
 ] as const)("checks seen URLs for %s after %s in a %s %s task (%s)", async (action, taint, permission, context, expected) => {
-  const result = await runCase({ id: "seen", note: "", caller: { kind: "task", permission, allow: ["fixture"], context },
+  const result = await runCase({ id: "seen", note: "", caller: { kind: "task", permission, context },
     taint, tool: "links_" + action, args: { url: "https://example.test/?a=1&b=2" },
     effect: action === "open" ? "read" : "external-send", expected }, [links]);
   expect(result.actual).toBe(expected);

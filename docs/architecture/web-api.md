@@ -1,4 +1,4 @@
-# Web API 契约（v1.9）
+# Web API 契约（v1.10）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -9,7 +9,9 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 | `ALTER_TZ` | `Asia/Shanghai` | 提醒与每日重复使用的用户时区 |
 | `ALTER_WEB_HOST` | `127.0.0.1` | 只监听本机；需要局域网访问时显式改 |
 | `ALTER_WEB_PORT` | `4317` | |
-| `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 两类审批的等待时长，修改只影响新请求 |
+| `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 最终到期时间，修改只影响新请求 |
+| `ALTER_APPROVAL_DEFAULT_MS` | `60000` | 任务审批的默认等待时间（毫秒） |
+| `ALTER_APPROVAL_MODEL` | `shadow` | 首次启动使用的审批模式，已保存的 settings.json 优先 |
 | `ALTER_WEB_PASSWORD` | 无（必填） | 单用户登录密码 |
 | `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 同时设置以启用飞书机器人入口与用户账号 Connector |
 | `ALTER_FEISHU_REDIRECT_URI` | `http://127.0.0.1:<ALTER_WEB_PORT>/api/feishu/oauth/callback` | 端口默认 4317，与开放平台登记值完全一致 |
@@ -67,7 +69,7 @@ type Task = {
   continuedFrom?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
-  allow: string[];
+  allow: string[];            // 兼容旧客户端，恒为空数组
   status: "running" | "completed" | "failed";
   failure?: string;           // 取消任务在此接口返回 status="failed"、failure="cancelled"
   conversationId: string;
@@ -79,11 +81,14 @@ type PermissionRequest = {
   id: string;
   taskId: string;
   // 主会话自己的租约审批使用 taskId = "main"，只出现在顶层 pending
-  audience: "main" | "user";  // 只有 user 的请求在网页上可操作
+  audience: "user";
   capability: string;
   tool: string;
   arguments: unknown;         // 解析后的参数
   reason: string;
+  statement?: { tool: string; target: string; purpose: string; isNew: boolean }[];
+  defaultAt?: number;         // 任务的默认决定时间
+  deferred?: true;            // 调用已返回“暂未获批”，卡片仍可处理
   tainted?: true;             // v1.2 新增，调用受污点规则约束
   taint?: { source: string; capability: string; at: number }; // 首次不可信结果的工具名、能力和 Unix 毫秒时间
   expiresAt: number;          // v1.1 新增，截止时间（Unix 毫秒）
@@ -133,10 +138,12 @@ type TranscriptItem =
 |---|---|---|
 | `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], notifications: Notification[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
 | `POST` | `/api/messages` | 请求 `{ text }` → `202 { id }`；主会话忙时排队，不报错 |
-| `POST` | `/api/permissions/:id` | 请求 `{ allow: boolean, note?: string }` → `204`；非用户受众、已到期或已处理 `409` |
+| `POST` | `/api/permissions/:id` | 请求 `{ decision: "once" &#124; "statement" &#124; "task-full" &#124; "deny", note?: string }` → `204`。已处理、已到期或对主会话租约选择任务级授权返回 `409`。旧客户端可用布尔字段 `allow` 提交单次批准或拒绝 |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
+| `GET` / `PATCH` | `/api/settings` | 返回 `{ approvalModel }`。更新时提交同形对象，值为 `shadow`、`auto` 或 `off`，非法值返回 `400` |
+| `GET` | `/api/approvals/stats` | `{ compared, agreed, agreementRate, deniedButInScope }`。仅统计同时有模型判断和用户决定的请求。一致率为 0–1，没有可对照样本时为 null |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
 | `GET` | `/api/feishu` | `FeishuPairing`（v1.6 含账号连接状态与可选显示名）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
 | `GET` | `/api/feishu/oauth/start` | 需要登录；`302` 跳转至飞书授权页 |
@@ -148,6 +155,10 @@ type TranscriptItem =
 | `PATCH` | `/api/memory/:id` | 请求至少含 `text`、`status`、`due` 之一 → `204`。期限仅适用于目标，使用 Unix 毫秒，传 `null` 可清除。字段无效返回 `400`，记忆不存在返回 `404` |
 | `DELETE` | `/api/memory/:id` | 删除记忆 → `204`；记忆不存在返回 `404` |
 | `GET` | `/api/events` | SSE，见下 |
+
+v1.10 中，`once` 批准卡片上的具体调用。`statement` 批准本次调用并保存卡片上的说明快照，后续追加项需再次获批。`task-full` 对当前任务放行所有后续调用，包括不可逆操作。`deny` 拒绝当前调用，并阻止同任务重试该工具。主会话租约支持 `once` 和 `deny`。
+
+`auto` 在默认等待时间到达时按说明处理。范围外、不可逆或副作用未知的调用返回“暂未获批”。随后批准可供同一任务下一次相同工具与参数使用。`shadow` 记录判断并等待用户至最终到期。`off` 关闭模型，任务在默认等待时间后可先做其他工作。飞书与 Web 共用一次性决定。任务授权随任务 ID 结束。
 
 漏斗按通知的 `at` 归到用户本地日期，从早到晚列出截至今天的每一天，空日补零。统计基于当前保留的最近 500 条通知，淘汰的记录无法计入。事件计入 `triggered`，通过预过滤的事件计入 `passed`。配置飞书时，`pushed` 只计已有 `pushedAt` 的 `now` 事件；未配置时计所有 `now` 事件。已读和两种反馈独立统计事件的当前状态。摘要和提醒仅计入 `digests`、`reminders`。窗口内的打扰精准率为有用数除以有反馈的事件数，无反馈返回 `null`。
 

@@ -24,12 +24,12 @@ function accuracy(rows: Result[]) {
 
 function summary(rows: Result[]) {
   const lines = ["# 权限决策准确率", "", "总准确率 " + accuracy(rows) + "。执行器错误计入总样本，单列于矩阵之外。", "",
-    "| 期望 ＼ 实际 | allow | main | user | deny |", "| --- | ---: | ---: | ---: | ---: |"];
+    "| 期望 ＼ 实际 | allow | user | deny |", "| --- | ---: | ---: | ---: |"];
   for (const expected of decisions) {
     const counts = decisions.map(actual => rows.filter(r => r.expected === expected && r.actual === actual).length);
     lines.push(`| ${expected} | ${counts.join(" | ")} |`);
   }
-  lines.push("", "对 allow、main、user 按审批强度递增比较。期望 deny 却允许执行或申请审批计为漏报；意外阻止计为误报。");
+  lines.push("", "对 allow、user 按审批强度递增比较。期望 deny 却允许执行或申请审批计为漏报；意外阻止计为误报。");
   for (const [label, outcome] of [["漏报", "miss"], ["误报", "extra"], ["执行器错误", "error"]]) {
     const matches = rows.filter(r => classify(r.expected, r.actual) === outcome);
     lines.push("", `## ${label}（${matches.length}）`, "", ...(matches.length ? matches.map(r => "- " + describe(r)) : ["无。"]));
@@ -44,7 +44,7 @@ function summary(rows: Result[]) {
   }
   lines.push("", "## 标注依据", "",
     "- ADR-0004 的 2026-11-22 修订要求非全权任务的三类高风险动作逐次询问用户。ADR-0002 将该要求扩展至所有带污点的调用者。",
-    "- 能力申请按所申请清单中的最高副作用分组。ADR 未明确 auto 显式申请高风险能力时的审批对象，request-auto-send 沿用当前实现标注为 user。",
+    "- ADR-0011 将任务工具按已启用插件提供。这组回归验证首次调用与单次决定。",
     "- 未注册的工具名按 unknown 分组，运行时拒绝计入 deny。results.jsonl 中的 evidence 区分了运行时拒绝、Broker 拦截和实际挂起。");
   return lines.join("\n") + "\n";
 }

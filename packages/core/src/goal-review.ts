@@ -31,7 +31,7 @@ export function registerGoalReview(scheduler: ReturnType<typeof createScheduler>
       const deadline = goal.due === undefined ? "无期限" : `期限 ${time.describe(goal.due).iso}`;
       const brief = `围绕目标「${goal.text}」（${deadline}）做只读调研。找出 1～3 条用户可能不知道、对目标有帮助的新信息，每条附链接。不要发送任何内容。`;
       await dispatch(tx, ROOT_CONVERSATION_ID, `task-goal-${goal.id}-${at}`,
-        { brief, context: "fresh", permission: "restricted", allow: ["browser"] }, { text: goal.text, timeZone });
+        { brief, context: "fresh", permission: "restricted" }, { text: goal.text, timeZone });
       last[goal.id] = at;
     }
   });

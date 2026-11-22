@@ -1,192 +1,265 @@
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
-import { type CapabilityRegistry, type Effect, type ToolAction } from "./capabilities.ts";
+import type { ApprovalCall, Judgment } from "./approval-model.ts";
+import type { ApprovalMode } from "./settings.ts";
+import type { CapabilityRegistry, Effect, ToolAction } from "./capabilities.ts";
 import {
-  context, conversationDoc, defineExtension, defineSignal, defineTool, hook, reply, ToolTask,
+  context, conversationDoc, defineExtension, defineSignal, defineTask, hook, reply, ToolTask,
   type Conversation, type TaskId, type Tx,
 } from "./runtime.ts";
 import { isUntrusted, normalUrl, recordUntrusted, Taint, type TaintSource } from "./taint.ts";
-import { TaskIdentity, Tasks, type Permission } from "./state.ts";
+import { Ledger, ScopeDoc, TaskIdentity, Tasks, type PermissionItem } from "./state.ts";
 
-type Audience = "main" | "user";
+export const choices = ["once", "statement", "task-full", "deny"] as const;
+export type ApprovalDecision = typeof choices[number];
+export const isApprovalDecision = (value: unknown): value is ApprovalDecision => choices.some(choice => choice === value);
 type Request = {
-  id: string;
-  taskId: string;
-  toolTask: TaskId;
-  audience: Audience;
-  capability: string;
-  tool: string;
-  reason: string;
-  argumentsJson: string;
-  expiresAt: number;
-  tainted?: true;
-  taint?: TaintSource;
+  id: string; taskId: string; toolTask: TaskId; audience: "main" | "user"; capability: string; tool: string;
+  reason: string; argumentsJson: string; expiresAt: number; defaultAt?: number;
+  statement?: (PermissionItem & { isNew: boolean })[];
+  wakeKey?: string; checking?: true; deferred?: true; tainted?: true; taint?: TaintSource;
 };
 type AuditEntry = {
-  taskId: string;
-  tool: string;
-  capability: string;
-  action: string;
-  effect: Effect;
-  decision: "park" | "allow" | "deny";
-  at: number;
-  tainted?: true;
+  taskId: string; tool: string; capability: string; action: string; effect: Effect;
+  decision: "park" | "allow" | "deny"; at: number; audience?: "user"; tainted?: true;
 };
 export type PermissionState = { pending: Record<string, Request> };
 export const Requests = conversationDoc<PermissionState>("permissions", () => ({ pending: {} }));
-// refused: "<taskId> <tool>" pairs the user explicitly denied. Absent in stores written before #30.
 export const Audit = conversationDoc<{ entries: AuditEntry[]; last: Record<string, AuditEntry["decision"]>; refused?: Record<string, true> }>(
   "audit", () => ({ entries: [], last: {}, refused: {} }),
 );
-const Decision = defineSignal({
-  name: "alter.permission", version: 1, schema: obj({ allow: bool(), note: opt(str()) }),
-});
-type Answer = { requestId: string; allow: boolean; note?: string };
-
-export const approvalClocks = new WeakMap<Conversation, () => number>();
-
-async function deliver(tx: Tx, main: Conversation, audience: Audience, answer: Answer) {
-  const { pending } = await tx.doc(Requests, main.id);
-  const request = Object.hasOwn(pending, answer.requestId) ? pending[answer.requestId] : undefined;
-  if (!request || request.audience !== audience) return reply("No pending request for this approver", true);
-  if ((approvalClocks.get(main) ?? Date.now)() >= request.expiresAt) return reply("Approval expired without a decision", true);
-  const value = answer.note === undefined ? { allow: answer.allow } : { allow: answer.allow, note: answer.note };
-  const result = await tx.signal(request.toolTask, Decision, request.id, value);
-  return reply(result, result !== "delivered" && result !== "duplicate");
+type Review = { ended?: "deferred" | "expired"; itemCount?: number; judgment?: Judgment; user?: ApprovalDecision; note?: string };
+const Reviews = conversationDoc<{ byId: Record<string, Review> }>("approval-reviews", () => ({ byId: {} }));
+export async function approvalStats(main: Conversation) {
+  return main.commit(async tx => {
+    let compared = 0, agreed = 0, deniedButInScope = 0;
+    for (const { judgment, user } of Object.values((await tx.doc(Reviews, main.id)).byId)) {
+      if (!judgment || !user) continue;
+      compared++;
+      if (judgment.inScope === (user !== "deny")) agreed++;
+      else if (user === "deny") deniedButInScope++;
+    }
+    return { compared, agreed, agreementRate: compared ? agreed / compared : null, deniedButInScope };
+  }, context);
 }
+const Decision = defineSignal({ name: "alter.permission", version: 1, schema: obj({ allow: bool(), note: opt(str()) }) });
+const Reviewed = defineSignal({ name: "alter.reviewed", version: 1, schema: bool() });
+type Answer = { requestId: string; decision: ApprovalDecision; note?: string };
+export const approvalClocks = new WeakMap<Conversation, () => number>();
+const expiredMessage = "Approval expired without a decision";
+const deferredMessage = "暂未获批，可先做别的，做不下去就 finish 报告";
 
 export function answerUserPermission(main: Conversation, answer: Answer, onDelivered?: (tx: Tx) => Promise<void>) {
   return main.commit(async tx => {
-    const result = await deliver(tx, main, "user", answer);
-    // A surface can record the winning decision atomically with the broker signal.
-    if (result.output[0]?.text === "delivered") await onDelivered?.(tx);
-    return result;
+    const { requestId, decision, note } = answer;
+    const { pending } = await tx.doc(Requests, main.id);
+    const req = Object.hasOwn(pending, requestId) ? pending[requestId] : undefined;
+    if (!req || req.audience !== "user" || req.checking || !isApprovalDecision(decision)) return reply("No pending user decision", true);
+    const now = (approvalClocks.get(main) ?? Date.now)();
+    if (now >= req.expiresAt) return reply(expiredMessage, true);
+    const task = (await tx.doc(Tasks, main.id)).byId[req.taskId];
+    if (!task && (decision === "statement" || decision === "task-full")) return reply("Task decision requires a task", true);
+    if (!req.deferred) {
+      const status = await tx.signal(req.toolTask, Decision, req.wakeKey ?? req.id, { allow: decision !== "deny", ...(note && { note }) });
+      // At the soft deadline pi-durable closes the signal, but its gate is waking and reads the durable decision.
+      if (status !== "delivered" && !(status === "closed" && !req.wakeKey && req.defaultAt && now >= req.defaultAt)) return reply(status, true);
+    }
+    const { byId } = await tx.doc(Reviews, main.id);
+    byId[requestId] = { ...byId[requestId], user: decision, ...(note && { note }) };
+    if (task && (await tx.doc(TaskIdentity, task.conversationId)).taskId === req.taskId) {
+      const scope = await tx.doc(ScopeDoc, task.conversationId);
+      if (decision === "task-full") scope.full = true;
+      if (decision === "statement") scope.approved = Math.max(scope.approved ?? 0, req.statement?.length ?? 0);
+      if (decision === "deny") {
+        const audit = await tx.doc(Audit, main.id);
+        audit.refused ??= {};
+        audit.refused[`${req.taskId} ${req.tool}`] = true;
+      } else if (req.deferred && decision !== "task-full") {
+        scope.late.push({ tool: req.tool, argumentsJson: req.argumentsJson });
+      }
+      if (decision === "task-full" || decision === "deny") {
+        for (const other of Object.values(pending)) {
+          if (other.id === req.id || other.taskId !== req.taskId || (decision === "deny" && other.tool !== req.tool) || now >= other.expiresAt) continue;
+          if (!other.deferred) await tx.signal(other.toolTask, Decision, other.wakeKey ?? other.id, { allow: decision === "task-full" });
+          delete pending[other.id];
+        }
+      }
+    }
+    delete pending[requestId];
+    await onDelivered?.(tx);
+    return reply("delivered");
   }, context);
 }
 
-export function mainApprovalTool(main: () => Conversation) {
-  return defineTool({
-    name: "answer_permission_request", description: "Allow or deny a restricted task's capability request. Sends and irreversible actions go to the user.",
-    parameters: obj({ requestId: str(), allow: bool(), note: opt(str()) }),
-    execute: (answer, api, ctx) => api.commit(tx => deliver(tx, main(), "main", answer), ctx),
+export async function migrateRequests(tx: Tx, main: Conversation, at: number, timeout: number) {
+  const { pending } = await tx.doc(Requests, main.id);
+  for (const req of Object.values(pending)) {
+    if (req.audience === "main" || req.tool === "request_capability") {
+      await tx.signal(req.toolTask, Decision, req.id, { allow: false });
+      delete pending[req.id];
+    } else {
+      req.expiresAt ??= at + timeout;
+      req.statement ??= [];
+    }
+  }
+}
+
+async function expire(tx: Tx, main: Conversation, req: Request) {
+  const { byId } = await tx.doc(Reviews, main.id);
+  byId[req.id] = { ...byId[req.id], ended: "expired" };
+  delete (await tx.doc(Requests, main.id)).pending[req.id];
+  await main.submit(tx, { type: "input", whenBusy: "followUp", requestId: `expired-${req.id}`,
+    content: `Notify the user: task ${req.taskId}, request ${req.id} (${req.tool}): Approval expired without a decision` });
+}
+
+export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number, defaultMs: number,
+  mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall) => Promise<Judgment>) {
+  const review = defineTask<{ id: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
+    { phase: "review" }, null>({
+    name: "alter.approval-review", version: 1, initial: () => ({ phase: "review" }),
+    phases: { async review({ input }, api, ctx) {
+      const main = getMain();
+      const judgment = await judge(input.statement, { tool: input.tool, arguments: JSON.parse(input.argumentsJson) });
+      await api.commit(async tx => {
+        const reviews = await tx.doc(Reviews, main.id);
+        reviews.byId[input.id] = { ...reviews.byId[input.id], judgment };
+        await tx.signal(input.toolTask, Reviewed, input.id, true);
+        return { status: "terminal", outcome: { status: "completed", result: null } };
+      }, ctx);
+    } },
+    abort: (_, api, ctx) => api.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
   });
-}
-
-const riskOrder: Effect[] = ["read", "write-local", "external-send", "irreversible", "unknown"];
-function describeCall({ manifests, toolActions }: CapabilityRegistry, name: string, args: Record<string, unknown>): ToolAction | undefined {
-  if (name === "finish") return { capability: "task", action: "finish", effect: "write-local" as const };
-  if (name !== "request_capability") return toolActions.get(name);
-  const manifest = manifests.find(item => item.id === args.capability);
-  if (!manifest || typeof args.reason !== "string" || !args.reason.trim()) return undefined;
-  const effect = riskOrder.findLast(risk => manifest.actions.some(action => action.effect === risk)) ?? "unknown";
-  return { capability: manifest.id, action: "request", effect };
-}
-
-function approver(permission: Permission, tool: string, listed: boolean, risky: boolean, tainted: boolean): Audience | undefined {
-  if (tool === "finish") return;
-  if (tainted) return "user";
-  if (permission === "full") return;
-  if (risky && (tool !== "request_capability" || permission === "auto")) return "user";
-  if (permission === "restricted" && !listed) return "main";
-  return undefined;
-}
-
-export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number) {
+  const expiry = defineTask<{ id: string }, { phase: "expire" }, null>({
+    name: "alter.deferred-expiry", version: 1, initial: () => ({ phase: "expire" }),
+    phases: { expire: ({ input }, api, ctx) => api.commit(async tx => {
+      const main = getMain();
+      const req = (await tx.doc(Requests, main.id)).pending[input.id];
+      if (req && api.now() < req.expiresAt) return { status: "sleeping", checkpoint: { phase: "expire" }, until: req.expiresAt };
+      if (req) await expire(tx, main, req);
+      return { status: "terminal", outcome: { status: "completed", result: null } };
+    }, ctx) },
+    abort: (_, api, ctx) => api.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
+  });
   return defineExtension({
-    name: "alter.broker",
+    name: "alter.broker", tasks: [review, expiry],
     hooks: [hook(ToolTask, {
       async beforeTool(call, api, ctx) {
         const main = getMain();
         const isMain = api.conversationId === main.id;
-        if (isMain && !registry.toolActions.has(call.name)) return; // Main control-plane tools.
+        const control = call.name === "finish" || call.name === "declare_permissions";
+        const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write-local" }
+          : registry.toolActions.get(call.name);
+        if (isMain && !descriptor) return;
         const taskId = isMain ? "main" : (await api.snapshot(TaskIdentity, api.conversationId, ctx))?.taskId ?? "";
-        if (!taskId) return { block: "Missing task identity" };
-        const requestId = `permission-${api.taskId}`;
-        const signal = await api.readSignal(Decision, requestId, ctx);
-        const descriptor = describeCall(registry, call.name, call.arguments);
-        const { capability, action, effect } = descriptor ?? {
-          capability: String(call.arguments.capability ?? "unknown"), action: call.name, effect: "unknown" as const,
-        };
+        const id = `permission-${api.taskId}`;
+        const signal = await api.readSignal(Decision, id, ctx);
+        const { capability, action, effect } = descriptor ?? { capability: "unknown", action: call.name, effect: "unknown" };
         return main.commit(async tx => {
           const task = (await tx.doc(Tasks, main.id)).byId[taskId];
           const risky = effect === "external-send" || effect === "irreversible" || effect === "unknown";
-          const state = (risky || descriptor?.guarded) && call.name !== "request_capability"
-            ? await tx.doc(Taint, api.conversationId) : undefined;
+          const state = risky || descriptor?.guarded ? await tx.doc(Taint, api.conversationId) : undefined;
           const taint = state?.first;
           const audit = await tx.doc(Audit, main.id);
-          const requests = await tx.doc(Requests, main.id);
+          const { pending } = await tx.doc(Requests, main.id);
+          const at = api.now();
           function record(decision: AuditEntry["decision"]) {
-            if (audit.last[requestId] === decision) return;
-            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at: api.now(),
-              ...(taint && { tainted: true as const }) });
-            audit.last[requestId] = decision;
+            if (audit.last[id] === decision) return;
+            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at,
+              ...(decision === "park" && { audience: "user" as const }), ...(taint && { tainted: true as const }) });
+            audit.last[id] = decision;
           }
-          if ((!isMain && task?.status !== "running") || !descriptor) {
-            record("deny");
-            return { block: "Unknown capability or inactive task" };
-          }
-          if (task?.proactive && call.name !== "finish" && (call.name === "request_capability" || effect !== "read" || !task.allow.includes(capability))) {
-            record("deny");
-            return { block: "Proactive research is read-only and cannot request capabilities" };
-          }
-          const refusal = `${taskId} ${call.name}`;
-          if (signal) {
-            const askedUser = requests.pending[requestId]?.audience === "user";
-            delete requests.pending[requestId];
-            if ("expired" in signal) {
-              const reason = "Approval expired without a decision";
-              await main.submit(tx, {
-                type: "input", whenBusy: "followUp", requestId: `expired-${requestId}`,
-                content: `Notify the user: task ${taskId}, request ${requestId} (${call.name}): ${reason}`,
-              });
-              record("deny");
-              return { block: reason };
-            }
-            if (!signal.value.allow) {
-              record("deny");
-              if (askedUser) (audit.refused ??= {})[refusal] = true;
-              // Without this, models tend to re-request the capability and retry, asking the user again.
-              // Naming the decider matters: "permission denied" reads as a system fault, and main re-dispatches.
-              const note = signal.value.note ? ` Note: ${signal.value.note}` : "";
-              const who = askedUser ? "The user declined" : "The main session declined";
-              return { block: `${who} this ${call.name} call.${note} This is a decision, not a system error. Do not retry it or request the capability again; finish and report that it was declined.` };
+          function block(message: string) { record("deny"); return { block: message }; }
+          if ((!isMain && task?.status !== "running") || !descriptor) return block("Unknown capability or inactive task");
+          if (task?.proactive && !control && (effect !== "read" || capability !== "browser")) return block("Proactive research is read-only");
+          const { byId } = await tx.doc(Reviews, main.id);
+          const result = byId[id];
+          if (result?.ended) return block(result.ended === "expired" ? expiredMessage : deferredMessage);
+          let req = pending[id];
+          const legacy = req && signal && "value" in signal ? signal.value : undefined;
+          const user = result?.user ?? (legacy && (legacy.allow ? "once" : "deny"));
+          if (user) {
+            delete pending[id];
+            if (user === "deny") {
+              if (legacy && !isMain) {
+                audit.refused ??= {};
+                audit.refused[`${taskId} ${call.name}`] = true;
+              }
+              return block(`The user declined this ${call.name} call. ${result?.note ?? legacy?.note ?? ""} Do not retry it; finish and report that it was declined.`);
             }
             record("allow");
             return;
           }
-          // A capability grant does not authorize later calls. Preserve its existing tier policy.
-          const value = descriptor.seenArg === undefined ? undefined : call.arguments[descriptor.seenArg];
+          if (!isMain && audit.refused?.[`${taskId} ${call.name}`]) {
+            delete pending[id];
+            return block(`The user already declined ${call.name} in this task. Do not retry it; finish and report that the user declined.`);
+          }
+          const value = descriptor.seenArg && call.arguments[descriptor.seenArg];
           const url = typeof value === "string" ? normalUrl(value) : undefined;
-          const seen = !risky && descriptor.guarded && url !== undefined && state?.seen?.includes(url);
-          const audience = approver(task?.permission ?? "full", call.name, task?.allow.includes(capability) ?? false, risky, !!taint && !seen);
-          if (task?.proactive && audience) {
-            record("deny");
-            return { block: "Proactive research cannot request approval" };
-          }
-          // Prompts alone do not stop retries after a denial, so the user is never asked twice in one task.
-          if ((audience === "user" || taint) && !isMain && audit.refused?.[refusal] && !requests.pending[requestId]) {
-            record("deny");
-            return { block: `The user already declined ${call.name} in this task. Do not call it again; finish and report that the user declined.` };
-          }
-          if (!audience && !requests.pending[requestId]) {
-            record("allow");
-            return;
-          }
-          if (audience && !requests.pending[requestId]) {
-            const reason = call.name === "request_capability" ? String(call.arguments.reason) : task?.brief ?? "Main session tool call";
-            requests.pending[requestId] = {
-              id: requestId, toolTask: api.taskId, taskId, audience, reason, capability,
-              ...(taint && { tainted: true as const, taint: { ...taint } }),
-              expiresAt: api.now() + timeout, tool: call.name, argumentsJson: JSON.stringify(call.arguments),
-            };
-            if (audience === "main") {
-              await main.submit(tx, {
-                type: "input", whenBusy: "followUp", requestId,
-                content: `permission request ${requestId}: task ${taskId} wants ${capability} because ${reason}`,
-              });
+          const seen = !risky && url && state?.seen?.includes(url);
+          const sensitive = (taint && !seen) || (risky && task && task.permission !== "full");
+          if (task?.proactive && sensitive) return block("Proactive research cannot request approval");
+          if (req && at >= req.expiresAt) { await expire(tx, main, req); return block(expiredMessage); }
+          const scope = await tx.doc(ScopeDoc, api.conversationId);
+          const argumentsJson = JSON.stringify(call.arguments, (_, value) =>
+            value && typeof value === "object" && !Array.isArray(value)
+              ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+          if ((!sensitive && !req) || scope.full || audit.last[id] === "allow") { delete pending[id]; record("allow"); return; }
+          const late = scope.late.findIndex(item => item.tool === call.name && item.argumentsJson === argumentsJson);
+          if (late >= 0) { scope.late.splice(late, 1); delete pending[id]; record("allow"); return; }
+          const setting = mode();
+          const eligible = !isMain && effect !== "irreversible" && effect !== "unknown";
+          if (!req) {
+            if (Object.values(pending).some(r => r.taskId === taskId && r.deferred && r.tool === call.name &&
+              r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
+            const checking = eligible && setting === "auto" && scope.approved !== undefined;
+            pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
+              argumentsJson, reason: task?.brief ?? "Main session tool call", expiresAt: at + timeout,
+              statement: scope.items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
+              ...(!isMain && { defaultAt: at + Math.min(defaultMs, timeout) }), ...(checking && { checking: true }),
+              ...(taint && { tainted: true, taint: { ...taint } }) };
+            req = pending[id]!;
+            if (eligible && setting !== "off") {
+              const statement = scope.items.slice(0, scope.approved);
+              byId[id] = { itemCount: statement.length };
+              await tx.createTask(review, { id, toolTask: api.taskId, statement,
+                tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
             }
+            if (!checking) { scope.shown = scope.items.length; record("park"); }
+          }
+          const due = req.defaultAt !== undefined && at >= req.defaultAt;
+          if (setting === "auto" && eligible && (req.checking || due)) {
+            if (byId[id]?.itemCount !== undefined && !result?.judgment) {
+              req.wakeKey = id + "-review";
+              return { sleep: { until: req.expiresAt, signals: [Reviewed.key(id), Decision.key(req.wakeKey)] } };
+            }
+            if (result?.judgment?.inScope && result.itemCount) {
+              scope.approved ??= req.statement?.length ?? 0;
+              delete pending[id];
+              record("allow");
+              (await tx.doc(Ledger, main.id)).entries.push({ taskId, at, summary: `审批模型放行：${call.name}（${result.judgment.reason}）`,
+                refs: [{ kind: "approval", ref: id }] });
+              return;
+            }
+          }
+          if (req.checking) {
+            delete req.checking;
+            req.defaultAt = Math.min(at + defaultMs, req.expiresAt);
+            scope.shown = req.statement?.length ?? 0;
             record("park");
           }
-          return { sleep: { until: requests.pending[requestId]!.expiresAt, signals: [Decision.key(requestId)] } };
+          const defaultReached = req.defaultAt !== undefined && at >= req.defaultAt;
+          if (defaultReached && setting !== "shadow") {
+            if (setting === "auto") scope.approved ??= req.statement?.length ?? 0;
+            if (!req.deferred) {
+              req.deferred = true;
+              byId[id] = { ...byId[id], ended: "deferred" };
+              await tx.createTask(expiry, { id }, { ownership: { kind: "conversation" }, background: true });
+            }
+            return block(deferredMessage);
+          }
+          const until = defaultReached ? req.expiresAt : req.defaultAt ?? req.expiresAt;
+          if (defaultReached) req.wakeKey = id + "-final";
+          else delete req.wakeKey;
+          return { sleep: { until, signals: [Decision.key(req.wakeKey ?? id)] } };
         }, ctx);
       },
       async afterTool(call, result, api, ctx) {

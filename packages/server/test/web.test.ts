@@ -151,11 +151,9 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
 });
 
 const send = { tool: "outbox_send", capability: "outbox", arguments: { message: "hello" }, reason: "send greeting" };
-const grant = { tool: "request_capability", capability: "calendar", arguments: { capability: "calendar", reason: "need dates" }, reason: "need dates" };
 it.each([
   { permission: "auto", call: send, audience: "user" },
   { permission: "restricted", call: send, audience: "user" },
-  { permission: "restricted", call: grant, audience: "main" },
 ])("observes a $permission task and routes $call.tool to $audience", async ({ permission, call, audience }) => {
   const web = await setup(({ model, messages }, res) => {
     const last = messages.at(-1)!;
@@ -163,7 +161,7 @@ it.each([
       if (last.role === "tool") return toolCall(res, "finish", { summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }] });
       return toolCall(res, call.tool, call.arguments);
     }
-    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send greeting", context: "fresh", permission, allow: [] });
+    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send greeting", context: "fresh", permission });
     say(res, "ack");
   });
   await web.login();
@@ -177,15 +175,10 @@ it.each([
     context: "fresh", brief: "send greeting", permission, thinking: "high", status: "running", allow: [], pending: [request] });
   expect(task.createdAt).toBeGreaterThan(0);
   expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience,
-    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason, expiresAt: expect.any(Number) });
+    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason, statement: [], defaultAt: expect.any(Number), expiresAt: expect.any(Number) });
   expect(request.expiresAt).toBeGreaterThan(task.createdAt);
   expect(feed.events).toContainEqual({ event: "tasks", data: [task] });
-  const decide = () => web.post("/api/permissions/" + request.id, { allow: true, note: "OK" });
-  if (audience === "main") {
-    expect((await decide()).status).toBe(409);
-    expect((await web.state()).pending).toEqual([request]);
-    return;
-  }
+  const decide = () => web.post("/api/permissions/" + request.id, { decision: "statement", note: "OK" });
   const decisions = await Promise.all([decide(), decide()]);
   expect(decisions.map(r => r.status).sort()).toEqual([204, 409]);
   await feed.seen(e => e.event === "timeline" && e.data.kind === "report" && e.data.taskId === task.taskId);
@@ -248,7 +241,7 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
   const web = await setup(({ model, messages }, res) => {
     if (model === "offline/task") return toolCall(res, "finish", { summary: "ready", refs: [] });
     if (messages.at(-1)?.content?.endsWith("\ndelegate")) {
-      return toolCall(res, "dispatch_task", { brief: "look", context: "fork", permission: "full", allow: [] });
+      return toolCall(res, "dispatch_task", { brief: "look", context: "fork", permission: "full" });
     }
     say(res, "ack");
   });
@@ -394,7 +387,7 @@ it("requires user approval before sending as a Feishu user after a full task rea
       return toolCall(res, "finish", { summary: "delivered", refs: [] });
     }
     if (messages.at(-1)?.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task",
-      { brief: "read and send", permission: "full", context: "fresh", allow: ["feishu"] });
+      { brief: "read and send", permission: "full", context: "fresh" });
     say(res, "ack");
   }, false, feishu);
   await web.login();
@@ -493,4 +486,23 @@ it.each([true, false])("serves a local-day funnel with Feishu configured=%s", as
     timeZone: "Asia/Shanghai", precision: null, days: [{ date: "2026-12-02", triggered: 1, passed: 1,
       pushed: configured ? 0 : 1, read: 0, useful: 0, useless: 0, digests: 0, reminders: 0 }],
   });
+});
+
+it("persists an authenticated approval mode and reports paired decisions", async () => {
+  const web = await setup();
+  expect((await web.read("/api/settings")).status).toBe(401);
+  expect((await web.read("/api/approvals/stats")).status).toBe(401);
+  await web.login();
+  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "shadow" });
+  const patch = (value: unknown) => fetch(web.base + "/api/settings", { method: "PATCH",
+    headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value) });
+  for (const invalid of [{}, { approvalModel: true }, { approvalModel: "auto", extra: false }]) {
+    expect((await patch(invalid)).status).toBe(400);
+  }
+  expect(await (await patch({ approvalModel: "off" })).json()).toEqual({ approvalModel: "off" });
+  expect(await (await web.read("/api/approvals/stats")).json()).toEqual({ compared: 0, agreed: 0, agreementRate: null, deniedButInScope: 0 });
+  await web.close();
+  const reopened = await web.reopen();
+  await reopened.login();
+  expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "off" });
 });

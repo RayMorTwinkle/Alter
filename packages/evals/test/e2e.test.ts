@@ -65,7 +65,7 @@ it("checks actual calendar state, removes each database, and excludes incorrect 
 it.each([false, true])("answers a parked user request once and waits for the child report (allow=%s)", async allow => {
   const main = fauxProvider();
   const worker = fauxProvider({ provider: "worker" });
-  main.setResponses([call("dispatch_task", { brief: "send", context: "fresh", permission: "restricted", allow: ["outbox"] }),
+  main.setResponses([call("dispatch_task", { brief: "send", context: "fresh", permission: "restricted" }),
     say("正在处理"), say("已收到任务报告")]);
   worker.setResponses([call("outbox_send", { message: "测试" }), call("finish", { summary: "已处理", refs: [] })]);
   const approvalTask: Task = { id: "offline-approval", category: "日历", turns: ["发消息"],
@@ -147,7 +147,7 @@ it("rejects a mail-reply result if a sibling task has a receipt despite a denied
   });
   const main = fauxProvider();
   const worker = fauxProvider({ provider: "worker" });
-  const dispatch = (brief: string) => call("dispatch_task", { brief, context: "fresh", permission: "restricted", allow: ["mail"] });
+  const dispatch = (brief: string) => call("dispatch_task", { brief, context: "fresh", permission: "restricted" });
   main.setResponses([dispatch("回复"), say("正在处理"), dispatch("复核"), say("正在复核"), say("已处理")]);
   worker.setResponses([call("mail_read", { uid: 1 }), call("mail_send", { to: mailConfig.address, subject: "Re: 会议", text: "收到，谢谢" }),
     call("finish", { summary: "用户拒绝发送", refs: [] }), call("finish", { summary: "已复核", refs: [] })]);

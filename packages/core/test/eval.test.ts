@@ -36,7 +36,7 @@ it("removes only the lease tool and lease instruction when leasing is disabled",
   const lease = await agent(true);
   const dispatch = await agent(false);
   expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_cancel",
-    "dispatch_task", "task_status", "task_message", "task_cancel", "answer_permission_request",
+    "dispatch_task", "task_status", "task_message", "task_cancel",
     "memory_search", "memory_save", "memory_update", "memory_delete"]);
   expect(dispatch.instructions).toBe(lease.instructions!.replace("简短、频繁的日程操作可用 enable_tool 租用 calendar。", ""));
 });
@@ -66,7 +66,7 @@ it("waits for the dispatched list and its final reply, and counts usage attempts
   const task = fauxProvider({ provider: "worker" });
   const base = { at: new Date().toISOString(), attempt: 1, latencyMs: 10 } as const;
   main.setResponses([
-    call("dispatch_task", { brief: "列出日程", context: "fresh", permission: "restricted", allow: ["calendar"] }),
+    call("dispatch_task", { brief: "列出日程", context: "fresh", permission: "restricted" }),
     say("正在查询"), async ({ messages }) => {
       await appendUsage(dataDir, { ...base, model: "main", conversation: "main", outcome: "ok", inputTokens: 7, outputTokens: 2 });
       return say(contentText(messages.at(-1)!.content));

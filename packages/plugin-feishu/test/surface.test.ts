@@ -84,8 +84,8 @@ it("normalizes real SDK WS envelopes, strips only supplied mentions and returns 
   expect(message).toHaveBeenCalledWith({ id: "m1", openId: "stranger", chatId: "g1", chatType: "group", type: "text",
     text: "hello @_user_10", at: 1234 });
   expect(await invoke("card.action.trigger", { operator: { open_id: "stranger" }, context: { open_message_id: "m2" },
-    action: { value: { requestId: "req", allow: false } } })).toEqual(toast);
-  expect(action).toHaveBeenCalledWith({ openId: "stranger", messageId: "m2", requestId: "req", allow: false });
+    action: { value: { requestId: "req", decision: "deny" } } })).toEqual(toast);
+  expect(action).toHaveBeenCalledWith({ openId: "stranger", messageId: "m2", requestId: "req", decision: "deny" });
 });
 
 it("locks five wrong attempts until rotation, rejects an expired code and persists the owner privately", async () => {
@@ -166,12 +166,12 @@ function setupApproval() {
     const cancel = /\ncancel (task-\d+)$/.exec(messages.at(-1)?.content ?? "");
     if (cancel) return toolCall(res, "task_cancel", { taskId: cancel[1] });
     if (messages.at(-1)?.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task",
-      { brief: "send", context: "fresh", permission: "auto", allow: [] });
+      { brief: "send", context: "fresh", permission: "auto" });
     say(res, "ack");
   });
 }
 
-it.each(["approve", "deny", "web", "cancel"])("restores the pending card and resolves it once via %s", async via => {
+it.each(["once", "statement", "task-full", "deny", "web", "cancel"] as const)("restores the pending card and resolves it once via %s", async via => {
   const f = await setupApproval();
   await submitMessage(f.app.main, "delegate");
   await expect.poll(() => f.feed.snapshot().pending.length).toBe(1);
@@ -181,21 +181,21 @@ it.each(["approve", "deny", "web", "cancel"])("restores the pending card and res
   const req = f.feed.snapshot().pending[0]!;
   const [chatId, card, uuid] = f.transport.sendCard.mock.calls[0]!;
   expect(chatId).toBe("private");
-  for (const field of [req.id, req.taskId, req.tool, "批准", "拒绝", "…"]) expect(JSON.stringify(card)).toContain(field);
+  for (const field of [req.id, req.taskId, req.tool, "允许这一次", "按说明允许", "本任务全权限", "拒绝", "…"]) expect(JSON.stringify(card)).toContain(field);
   expect(JSON.stringify(card)).not.toContain("x".repeat(501));
   await f.close();
   const g = await f.reopen();
-  const click = { messageId: "om_" + uuid, requestId: req.id, allow: via === "approve" };
+  const click = { messageId: "om_" + uuid, requestId: req.id, decision: via === "web" || via === "cancel" ? "once" as const : via };
   expect((await g.handlers.action({ ...click, openId: "stranger" })).toast.type).toBe("error");
   expect((await g.handlers.action({ ...click, messageId: "another-card", openId: "owner" })).toast.type).toBe("info");
   expect((await g.app.harness.snapshot(Requests, g.app.main.id, context))?.pending).toHaveProperty(req.id);
-  if (via === "web") await answerUserPermission(g.app.main, { requestId: req.id, allow: true });
+  if (via === "web") await answerUserPermission(g.app.main, { requestId: req.id, decision: "once" });
   else if (via === "cancel") await submitMessage(g.app.main, `cancel ${req.taskId}`);
   else expect((await g.handlers.action({ ...click, openId: "owner" })).toast.type).toBe("success");
   await expect.poll(() => g.transport.updateCard.mock.calls.length).toBe(1);
   const [updated, contents] = g.transport.updateCard.mock.calls[0]!;
   expect(updated).toBe(click.messageId);
-  expect(JSON.stringify(contents)).toContain(via === "approve" ? "已批准" : via === "deny" ? "已拒绝" : "已在其他入口处理");
+  expect(JSON.stringify(contents)).toContain(via === "web" || via === "cancel" ? "已在其他入口处理" : via === "deny" ? "已拒绝" : "已批准");
   expect(JSON.stringify(contents)).not.toContain("button");
   expect((await g.handlers.action({ ...click, openId: "owner" })).toast.type).toBe("info");
   await expect.poll(() => g.feed.snapshot().ledger.length).toBe(1);
@@ -236,7 +236,7 @@ it("continues sending other cards after a failed send and recovers the winning d
   await expect.poll(sent).toBeDefined();
   const messageId = "om_" + sent()![2];
   f.transport.updateCard.mockRejectedValue(new Error("simulated update failure"));
-  const result = await f.handlers.action({ openId: "owner", messageId, requestId, allow: true });
+  const result = await f.handlers.action({ openId: "owner", messageId, requestId, decision: "once" });
   expect(result.toast.type).toBe("success");
   await expect.poll(() => f.transport.updateCard.mock.calls.length).toBeGreaterThan(0);
   await f.close();
@@ -245,20 +245,6 @@ it("continues sending other cards after a failed send and recovers the winning d
   expect(g.transport.updateCard.mock.calls[0]![0]).toBe(messageId);
   expect(JSON.stringify(g.transport.updateCard.mock.calls[0]![1])).toContain("已批准");
   expect(g.transport.sendCard.mock.calls.map(([, , uuid]) => uuid)).toEqual([failedId]);
-});
-
-it("keeps capability requests addressed to the main assistant off the owner's cards", async () => {
-  const f = await setup(({ model, messages }, res) => {
-    if (model === "offline/task") return toolCall(res, "request_capability", { capability: "calendar", reason: "查看日程" });
-    if (messages.at(-1)?.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task",
-      { brief: "查看日程", context: "fresh", permission: "restricted", allow: [] });
-    say(res, "ack");
-  });
-  await f.pair();
-  await submitMessage(f.app.main, "delegate");
-  await expect.poll(() => f.feed.snapshot().pending[0]?.audience).toBe("main");
-  await f.close();
-  expect(f.transport.sendCard).not.toHaveBeenCalled();
 });
 
 it("delivers only unread now notifications to the paired owner and remembers IDs across restarts", async () => {

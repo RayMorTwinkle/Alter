@@ -31,8 +31,8 @@ afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 function call(name: string, args: Parameters<typeof fauxToolCall>[1]) {
   return say(fauxToolCall(name, args), { stopReason: "toolUse" });
 }
-function dispatch(brief: string, permission: Permission = "restricted", allow: string[] = [], mode = "fresh") {
-  return call("dispatch_task", { brief, permission, allow, context: mode });
+function dispatch(brief: string, permission: Permission = "restricted", mode = "fresh") {
+  return call("dispatch_task", { brief, permission, context: mode });
 }
 function finish(summary: string) {
   return call("finish", { summary, refs: [] });
@@ -71,8 +71,8 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_save", "memory_search", "memory_update"];
-const controls = ["answer_permission_request", "dispatch_task", "enable_tool", ...memoryTools, "schedule_cancel", "schedule_create", "schedule_list", "task_cancel", "task_message", "task_status"];
-const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send", "request_capability"];
+const controls = ["dispatch_task", "enable_tool", ...memoryTools, "schedule_cancel", "schedule_create", "schedule_list", "task_cancel", "task_message", "task_status"];
+const taskTools = ["calendar_create", "calendar_list", "calendar_update", "declare_permissions", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
   const dir = await mkdtemp(join(tmpdir(), "alter-no-demos-"));
@@ -92,7 +92,7 @@ it("offers only real plugins when demos are off, so no simulated send exists", a
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(system).toContain("calendar（日历");
   expect(system).not.toMatch(/outbox|notes|示例/);
-  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "finish", ...memoryTools, "request_capability"]);
+  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "declare_permissions", "finish", ...memoryTools]);
 });
 
 it("dispatches a fresh notes task and delivers its ledger summary to the main model", async () => {
@@ -100,7 +100,7 @@ it("dispatches a fresh notes task and delivers its ledger summary to the main mo
   const app = await open((text, last, _, offered) => {
     if (text === "delegate") {
       seen.push(offered.join(","));
-      return dispatch("read welcome", "restricted", ["notes"]);
+      return dispatch("read welcome", "restricted");
     }
     if (text === "read welcome") {
       seen.push(offered.join(","));
@@ -125,8 +125,8 @@ it("dispatches a fresh notes task and delivers its ledger summary to the main mo
 it("never asks the user twice in one task after a denial, while a new task asks again", async () => {
   const results: string[] = [];
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("send greeting", "restricted", ["outbox"]);
-    if (text === "again") return dispatch("send again", "restricted", ["outbox"]);
+    if (text === "delegate") return dispatch("send greeting", "restricted");
+    if (text === "again") return dispatch("send again", "restricted");
     if (text === "send greeting" || text === "send again") return call("outbox_send", { message: "hello" });
     if (last.role === "toolResult" && last.toolName === "outbox_send") {
       results.push(text);
@@ -137,7 +137,7 @@ it("never asks the user twice in one task after a denial, while a new task asks 
   });
   await input(app, "delegate");
   const first = await parked(app);
-  await answerUserPermission(app.main, { requestId: first.id, allow: false });
+  await answerUserPermission(app.main, { requestId: first.id, decision: "deny" });
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(results[1]).toContain("already declined outbox_send");
   const audit = await app.harness.snapshot(Audit, app.main.id, context);
@@ -152,7 +152,7 @@ it("never asks the user twice in one task after a denial, while a new task asks 
 it("keeps asking for each send after an approval", async () => {
   let sends = 0;
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("send twice", "restricted", ["outbox"]);
+    if (text === "delegate") return dispatch("send twice", "restricted");
     if (text === "send twice") return call("outbox_send", { message: "one" });
     if (last.role === "toolResult" && last.toolName === "outbox_send") {
       return ++sends === 1 ? call("outbox_send", { message: "two" }) : finish("sent");
@@ -161,16 +161,16 @@ it("keeps asking for each send after an approval", async () => {
   });
   await input(app, "delegate");
   const first = await parked(app);
-  await answerUserPermission(app.main, { requestId: first.id, allow: true });
+  await answerUserPermission(app.main, { requestId: first.id, decision: "once" });
   await expect.poll(async () => Object.values((await app.harness.snapshot(Requests, app.main.id, context))?.pending ?? {})
     .filter(r => r.audience === "user" && r.id !== first.id).length).toBe(1);
   expect(app.demo.outbox).toEqual(["one"]);
 });
 
-it.each([true, false])("routes a restricted send to the user even when main allowed outbox, allow=%s", async allow => {
+it.each([true, false])("routes a restricted send to the user, allow=%s", async allow => {
   let sendResult = "";
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("send greeting", "restricted", ["outbox"]);
+    if (text === "delegate") return dispatch("send greeting", "restricted");
     if (text === "send greeting") return call("outbox_send", { message: "hello" });
     if (last.role === "toolResult" && last.toolName === "outbox_send") {
       sendResult = text;
@@ -181,7 +181,7 @@ it.each([true, false])("routes a restricted send to the user even when main allo
   await input(app, "delegate");
   const request = await parked(app);
   expect(request.audience).toBe("user");
-  await answerUserPermission(app.main, { requestId: request.id, allow, note: "keep it private" });
+  await answerUserPermission(app.main, { requestId: request.id, decision: allow ? "once" : "deny", note: "keep it private" });
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect((await incoming(app)).filter(line => line.startsWith("permission request "))).toEqual([]);
   expect(sendResult).toContain(allow ? "Recorded in outbox" : "keep it private");
@@ -225,7 +225,7 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   const second = await open(route, await reopen(), [], 60_000);
   second.harness.resume();
   expect(await parked(second)).toMatchObject({ id: requestId, expiresAt });
-  await answerUserPermission(second.main, { requestId, allow: true });
+  await answerUserPermission(second.main, { requestId, decision: "once" });
   await expect.poll(async () => (await ledger(second)).length).toBe(1);
   await second.main.waitForIdle(context);
   expect(second.demo.outbox).toEqual(["survived"]);
@@ -238,30 +238,29 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   expect(await ledger(third)).toHaveLength(1);
 });
 
-it.each(["user", "main"])("expires an unanswered %s approval and notifies main once", async audience => {
+it("expires an unanswered user approval and notifies main once", async () => {
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   try {
-    const tool = audience === "user" ? "outbox_send" : "request_capability";
+    const tool = "outbox_send";
     const notifications: string[] = [];
     const app = await open((text, last) => {
       if (text === "delegate") return dispatch("work");
-      if (text === "work") return call(tool, audience === "user" ? { message: "hello" } : { capability: "notes", reason: "read" });
+      if (text === "work") return call(tool, { message: "hello" });
       if (last.role === "toolResult" && last.toolName === tool) return finish(text);
       if (text.startsWith("Notify the user:")) notifications.push(text);
       return say("OK");
     });
     await input(app, "delegate");
     const request = await parked(app);
-    expect(request).toMatchObject({ audience, expiresAt: now + 86_400_000 });
+    expect(request).toMatchObject({ audience: "user", expiresAt: now + 86_400_000 });
     clock.mockReturnValue(request.expiresAt);
-    if (audience === "user") expect((await answerUserPermission(app.main, { requestId: request.id, allow: true })).isError).toBe(true);
+    expect((await answerUserPermission(app.main, { requestId: request.id, decision: "once" })).isError).toBe(true);
     app.harness.resume();
     await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual([expect.stringContaining("Approval expired without a decision")]);
     await app.main.waitForIdle(context);
     expect(notifications).toEqual([`Notify the user: task ${request.taskId}, request ${request.id} (${tool}): Approval expired without a decision`]);
     expect(app.demo.outbox).toEqual([]);
-    expect((await app.harness.snapshot(Tasks, app.main.id, context))?.byId[request.taskId]?.allow).toEqual([]);
     expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
     expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.tool === tool).map(e => e.decision))
       .toEqual(["park", "deny"]);
@@ -290,7 +289,7 @@ it("recovers a parked call after SIGKILL with no graceful close", async () => {
     await openNodeSqliteStorage(database));
   app.harness.resume();
   expect((await parked(app)).id).toBe(requestId);
-  await answerUserPermission(app.main, { requestId, allow: true });
+  await answerUserPermission(app.main, { requestId, decision: "once" });
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   await app.main.waitForIdle(context);
   expect(app.demo.outbox).toEqual(["recovered"]);
@@ -333,7 +332,7 @@ it("allows auto local writes and accepts only a host decision for an external se
   let mainResult = "";
   let status = "";
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("schedule and notify", "auto", ["outbox"]);
+    if (text === "delegate") return dispatch("schedule and notify", "auto");
     if (text === "schedule and notify") return call("calendar_create", { title: "meeting" });
     if (last.role === "toolResult" && last.toolName === "calendar_create") return call("outbox_send", { message: "invitation" });
     if (text.startsWith("check task-")) return call("task_status", { taskId: text.slice(6) });
@@ -353,9 +352,9 @@ it("allows auto local writes and accepts only a host decision for an external se
   expect(JSON.parse(status).pending[0].remainingMs).toBeGreaterThan(0);
   expect(JSON.parse(status).pending[0].remainingMs).toBeLessThanOrEqual(86_400_000);
   await input(app, "approve as main");
-  expect(mainResult).toContain("No pending request for this approver");
+  expect(mainResult).toContain("not available");
   expect(app.demo.outbox).toEqual([]);
-  expect((await answerUserPermission(app.main, { requestId, allow: true })).isError).toBe(false);
+  expect((await answerUserPermission(app.main, { requestId, decision: "once" })).isError).toBe(false);
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(app.demo.outbox).toEqual(["invitation"]);
   const audit = (await app.harness.snapshot(Audit, app.main.id, context))!.entries;
@@ -387,7 +386,7 @@ it.each([true, false])("bounds reminders and only records finish (cooperative=%s
 it.each(["fork", "fresh"])("gives a %s task the correct conversation history", async mode => {
   const fact = "The project codename is Juniper.";
   const app = await open((text, _, messages) => {
-    if (text === "delegate") return dispatch("recall the codename", "restricted", [], mode);
+    if (text === "delegate") return dispatch("recall the codename", "restricted", mode);
     if (text === "recall the codename") {
       return finish(messages.some(msg => msg.role === "user" && contentText(msg.content) === fact) ? "Juniper" : "unknown");
     }
@@ -396,31 +395,6 @@ it.each(["fork", "fresh"])("gives a %s task the correct conversation history", a
   await input(app, fact);
   await input(app, "delegate");
   await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual([mode === "fork" ? "Juniper" : "unknown"]);
-});
-
-it.each(["restricted", "full"] as const)("audits explicit capability requests and subsequent calls in %s mode", async permission => {
-  const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("send with permission", permission);
-    if (text === "send with permission") return call("request_capability", { capability: "outbox", reason: "deliver the greeting" });
-    if (text.startsWith("permission request ")) return call("answer_permission_request", { requestId: text.split(" ")[2]!.slice(0, -1), allow: true });
-    if (last.role === "toolResult" && last.toolName === "request_capability") return call("outbox_send", { message: "hello" });
-    if (last.role === "toolResult" && last.toolName === "outbox_send") return finish(text);
-    return say("OK");
-  });
-  await input(app, "delegate");
-  if (permission === "restricted") {
-    // Main grants the capability; the send itself still waits for the user.
-    const send = await parked(app);
-    expect([send.tool, send.audience]).toEqual(["outbox_send", "user"]);
-    await answerUserPermission(app.main, { requestId: send.id, allow: true });
-  }
-  await expect.poll(async () => (await ledger(app)).length).toBe(1);
-  expect(app.demo.outbox).toEqual(["hello"]);
-  const requests = (await incoming(app)).filter(text => text.startsWith("permission request "));
-  expect(requests).toHaveLength(permission === "restricted" ? 1 : 0);
-  if (permission === "restricted") expect(requests[0]).toMatch(/wants outbox because deliver the greeting$/);
-  expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.decision === "allow").map(e => e.tool))
-    .toEqual(["request_capability", "outbox_send", "finish"]);
 });
 
 it("clears outstanding requests when the host stops a parked task", async () => {
@@ -464,7 +438,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
     if (last.role === "toolResult" && last.toolName === "enable_tool") leaseResult = text;
     if (text === "delegate") {
       expect(offered).not.toContain("mail_send");
-      return dispatch("send mail", "auto", ["mail"]);
+      return dispatch("send mail", "auto");
     }
     if (text === "send mail") {
       expect(offered).toContain("mail_send");
@@ -479,7 +453,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
   const request = await parked(app);
   expect(request).toMatchObject({ audience: "user", capability: "mail", tool: "mail_send" });
   expect(mail.clients.smtp).not.toHaveBeenCalled();
-  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect([...mail.sent.keys()]).toEqual([(await ledger(app))[0]!.summary]);
   expect(mail.clients.smtp).toHaveBeenCalledTimes(1);
@@ -490,7 +464,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
 it.each(["restricted", "full"] as const)("opens and clicks, then parks a tainted browser fill in %s mode", async permission => {
   const ego = fakeEgo();
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("browse", permission, ["browser"]);
+    if (text === "delegate") return dispatch("browse", permission);
     if (text === "browse") return call("browser_open", { url: "https://example.test/" });
     if (last.role === "toolResult") {
       if (last.toolName === "browser_open") return call("browser_click", { target: "@21" });
@@ -506,7 +480,7 @@ it.each(["restricted", "full"] as const)("opens and clicks, then parks a tainted
   expect(ego.page.goto).toHaveBeenCalledOnce();
   expect(ego.page.click).toHaveBeenCalledOnce();
   expect(ego.page.fill).not.toHaveBeenCalled();
-  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
   await expect.poll(() => ego.finish.mock.calls.length).toBe(1);
   expect(ego.page.fill).toHaveBeenCalledWith("@22", "hello");
   expect(ego.spaces.size).toBe(0);
@@ -539,7 +513,7 @@ it("aborts a parked task even when plugin cleanup fails", async () => {
 it("closes the browser space when a parked task is aborted", async () => {
   const ego = fakeEgo();
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("browse", "restricted", ["browser"]);
+    if (text === "delegate") return dispatch("browse", "restricted");
     if (text === "browse") return call("browser_open", { url: "https://example.test/" });
     if (last.role === "toolResult" && last.toolName === "browser_open") return call("browser_press", { key: "Enter" });
     return say("OK");
@@ -616,7 +590,7 @@ it("leases a declared plugin only in the harness where it is installed", async (
   const route: Route = (text, last, _, offered) => {
     if (text === "clock please") return call("enable_tool", { capability: "clock", reason: "check time" });
     if (text === "time" && offered.includes("clock_read")) return call("clock_read", {});
-    if (text === "delegate") return dispatch("read clock", "restricted", ["clock"]);
+    if (text === "read clock") return call("clock_read", {});
     if (last.role === "toolResult") results.push(text);
     return say("OK");
   };
@@ -625,8 +599,8 @@ it("leases a declared plugin only in the harness where it is installed", async (
   await input(installed, "clock please");
   await input(installed, "time");
   await input(plain, "clock please");
-  await input(plain, "delegate");
-  expect(results).toEqual(["Enabled clock", "noon", "Capability is not leasable", "Unknown capability in allow"]);
+  await input(plain, "read clock");
+  expect(results).toEqual(["Enabled clock", "noon", "Capability is not leasable", expect.stringContaining("not available")]);
 });
 
 it("unescapes newlines only when a summary has none", () => {
@@ -657,8 +631,7 @@ it.each(["send", "delete", "run"])("requires user approval for a tainted full ta
     if (text === "delegate") return dispatch("read then act", "full");
     if (text === "read then act") return call("remote_read", {});
     if (last.role === "toolResult") {
-      if (last.toolName === "remote_read") return call("request_capability", { capability: "remote", reason: "use remote" });
-      if (last.toolName === "request_capability") return call(tool, {});
+      if (last.toolName === "remote_read") return call(tool, {});
       if (last.toolName === tool) return finish(text);
     }
     return say("OK");
@@ -674,7 +647,7 @@ it.each(["send", "delete", "run"])("requires user approval for a tainted full ta
   expect(execute).not.toHaveBeenCalled();
   expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries).toContainEqual(
     expect.objectContaining({ tool, decision: "park", tainted: true }));
-  await answerUserPermission(app.main, { requestId: request.id, allow: true });
+  await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
   await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["executed"]);
   expect(execute).toHaveBeenCalledTimes(1);
 });
@@ -688,7 +661,7 @@ it("propagates a mail report to main and into both fork and fresh tasks across S
     if (text === "read mail") return dispatch("search mail", "full");
     if (text === "search mail") return call("mail_search", {});
     if (last.role === "toolResult" && last.toolName === "mail_search") return finish("mail report");
-    if (text === "fork" || text === "fresh") return dispatch("send report", "full", [], text);
+    if (text === "fork" || text === "fresh") return dispatch("send report", "full", text);
     if (text === "send report") return call("outbox_send", { message: "report" });
     if (last.role === "toolResult" && last.toolName === "outbox_send") return finish(text);
     return say("OK");
@@ -710,7 +683,7 @@ it("propagates a mail report to main and into both fork and fresh tasks across S
     expect((await app.harness.snapshot(Taint, id, context))?.first).toEqual(source);
   }
   expect(await parked(app)).toEqual(forked);
-  await answerUserPermission(app.main, { requestId: forked.id, allow: false });
+  await answerUserPermission(app.main, { requestId: forked.id, decision: "deny" });
   await expect.poll(async () => (await ledger(app)).length).toBe(2);
   await input(app, "fresh");
   expect(await parked(app)).toMatchObject({ audience: "user", tool: "outbox_send", tainted: true, taint: source });
@@ -734,7 +707,7 @@ it("gates a leased main tool after an external result, including when the user s
   expect(req).toMatchObject({ taskId: "main", audience: "user", tool: "remote_send", tainted: true,
     taint: { source: "remote_read" } });
   expect(execute).toHaveBeenCalledTimes(1);
-  await answerUserPermission(app.main, { requestId: req.id, allow: true });
+  await answerUserPermission(app.main, { requestId: req.id, decision: "once" });
   await app.main.waitForIdle(context);
   expect(execute).toHaveBeenCalledTimes(2);
   await app.main.submit({ type: "input", content: "send" }, context);
@@ -882,7 +855,7 @@ it("lets a tainted main search memory but requires a separate user decision for 
     expect(request).toMatchObject({ taskId: "main", audience: "user", tool: "memory_" + action,
       tainted: true, taint: { source: "remote_read" } });
     expect(app.memory.list().map(item => item.text)).toEqual(action === "save" ? [] : [action === "update" ? "考试" : "参加考试"]);
-    await answerUserPermission(app.main, { requestId: request.id, allow: action !== "delete" });
+    await answerUserPermission(app.main, { requestId: request.id, decision: action === "delete" ? "deny" : "once" });
     await app.main.waitForIdle(context);
     id = app.memory.list()[0]!.id;
   }
@@ -909,14 +882,14 @@ it("offers schedules without leases and parks tainted reminder creation and canc
     const request = await parked(app);
     expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action, tainted: true });
     expect((await reminders()).map(item => item.status)).toEqual(action === "create" ? [] : ["scheduled"]);
-    await answerUserPermission(app.main, { requestId: request.id, allow: true });
+    await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
     await app.main.waitForIdle(context);
     id = (await reminders())[0]!.id;
   }
   expect(await reminders()).toMatchObject([{ id, text: "回电话", status: "cancelled" }]);
 });
 
-it("continues an ended conversation with its history, taint and granted capabilities", async () => {
+it("continues an ended conversation with its history and taint", async () => {
   let original = "";
   let sawHistory = false;
   let conflict = "";
@@ -924,9 +897,7 @@ it("continues an ended conversation with its history, taint and granted capabili
   const { plugin } = externalPlugin();
   const app = await open((text, last, messages) => {
     if (text === "start") return dispatch("collect evidence");
-    if (text === "collect evidence") return call("request_capability", { capability: "remote", reason: "read the source" });
-    if (text.startsWith("permission request ")) return call("answer_permission_request", { requestId: text.split(" ")[2]!.slice(0, -1), allow: true });
-    if (last.role === "toolResult" && last.toolName === "request_capability") return call("remote_read", {});
+    if (text === "collect evidence") return call("remote_read", {});
     if (last.role === "toolResult" && last.toolName === "remote_read") return finish("collected");
     if (text === "mix") return call("dispatch_task", { brief: "next", context: "fresh", continue_from: original });
     if (last.role === "toolResult" && last.toolName === "dispatch_task" && last.isError) conflict = text;
@@ -953,13 +924,13 @@ it("continues an ended conversation with its history, taint and granted capabili
   expect(tasks[original]).toMatchObject({ status: "completed", thinking: "high" });
   expect(req.taskId).not.toBe(original);
   expect(tasks[req.taskId]).toMatchObject({ conversationId: tasks[original]!.conversationId, continuedFrom: original,
-    permission: "restricted", allow: ["remote"], thinking: "low" });
+    permission: "restricted", thinking: "low" });
   const child = (await app.harness.conversation(tasks[original]!.conversationId, context))!;
   expect((await child.agent(context)).thinkingLevel).toBe("low");
   await input(app, "original status");
   expect(JSON.parse(historicalStatus)).toMatchObject({ taskId: original, status: "completed",
     latestTool: { name: "finish", arguments: JSON.stringify({ summary: "collected", refs: [] }) }, pending: [] });
-  await answerUserPermission(app.main, { requestId: req.id, allow: false });
+  await answerUserPermission(app.main, { requestId: req.id, decision: "deny" });
   await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["collected", "used evidence"]);
 });
 
@@ -971,7 +942,7 @@ it("summarizes a parked task, rejects live continuation, and delivers steering a
   const long = "x".repeat(500);
   let id = "";
   const route: Route = (text, last, history) => {
-    if (text === "start") return call("dispatch_task", { brief: "send", context: "fresh", permission: "auto", allow: [], thinking: "medium" });
+    if (text === "start") return call("dispatch_task", { brief: "send", context: "fresh", permission: "auto", thinking: "medium" });
     if (text === "send") return say([{ type: "text", text: long }, fauxToolCall("outbox_send", { message: long })], { stopReason: "toolUse" });
     if (text === "list" || text === "detail") return call("task_status", text === "list" ? {} : { taskId: id });
     if (text === "continue") return call("dispatch_task", { continue_from: id, brief: "more" });
@@ -1004,7 +975,7 @@ it("summarizes a parked task, rejects live continuation, and delivers steering a
   expect(await parked(next)).toMatchObject({ id: req.id });
   const record = (await next.harness.snapshot(Tasks, next.main.id, context))!.byId[id]!;
   expect((await (await next.harness.conversation(record.conversationId, context))!.agent(context)).thinkingLevel).toBe("medium");
-  await answerUserPermission(next.main, { requestId: req.id, allow: true });
+  await answerUserPermission(next.main, { requestId: req.id, decision: "once" });
   await expect.poll(async () => (await ledger(next)).map(e => e.summary)).toEqual(["revised after approval"]);
   await input(next, "message");
   expect(results.get("task_message")).toContain("continue_from");
@@ -1038,7 +1009,7 @@ it("cancels a continued task during approval, removes the card, and stays cancel
   await input(app, "stop");
   expect(surface.snapshot().pending).toEqual([]);
   surface.detach();
-  expect((await answerUserPermission(app.main, { requestId: req.id, allow: true })).isError).toBe(true);
+  expect((await answerUserPermission(app.main, { requestId: req.id, decision: "once" })).isError).toBe(true);
   expect(app.demo.outbox).toEqual([]);
   await app.close();
   const next = await open(route, await reopen());

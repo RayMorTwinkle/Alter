@@ -12,7 +12,7 @@ faux.setResponses(Array.from({ length: 8 }, () => ({ messages }) => {
   const last = messages.findLast(message => message.role !== "system")!;
   if (last.role !== "user") return say("OK");
   const tool = contentText(last.content) === "delegate"
-    ? fauxToolCall("dispatch_task", { brief: "send after recovery", context: "fresh", permission: "auto", allow: [] })
+    ? fauxToolCall("dispatch_task", { brief: "send after recovery", context: "fresh", permission: "auto" })
     : fauxToolCall("outbox_send", { message: "recovered" });
   return say(tool, { stopReason: "toolUse" });
 }));

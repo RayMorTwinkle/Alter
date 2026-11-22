@@ -4,7 +4,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerUserPermission, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
+  answerUserPermission, approvalStats, isApprovalDecision, isApprovalMode, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
   MemoryInputError, schema, Tasks, usageSummary, type AlterApp,
 } from "@alter/core";
 import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
@@ -141,9 +141,13 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (typeof text !== "string" || !text.trim()) throw new HttpError(400, "Expected non-empty text");
       return json(res, 202, { id: await submitMessage(app.main, text) });
     } else if (method === "POST" && /^\/api\/permissions\/[^/]+$/.test(path)) {
-      const { allow, note } = await body(req);
-      if (typeof allow !== "boolean" || (note !== undefined && typeof note !== "string")) throw new HttpError(400, "Expected boolean allow and optional string note");
-      const answer = await answerUserPermission(app.main, { requestId: path.split("/")[3]!, allow, note });
+      const input = await body(req);
+      const { note } = input;
+      const decision = "decision" in input ? input.decision : input.allow === true ? "once" : input.allow === false ? "deny" : undefined;
+      if (!isApprovalDecision(decision) || ("decision" in input && "allow" in input) || (note !== undefined && typeof note !== "string")) {
+        throw new HttpError(400, "Expected an approval decision and optional string note");
+      }
+      const answer = await answerUserPermission(app.main, { requestId: path.split("/")[3]!, decision, note });
       // The broker treats a duplicate signal as an idempotent success. HTTP distinguishes it from a first decision.
       if (answer.isError || answer.output[0]?.text !== "delivered") throw new HttpError(409, "No pending user decision");
     } else if (method === "GET" && /^\/api\/tasks\/[^/]+\/transcript$/.test(path)) {
@@ -181,6 +185,15 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         throw new HttpError(400, "days must be an integer between 1 and 366");
       }
       return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!options.feishu }));
+    } else if (method === "GET" && path === "/api/approvals/stats") {
+      return json(res, 200, await approvalStats(app.main));
+    } else if ((method === "GET" || method === "PATCH") && path === "/api/settings") {
+      if (method === "PATCH") {
+        const patch = await body(req);
+        if (Object.keys(patch).length !== 1 || !isApprovalMode(patch.approvalModel)) throw new HttpError(400, "Invalid approvalModel");
+        app.settings.set(patch.approvalModel);
+      }
+      return json(res, 200, { approvalModel: app.settings.approvalModel });
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");

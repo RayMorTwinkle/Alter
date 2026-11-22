@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, withAbortSignal } from "@earendil-works/chord/context";
 import {
-  answerUserPermission, Audit, context, observeSurface, openAlter, openNodeSqliteStorage, readUsage, submitMessage, usageTotals,
+  answerUserPermission, context, observeSurface, openAlter, openNodeSqliteStorage, readUsage, submitMessage, usageTotals,
   type AlterApp, type AlterPlugin,
 } from "@alter/core";
 import { createBrowserPlugin } from "@alter/plugin-browser";
@@ -90,7 +90,7 @@ async function play(task: Task, c: TaskContext, result: Result) {
             const row = seen.get(req.id)!;
             if (req.audience !== "user" || row.decision !== "pending") continue;
             const allow = task.approvals?.(req) ?? false;
-            const answer = await awaitWithContext(answerUserPermission(main, { requestId: req.id, allow }), ctx);
+            const answer = await awaitWithContext(answerUserPermission(main, { requestId: req.id, decision: allow ? "once" : "deny" }), ctx);
             if (answer.isError) throw new Error(`审批 ${req.id} 未送达：${answer.output[0]?.text}`);
             row.decision = allow ? "allow" : "deny";
           }
@@ -110,14 +110,6 @@ async function play(task: Task, c: TaskContext, result: Result) {
     commits.detach();
     surface.detach();
     result.reply = c.reply;
-    // Main-audience requests are answered by the main model; include its actual decision too.
-    if (seen.size) {
-      const audit = await harness.snapshot(Audit, main.id, context);
-      for (const row of seen.values()) {
-        const final = audit?.last[row.id];
-        if (final === "allow" || final === "deny") row.decision = final;
-      }
-    }
   }
 }
 

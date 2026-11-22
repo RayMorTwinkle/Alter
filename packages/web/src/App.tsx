@@ -9,7 +9,7 @@ import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx
 import { NotificationsSheet, TaskSheet, UsageSheet } from "./components/Sheets.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
-import type { FeishuPairing } from "./types.ts";
+import type { ApprovalDecision, FeishuPairing } from "./types.ts";
 import { defaultLocale, strings, type Locale } from "./strings.ts";
 
 type Auth = "checking" | "out" | "in";
@@ -88,7 +88,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   }, [onSignedOut]);
 
   const onSend = (text: string) => guard(() => api.send(text));
-  const onAnswer = (id: string, allow: boolean, note?: string) => guard(() => api.answer(id, allow, note));
+  const onAnswer = (id: string, decision: ApprovalDecision, note?: string) => guard(() => api.answer(id, decision, note));
   const onStop = () => void guard(() => api.stop()).catch(() => {});
   const onLogout = () => void api.logout().finally(onSignedOut);
   const notices = state.notifications ?? [];

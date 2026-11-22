@@ -103,7 +103,12 @@ async function runTask(text: string) {
   const request: PermissionRequest = {
     id: `permission-${id()}`, taskId, audience: "user", capability: "outbox", tool: "outbox_send",
     arguments: { message: "老闆您好，邀請您參加明天下午三點的週報會。" }, reason: task.brief,
-    expiresAt: Date.now() + 24 * 3_600_000, tainted: true, taint: { source: "mail_read", capability: "mail", at: Date.now() },
+    expiresAt: Date.now() + 24 * 3_600_000, defaultAt: Date.now() + 60_000,
+    tainted: true, taint: { source: "mail_read", capability: "mail", at: Date.now() },
+    statement: [
+      { tool: "calendar_create", target: "本地日曆", purpose: "按郵件建立明天 15:00 的週報會", isNew: false },
+      { tool: "outbox_send", target: "老闆（boss@example.com）", purpose: "發送週報會邀請", isNew: true },
+    ],
   };
   task.pending.push(request);
   push({ id: id(), kind: "permission", taskId, text: `${taskId} 需要你批准 outbox_send`, at: Date.now() });
@@ -176,8 +181,8 @@ createServer(async (req, res) => {
   }
   const permission = /^\/api\/permissions\/(.+)$/.exec(path);
   if (permission && req.method === "POST") {
-    const { allow, note } = await body(req);
-    return (await decide(decodeURIComponent(permission[1]!), allow, note)) ? json(res, 204) : json(res, 409, { error: "not pending" });
+    const { decision, note } = await body(req);
+    return (await decide(decodeURIComponent(permission[1]!), decision !== "deny", note)) ? json(res, 204) : json(res, 409, { error: "not pending" });
   }
   const transcript = /^\/api\/tasks\/(.+)\/transcript$/.exec(path);
   if (transcript) return json(res, 200, { items: transcripts[decodeURIComponent(transcript[1]!)] ?? [] });

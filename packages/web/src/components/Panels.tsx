@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { clock, pretty, remaining } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Inline } from "../markdown.tsx";
-import type { Lease, LedgerEntry, PermissionRequest, Task } from "../types.ts";
+import type { ApprovalDecision, Lease, LedgerEntry, PermissionRequest, Task } from "../types.ts";
 
 export function StatusChip({ status }: { status: Task["status"] }) {
   const t = useT();
@@ -50,7 +50,7 @@ export function TasksPanel({ tasks, leases, onOpen }: { tasks: Task[]; leases: L
 }
 
 export function ApprovalCard({ request, onAnswer, inline = false }: {
-  request: PermissionRequest; onAnswer: (id: string, allow: boolean, note?: string) => Promise<void>; inline?: boolean;
+  request: PermissionRequest; onAnswer: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>; inline?: boolean;
 }) {
   const t = useT();
   const [note, setNote] = useState("");
@@ -62,11 +62,14 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
     return () => clearInterval(timer);
   }, []);
   const left = remaining(request.expiresAt - now);
+  const lease = request.taskId === "main";
+  const statement = request.statement ?? [];
+  const fallback = request.defaultAt && request.defaultAt > now && !request.deferred ? remaining(request.defaultAt - now) : undefined;
 
-  async function answer(allow: boolean) {
+  async function answer(decision: ApprovalDecision) {
     setBusy(true);
     try {
-      await onAnswer(request.id, allow, note.trim() || undefined);
+      await onAnswer(request.id, decision, note.trim() || undefined);
     } finally {
       setBusy(false);
     }
@@ -84,13 +87,32 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
         <dd>{request.reason}</dd>
         <dt>{t.arguments}</dt>
         <dd><pre>{pretty(request.arguments)}</pre></dd>
+        {statement.length > 0 && <>
+          <dt>{t.statement}</dt>
+          <dd>
+            <ul className="statement">
+              {statement.map((item, i) => (
+                <li key={i} className={item.isNew ? "new" : ""}>
+                  <code>{item.tool}</code> · {item.target}<span>{item.purpose}</span>
+                  {item.isNew && <em>{t.statementNew}</em>}
+                </li>
+              ))}
+            </ul>
+          </dd>
+        </>}
       </dl>
       {mine && (
         <div className="approval-actions">
           <input value={note} onChange={event => setNote(event.target.value)} placeholder={t.notePlaceholder} />
-          <button className="btn" disabled={busy} onClick={() => void answer(false)}>{t.deny}</button>
-          <button className="btn primary" disabled={busy} onClick={() => void answer(true)}>{t.approve}</button>
-          <span className="approval-expiry">{t.expiresIn(left.n, left.unit)}</span>
+          <div className="approval-buttons">
+            <button className="btn" disabled={busy} onClick={() => void answer("deny")}>{t.decisions.deny}</button>
+            {!lease && <button className="btn quiet" disabled={busy} onClick={() => void answer("task-full")}>{t.decisions.full}</button>}
+            <button className={`btn ${lease || !statement.length ? "primary" : ""}`} disabled={busy} onClick={() => void answer("once")}>{t.decisions.once}</button>
+            {!lease && statement.length > 0 && <button className="btn primary" disabled={busy} onClick={() => void answer("statement")}>{t.decisions.statement}</button>}
+          </div>
+          <span className="approval-expiry">
+            {request.deferred ? t.deferred : fallback ? t.defaultIn(fallback.n, fallback.unit) : t.expiresIn(left.n, left.unit)}
+          </span>
         </div>
       )}
     </article>
@@ -98,7 +120,7 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
 }
 
 export function ApprovalsPanel({ pending, onAnswer }: {
-  pending: PermissionRequest[]; onAnswer: (id: string, allow: boolean, note?: string) => Promise<void>;
+  pending: PermissionRequest[]; onAnswer: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>;
 }) {
   const t = useT();
   const ordered = [...pending].sort((a, b) => Number(b.audience === "user") - Number(a.audience === "user"));

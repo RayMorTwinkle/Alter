@@ -227,8 +227,8 @@ it("delivers a read-only goal's finish to the ledger and digest without waking m
   cleanup.push(async () => surface.detach());
   f.app.memory.save({ kind: "goal", text: "准备考试", due: Date.parse("2026-12-12T08:00Z") });
   f.task.setResponses([call("browser_open", { url: "https://example.org" }),
-    call("request_capability", { capability: "browser", reason: "需要更多权限" }),
-    call("request_capability", { capability: "outbox", reason: "发资料" }),
+    call("notes_read", { id: "welcome" }),
+    call("outbox_send", { message: "发资料" }),
     call("browser_fill", {}), call("browser_open", { url: "https://unseen.example" }), finishGoal()]);
   f.clock.now = Date.parse("2026-12-01T02:15Z");
   f.app.harness.resume();
@@ -236,7 +236,7 @@ it("delivers a read-only goal's finish to the ledger and digest without waking m
   const { tasks, ledger, notifications, busy, timeline, pending } = surface.snapshot();
   expect(tasks).toHaveLength(1);
   const task = tasks[0]!;
-  expect(task).toMatchObject({ proactive: true, context: "fresh", permission: "restricted", allow: ["browser"], status: "completed" });
+  expect(task).toMatchObject({ proactive: true, context: "fresh", permission: "restricted", status: "completed" });
   for (const part of ["目标「准备考试」", "期限 2026-12-12T16:00", "只读调研", "1～3 条", "用户可能不知道", "每条附链接", "不要发送任何内容"]) {
     expect(task.brief).toContain(part);
   }
@@ -245,8 +245,8 @@ it("delivers a read-only goal's finish to the ledger and digest without waking m
   expect({ busy, timeline, pending }).toEqual({ busy: false, timeline: [], pending: [] });
   expect(await readTranscript(f.app.main)).toEqual([]);
   const audit = (await f.app.harness.snapshot(Audit, f.app.main.id, context))!.entries;
-  expect(audit.map(a => [a.tool, a.decision])).toEqual([["browser_open", "allow"], ["request_capability", "deny"],
-    ["request_capability", "deny"], ["browser_fill", "deny"], ["browser_open", "deny"], ["finish", "allow"]]);
+  expect(audit.map(a => [a.tool, a.decision])).toEqual([["browser_open", "allow"], ["notes_read", "deny"],
+    ["outbox_send", "deny"], ["browser_fill", "deny"], ["browser_open", "deny"], ["finish", "allow"]]);
   expect(audit.at(-2)?.tainted).toBe(true);
   expect((await f.app.harness.snapshot(Taint, f.app.main.id, context))?.first).toBeUndefined();
   const usage = await readUsage(f.dir);

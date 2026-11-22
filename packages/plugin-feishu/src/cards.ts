@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { answerUserPermission, context, conversationDoc, type AlterApp, type PermissionRequest } from "@alter/core";
+import { answerUserPermission, choices, isApprovalDecision, context, conversationDoc, type AlterApp, type PermissionRequest } from "@alter/core";
 import type { openState } from "./state.ts";
 import type { FeishuHandlers, FeishuTransport } from "./transport.ts";
 
@@ -9,13 +9,15 @@ const plain = (content: string) => ({ tag: "plain_text", content });
 function card(request: PermissionRequest) {
   const args = JSON.stringify(request.arguments);
   const summary = args.length > 500 ? args.slice(0, 499) + "…" : args;
+  const labels = { once: "允许这一次", statement: "按说明允许", "task-full": "本任务全权限（含不可逆）", deny: "拒绝" };
+  const items = request.statement?.map(item => `${item.isNew ? "【新增】" : ""}${item.tool} · ${item.target} · ${item.purpose}`) ?? [];
   return {
     config: { update_multi: true },
     header: { title: plain(`审批 · ${request.tool}`) },
     elements: [
-      { tag: "div", text: plain(`任务 ${request.taskId}\n${summary}`) },
-      { tag: "action", actions: [true, false].map(allow => ({
-        tag: "button", type: allow ? "primary" : "danger", text: plain(allow ? "批准" : "拒绝"), value: { requestId: request.id, allow },
+      { tag: "div", text: plain(`任务 ${request.taskId}\n${summary}${items.length ? "\n" + items.join("\n") : ""}`) },
+      { tag: "action", actions: choices.filter(choice => request.taskId !== "main" || choice === "once" || choice === "deny").map(decision => ({
+        tag: "button", type: decision === "deny" ? "danger" : "default", text: plain(labels[decision]), value: { requestId: request.id, decision },
       })) },
     ],
   };
@@ -67,15 +69,15 @@ export function approvalCards(app: AlterApp, store: ReturnType<typeof openState>
       }
     }).finally(() => { running = undefined; if (dirty && !closed) schedule(); });
   }
-  const action: FeishuHandlers["action"] = async ({ openId, messageId, requestId, allow }) => {
+  const action: FeishuHandlers["action"] = async ({ openId, messageId, requestId, decision }) => {
     if (!openId || openId !== store.value.owner?.openId) return { toast: { type: "error", content: "只有主人可以审批" } };
     const sent = await receipts();
     const receipt = requestId && Object.hasOwn(sent, requestId) ? sent[requestId] : undefined;
-    if (!requestId || !receipt || receipt.messageId !== messageId || typeof allow !== "boolean" || receipt.status) {
+    if (!requestId || !receipt || receipt.messageId !== messageId || !isApprovalDecision(decision) || receipt.status) {
       return { toast: { type: "info", content: "没有可处理的审批" } };
     }
-    const status = allow ? "已批准" : "已拒绝";
-    const result = await answerUserPermission(app.main, { requestId, allow }, async tx => {
+    const status = decision === "deny" ? "已拒绝" : "已批准";
+    const result = await answerUserPermission(app.main, { requestId, decision }, async tx => {
       (await tx.doc(Cards, app.main.id)).byId[requestId] = { ...receipt, status };
     });
     if (result.isError || result.output[0]?.text !== "delivered") return { toast: { type: "info", content: "没有可处理的审批" } };
