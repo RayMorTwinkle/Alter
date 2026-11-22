@@ -11,7 +11,10 @@ import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./t
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
 export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask"> & { arguments: unknown };
-type Task = Omit<TaskRecord, "conversationId"> & { taskId: string; conversationId: string; pending: PermissionRequest[] };
+type Task = Omit<TaskRecord, "conversationId" | "worker" | "lastEntry" | "messages" | "status"> & {
+  status: Exclude<TaskRecord["status"], "cancelled">;
+  taskId: string; conversationId: string; pending: PermissionRequest[];
+};
 export type SurfaceState = {
   timeline: TimelineItem[]; tasks: Task[]; pending: PermissionRequest[]; ledger: LedgerEntry[];
   notifications: Notification[];
@@ -49,8 +52,9 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
   }
 
   function updateTasks() {
-    state.tasks = Object.entries(records).map(([taskId, task]) => ({
-      ...task, taskId, conversationId: String(task.conversationId), pending: state.pending.filter(req => req.taskId === taskId),
+    state.tasks = Object.entries(records).map(([taskId, { worker, lastEntry, messages, status, ...task }]) => ({
+      ...task, taskId, status: status === "cancelled" ? "failed" : status, ...(status === "cancelled" && { failure: status }),
+      conversationId: String(task.conversationId), pending: state.pending.filter(req => req.taskId === taskId),
     }));
     emit({ event: "tasks", data: state.tasks });
   }

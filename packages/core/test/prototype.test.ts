@@ -24,7 +24,7 @@ import { observeSurface, stopMainTurn } from "../src/observe.ts";
 import { unescapeNewlines } from "../src/tasks.ts";
 
 type Alter = Awaited<ReturnType<typeof openAlter>>;
-type Route = (text: string, last: Message, history: Message[], offered: string[]) => AssistantMessage;
+type Route = (text: string, last: Message, history: Message[], offered: string[], signal?: AbortSignal) => AssistantMessage | Promise<AssistantMessage>;
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 
@@ -39,8 +39,8 @@ function finish(summary: string) {
 }
 async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = [], approvalTimeoutMs?: number,
   clock: { timeZone?: string; now?: () => number } = {}, demos?: boolean) {
-  const faux = fauxProvider();
-  faux.setResponses(Array.from({ length: 160 }, () => ({ messages }) => {
+  const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
+  faux.setResponses(Array.from({ length: 160 }, () => ({ messages }, options) => {
     const tools = new Set<string>();
     for (const msg of messages) {
       if (msg.role !== "system") continue;
@@ -49,7 +49,7 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
     }
     const last = messages.findLast(msg => msg.role !== "system")!;
     const text = contentText(last.content);
-    return route(last.role === "user" ? text.replace(/^\[当前时间 [^\n]*\]\n/, "") : text, last, messages, [...tools].sort());
+    return route(last.role === "user" ? text.replace(/^\[当前时间 [^\n]*\]\n/, "") : text, last, messages, [...tools].sort(), options?.signal);
   }));
   const models = createModels();
   models.setProvider(faux.provider);
@@ -71,7 +71,7 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_save", "memory_search", "memory_update"];
-const controls = ["answer_permission_request", "dispatch_task", "enable_tool", ...memoryTools, "schedule_cancel", "schedule_create", "schedule_list", "task_status"];
+const controls = ["answer_permission_request", "dispatch_task", "enable_tool", ...memoryTools, "schedule_cancel", "schedule_create", "schedule_list", "task_cancel", "task_message", "task_status"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send", "request_capability"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
@@ -349,9 +349,9 @@ it("allows auto local writes and accepts only a host decision for an external se
   expect(request.audience).toBe("user");
   expect([...app.demo.calendar.values()]).toEqual(["meeting"]);
   await input(app, `check ${request.taskId}`);
-  expect(JSON.parse(status)).toMatchObject([{ taskId: request.taskId, status: "running", pending: [{ id: request.id, audience: "user" }] }]);
-  expect(JSON.parse(status)[0].pending[0].remainingMs).toBeGreaterThan(0);
-  expect(JSON.parse(status)[0].pending[0].remainingMs).toBeLessThanOrEqual(86_400_000);
+  expect(JSON.parse(status)).toMatchObject({ taskId: request.taskId, status: "running", pending: [{ id: request.id, audience: "user" }] });
+  expect(JSON.parse(status).pending[0].remainingMs).toBeGreaterThan(0);
+  expect(JSON.parse(status).pending[0].remainingMs).toBeLessThanOrEqual(86_400_000);
   await input(app, "approve as main");
   expect(mainResult).toContain("No pending request for this approver");
   expect(app.demo.outbox).toEqual([]);
@@ -914,4 +914,187 @@ it("offers schedules without leases and parks tainted reminder creation and canc
     id = (await reminders())[0]!.id;
   }
   expect(await reminders()).toMatchObject([{ id, text: "回电话", status: "cancelled" }]);
+});
+
+it("continues an ended conversation with its history, taint and granted capabilities", async () => {
+  let original = "";
+  let sawHistory = false;
+  let conflict = "";
+  let historicalStatus = "";
+  const { plugin } = externalPlugin();
+  const app = await open((text, last, messages) => {
+    if (text === "start") return dispatch("collect evidence");
+    if (text === "collect evidence") return call("request_capability", { capability: "remote", reason: "read the source" });
+    if (text.startsWith("permission request ")) return call("answer_permission_request", { requestId: text.split(" ")[2]!.slice(0, -1), allow: true });
+    if (last.role === "toolResult" && last.toolName === "request_capability") return call("remote_read", {});
+    if (last.role === "toolResult" && last.toolName === "remote_read") return finish("collected");
+    if (text === "mix") return call("dispatch_task", { brief: "next", context: "fresh", continue_from: original });
+    if (last.role === "toolResult" && last.toolName === "dispatch_task" && last.isError) conflict = text;
+    if (text === "original status") return call("task_status", { taskId: original });
+    if (last.role === "toolResult" && last.toolName === "task_status") historicalStatus = text;
+    if (text === "resume") return call("dispatch_task", { brief: "use evidence", continue_from: original, thinking: "low" });
+    if (text === "use evidence") {
+      sawHistory = messages.some(m => m.role === "toolResult" && contentText(m.content) === "external text");
+      return call("remote_send", {});
+    }
+    if (last.role === "toolResult" && last.toolName === "remote_send") return finish("used evidence");
+    return say("ok");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "start");
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  original = (await ledger(app))[0]!.taskId;
+  await input(app, "mix");
+  expect(conflict).toContain("omit");
+  await input(app, "resume");
+  const req = await parked(app);
+  expect(req).toMatchObject({ tool: "remote_send", tainted: true, taint: { source: "remote_read" } });
+  expect(sawHistory).toBe(true);
+  const tasks = (await app.harness.snapshot(Tasks, app.main.id, context))!.byId;
+  expect(tasks[original]).toMatchObject({ status: "completed", thinking: "high" });
+  expect(req.taskId).not.toBe(original);
+  expect(tasks[req.taskId]).toMatchObject({ conversationId: tasks[original]!.conversationId, continuedFrom: original,
+    permission: "restricted", allow: ["remote"], thinking: "low" });
+  const child = (await app.harness.conversation(tasks[original]!.conversationId, context))!;
+  expect((await child.agent(context)).thinkingLevel).toBe("low");
+  await input(app, "original status");
+  expect(JSON.parse(historicalStatus)).toMatchObject({ taskId: original, status: "completed",
+    latestTool: { name: "finish", arguments: JSON.stringify({ summary: "collected", refs: [] }) }, pending: [] });
+  await answerUserPermission(app.main, { requestId: req.id, allow: false });
+  await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["collected", "used evidence"]);
+});
+
+it("summarizes a parked task, rejects live continuation, and delivers steering after approval across reopen", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-task-message-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const reopen = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
+  const results = new Map<string, string>();
+  const long = "x".repeat(500);
+  let id = "";
+  const route: Route = (text, last, history) => {
+    if (text === "start") return call("dispatch_task", { brief: "send", context: "fresh", permission: "auto", allow: [], thinking: "medium" });
+    if (text === "send") return say([{ type: "text", text: long }, fauxToolCall("outbox_send", { message: long })], { stopReason: "toolUse" });
+    if (text === "list" || text === "detail") return call("task_status", text === "list" ? {} : { taskId: id });
+    if (text === "continue") return call("dispatch_task", { continue_from: id, brief: "more" });
+    if (text === "message") return call("task_message", { taskId: id, message: "revised brief" });
+    if (text === "revised brief") return finish(history.some(m => m.role === "toolResult" && m.toolName === "outbox_send") ? "revised after approval" : "misordered");
+    if (last.role === "toolResult") results.set(last.toolName, text);
+    return say("ok");
+  };
+  const app = await open(route, await reopen());
+  await input(app, "start");
+  const req = await parked(app);
+  id = req.taskId;
+  await input(app, "list");
+  expect(JSON.parse(results.get("task_status")!)).toEqual([{ taskId: id, brief: "send", status: "running", thinking: "medium" }]);
+  await input(app, "detail");
+  const detail = JSON.parse(results.get("task_status")!);
+  expect(detail).toMatchObject({ status: "running", latestMessage: { source: id }, latestTool: { name: "outbox_send" }, pending: [{ id: req.id }] });
+  expect(detail.latestMessage.text).toHaveLength(300);
+  expect(detail.latestTool.arguments).toHaveLength(200);
+  expect(detail.pending[0].arguments).toHaveLength(200);
+  expect(results.get("task_status")).not.toContain(long);
+  await input(app, "continue");
+  expect(results.get("dispatch_task")).toContain("task_message");
+  await input(app, "message");
+  expect(results.get("task_message")).toBe("Message queued");
+  expect((await app.harness.snapshot(Tasks, app.main.id, context))!.byId[id]!.messages).toEqual([{ at: expect.any(Number), text: "revised brief" }]);
+  await app.close();
+  const next = await open(route, await reopen());
+  next.harness.resume();
+  expect(await parked(next)).toMatchObject({ id: req.id });
+  const record = (await next.harness.snapshot(Tasks, next.main.id, context))!.byId[id]!;
+  expect((await (await next.harness.conversation(record.conversationId, context))!.agent(context)).thinkingLevel).toBe("medium");
+  await answerUserPermission(next.main, { requestId: req.id, allow: true });
+  await expect.poll(async () => (await ledger(next)).map(e => e.summary)).toEqual(["revised after approval"]);
+  await input(next, "message");
+  expect(results.get("task_message")).toContain("continue_from");
+});
+
+it("cancels a continued task during approval, removes the card, and stays cancelled after reopen", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-task-cancel-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const reopen = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
+  let id = "";
+  const route: Route = (text, last) => {
+    if (text === "start") return dispatch("seed", "auto");
+    if (text === "seed") return finish("seeded");
+    if (text === "continue") return call("dispatch_task", { brief: "deliver", continue_from: id });
+    if (text === "deliver") return call("outbox_send", { message: "never sent" });
+    if (text === "message") return call("task_message", { taskId: id, message: "pending update" });
+    if (text === "stop") return call("task_cancel", { taskId: id });
+    if (last.role === "toolResult" && last.toolName === "outbox_send") return finish("sent");
+    return say("ok");
+  };
+  const app = await open(route, await reopen());
+  await input(app, "start");
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  id = (await ledger(app))[0]!.taskId;
+  await input(app, "continue");
+  const req = await parked(app);
+  id = req.taskId;
+  const surface = await observeSurface(app, () => {});
+  expect(surface.snapshot().pending).toHaveLength(1);
+  await input(app, "message");
+  await input(app, "stop");
+  expect(surface.snapshot().pending).toEqual([]);
+  surface.detach();
+  expect((await answerUserPermission(app.main, { requestId: req.id, allow: true })).isError).toBe(true);
+  expect(app.demo.outbox).toEqual([]);
+  await app.close();
+  const next = await open(route, await reopen());
+  next.harness.resume();
+  await input(next, "stop");
+  const task = (await next.harness.snapshot(Tasks, next.main.id, context))!.byId[id]!;
+  expect(task.status).toBe("cancelled");
+  expect((await next.harness.snapshot(LiveDoc, task.conversationId, context))?.run).toBeUndefined();
+  expect((await ledger(next)).map(e => e.summary)).toEqual(["seeded", "cancelled"]);
+  expect((await next.harness.snapshot(Requests, next.main.id, context))!.pending).toEqual({});
+  expect(next.demo.outbox).toEqual([]);
+});
+
+it("interrupts an outstanding model request before acknowledging task_cancel", async () => {
+  let id = "";
+  let waiting = false;
+  let aborted = false;
+  let receipt = "";
+  const app = await open((text, last, _history, _tools, signal) => {
+    if (text === "start") return dispatch("wait");
+    if (text === "wait") {
+      waiting = true;
+      return new Promise(resolve => signal!.addEventListener("abort", () => {
+        aborted = true;
+        resolve(finish("too late"));
+      }, { once: true }));
+    }
+    if (text === "stop") return call("task_cancel", { taskId: id });
+    if (last.role === "toolResult" && last.toolName === "task_cancel") receipt = text;
+    return say("ok");
+  });
+  await input(app, "start");
+  await expect.poll(() => waiting).toBe(true);
+  id = Object.keys((await app.harness.snapshot(Tasks, app.main.id, context))!.byId)[0]!;
+  await input(app, "stop");
+  expect(aborted).toBe(true);
+  expect(receipt).toContain("cancelled");
+  expect((await ledger(app)).map(e => e.summary)).toEqual(["cancelled"]);
+});
+
+it.each(["finish", "answer"])("handles steering while the model is about to %s", async boundary => {
+  let id = "";
+  let release: (() => void) | undefined;
+  const app = await open(async text => {
+    if (text === "start") return dispatch("initial brief");
+    if (text === "initial brief") {
+      await new Promise<void>(resolve => { release = resolve; });
+      return boundary === "finish" ? finish("obsolete") : say("initial answer");
+    }
+    if (text === "update") return call("task_message", { taskId: id, message: "updated brief" });
+    if (text === "updated brief") return finish("updated result");
+    return say("ok");
+  });
+  await input(app, "start");
+  await expect.poll(() => !!release).toBe(true);
+  id = Object.keys((await app.harness.snapshot(Tasks, app.main.id, context))!.byId)[0]!;
+  try { await input(app, "update"); } finally { release!(); }
+  await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["updated result"]);
 });

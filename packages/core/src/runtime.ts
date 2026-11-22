@@ -5,10 +5,10 @@ import { defineDoc, type JsonObject, type Storage } from "@earendil-works/pi-dur
 export type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export {
-  configure, createRegistry, defineExtension, defineSignal, defineTask, defineTool,
+  AgentDoc, configure, createRegistry, defineExtension, defineSignal, defineTask, defineTool,
   GenerationTask, Harness, InboxDoc, hook, hookTask, LiveDoc, MemoryStorage, ProviderDoc, ROOT_CONVERSATION_ID,
   SubmissionSettled, ToolResultEntry, ToolTask,
-  type Conversation, type ConversationHandle, type ConversationDocToken, type ConversationId, type Cursor, type EntryRecord, type JsonObject, type LiveState, type InboxState, type Extension, type HarnessOptions, type ModelRef,
+  type Conversation, type ConversationHandle, type ConversationDocToken, type ConversationId, type Cursor, type EntryId, type EntryRecord, type JsonObject, type LiveState, type InboxState, type Extension, type HarnessOptions, type ModelRef,
   type Storage, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration, type Tx, type YieldDecision,
 } from "@earendil-works/pi-durable";
 export { BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";

@@ -163,13 +163,15 @@ function setupApproval() {
       if (messages.at(-1)?.role === "tool") return toolCall(res, "finish", { summary: "done", refs: [] });
       return toolCall(res, "outbox_send", { message: "x".repeat(700) });
     }
+    const cancel = /\ncancel (task-\d+)$/.exec(messages.at(-1)?.content ?? "");
+    if (cancel) return toolCall(res, "task_cancel", { taskId: cancel[1] });
     if (messages.at(-1)?.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task",
       { brief: "send", context: "fresh", permission: "auto", allow: [] });
     say(res, "ack");
   });
 }
 
-it.each(["approve", "deny", "web"])("restores the pending card and resolves it once via %s", async via => {
+it.each(["approve", "deny", "web", "cancel"])("restores the pending card and resolves it once via %s", async via => {
   const f = await setupApproval();
   await submitMessage(f.app.main, "delegate");
   await expect.poll(() => f.feed.snapshot().pending.length).toBe(1);
@@ -188,15 +190,16 @@ it.each(["approve", "deny", "web"])("restores the pending card and resolves it o
   expect((await g.handlers.action({ ...click, messageId: "another-card", openId: "owner" })).toast.type).toBe("info");
   expect((await g.app.harness.snapshot(Requests, g.app.main.id, context))?.pending).toHaveProperty(req.id);
   if (via === "web") await answerUserPermission(g.app.main, { requestId: req.id, allow: true });
+  else if (via === "cancel") await submitMessage(g.app.main, `cancel ${req.taskId}`);
   else expect((await g.handlers.action({ ...click, openId: "owner" })).toast.type).toBe("success");
   await expect.poll(() => g.transport.updateCard.mock.calls.length).toBe(1);
   const [updated, contents] = g.transport.updateCard.mock.calls[0]!;
   expect(updated).toBe(click.messageId);
-  expect(JSON.stringify(contents)).toContain(via === "web" ? "已在其他入口处理" : via === "approve" ? "已批准" : "已拒绝");
+  expect(JSON.stringify(contents)).toContain(via === "approve" ? "已批准" : via === "deny" ? "已拒绝" : "已在其他入口处理");
   expect(JSON.stringify(contents)).not.toContain("button");
   expect((await g.handlers.action({ ...click, openId: "owner" })).toast.type).toBe("info");
   await expect.poll(() => g.feed.snapshot().ledger.length).toBe(1);
-  expect(g.app.demo.outbox).toHaveLength(via === "deny" ? 0 : 1);
+  expect(g.app.demo.outbox).toHaveLength(via === "deny" || via === "cancel" ? 0 : 1);
   expect(g.transport.sendCard).not.toHaveBeenCalled();
 });
 

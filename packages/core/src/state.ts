@@ -1,14 +1,19 @@
-import { conversationDoc, type ConversationId } from "./runtime.ts";
+import { conversationDoc, type ConversationId, type EntryId, type ModelThinkingLevel, type TaskId } from "./runtime.ts";
 
 export type Permission = "restricted" | "auto" | "full";
 export type TaskRecord = {
   conversationId: ConversationId;
   brief: string;
+  worker: TaskId;
+  lastEntry?: EntryId;
+  continuedFrom?: string;
+  thinking: ModelThinkingLevel;
+  messages?: { at: number; text: string }[];
   context: "fork" | "fresh";
   createdAt: number;
   permission: Permission;
   allow: string[];
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   failure?: string;
   proactive?: true;
   goal?: { text: string; timeZone: string };
