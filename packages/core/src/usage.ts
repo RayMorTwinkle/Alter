@@ -31,6 +31,21 @@ export async function readUsage(dir: string): Promise<UsageLine[]> {
   return contents.split("\n").filter(Boolean).map(row => JSON.parse(row));
 }
 
+export function usageTotals(lines: UsageLine[]) {
+  const empty = () => ({ input: 0, output: 0, tokens: 0, calls: 0, aborted: 0 });
+  const totals = { main: empty(), task: empty(), total: empty() };
+  for (const line of lines) {
+    for (const group of [totals[line.conversation], totals.total]) {
+      group.input += line.inputTokens ?? 0;
+      group.output += line.outputTokens ?? 0;
+      group.tokens = group.input + group.output;
+      group.calls++;
+      if (line.errorKind === "aborted") group.aborted++;
+    }
+  }
+  return totals;
+}
+
 export async function usageSummary(dir: string) {
   const models = new Map<string, { latencies: number[]; failures: number; aborted: number; fallbacks: number; inputTokens: number; outputTokens: number }>();
   for (const line of await readUsage(dir)) {

@@ -12,19 +12,26 @@ export function summary(message: FetchMessageObject) {
   const env = message.envelope;
   return { uid: message.uid, from: addresses(env?.from), subject: (env?.subject ?? "").slice(0, 1024), date: env?.date ?? message.internalDate ?? null };
 }
+// 163 (Coremail) answers SEARCH FROM / SUBJECT / TEXT with nothing, while dates and flags work.
+// So the server narrows by date and flags, and sender and subject match on envelopes here.
+export const scanWindow = 500;
+const contains = (value: string, needle?: string) => needle === undefined || value.toLowerCase().includes(needle.toLowerCase());
+
 export async function search(client: MailConnection, { from, subject, since, unseen, limit = 20 }: Query) {
   await client.mailboxOpen("INBOX", { readOnly: true });
-  const query: SearchObject = { all: true, from, subject };
+  const query: SearchObject = { all: true };
   if (unseen !== undefined) query.seen = !unseen;
   if (since !== undefined) {
     const date = new Date(since + "T00:00:00Z");
     if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== since) throw new Error("since requires a valid YYYY-MM-DD");
     query.since = date;
   }
-  const ids = (await uids(client, query)).slice(-limit);
+  const filtered = from !== undefined || subject !== undefined;
+  const ids = (await uids(client, query)).slice(filtered ? -scanWindow : -limit);
   if (!ids.length) return [];
   const messages = await client.fetchAll(ids, { envelope: true, internalDate: true }, { uid: true });
-  return messages.sort((a, b) => b.uid - a.uid).map(summary);
+  return messages.sort((a, b) => b.uid - a.uid).map(summary)
+    .filter(row => contains(row.from, from) && contains(row.subject, subject)).slice(0, limit);
 }
 
 const bodyLimit = 16_000;

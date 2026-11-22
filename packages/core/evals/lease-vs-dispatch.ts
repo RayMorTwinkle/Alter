@@ -8,7 +8,7 @@ import { createGatewayModels } from "../src/models.ts";
 import { observeSurface, type AlterApp } from "../src/observe.ts";
 import { context, openNodeSqliteStorage } from "../src/runtime.ts";
 import { submitMessage } from "../src/timeline.ts";
-import { readUsage, type UsageLine } from "../src/usage.ts";
+import { readUsage, usageTotals, type UsageLine } from "../src/usage.ts";
 
 const messages = {
   // The demo calendar only stores titles. Saying so removes clarifying questions, which are not what this eval compares.
@@ -37,21 +37,6 @@ function judge(scenario: Scenario, calendar: Map<string, string>, reply: string)
     }
   }
   return null;
-}
-
-function usageTotals(lines: UsageLine[]) {
-  const empty = () => ({ input: 0, output: 0, tokens: 0, calls: 0, aborted: 0 });
-  const totals = { main: empty(), task: empty(), total: empty() };
-  for (const line of lines) {
-    for (const group of [totals[line.conversation], totals.total]) {
-      group.input += line.inputTokens ?? 0;
-      group.output += line.outputTokens ?? 0;
-      group.tokens = group.input + group.output;
-      group.calls++;
-      if (line.errorKind === "aborted") group.aborted++;
-    }
-  }
-  return totals;
 }
 
 type ModelSetup = {
