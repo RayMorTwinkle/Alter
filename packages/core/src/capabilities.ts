@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineExtension, defineTool, reply } from "./runtime.ts";
+import { defineExtension, defineTool, reply, type ToolRegistration } from "./runtime.ts";
 
 export type Effect = "read" | "write-local" | "external-send" | "irreversible" | "unknown";
 export type Capability = {
@@ -8,7 +9,7 @@ export type Capability = {
   actions: { name: string; effect: Effect }[];
 };
 
-export const manifests: Capability[] = [
+export const demoManifests: Capability[] = [
   { id: "calendar", mainLeasable: true, actions: [
     { name: "list", effect: "read" }, { name: "create", effect: "write-local" },
     { name: "update", effect: "write-local" },
@@ -17,11 +18,50 @@ export const manifests: Capability[] = [
   { id: "outbox", mainLeasable: false, actions: [{ name: "send", effect: "external-send" }] },
 ];
 
-export const toolActions = new Map<string, { capability: string; action: string; effect: Effect }>(manifests.flatMap(capability =>
-  capability.actions.map(action => [
-    `${capability.id}_${action.name}`, { capability: capability.id, action: action.name, effect: action.effect },
-  ] as const),
-));
+export type ExternalEvent = {
+  source: string; kind: string; summary: string; ref: string; at: number; untrusted: true;
+};
+export type PluginHost = { emit(event: ExternalEvent): Promise<void> };
+export type AlterPlugin = {
+  capability: Capability;
+  tools: ToolRegistration[];
+  start?(host: PluginHost): Promise<() => Promise<void>>;
+};
+
+export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = []) {
+  const manifests = [...demoManifests, ...plugins.map(plugin => plugin.capability)];
+  const toolActions = new Map<string, { capability: string; action: string; effect: Effect }>();
+  const ids = new Set<string>();
+  const reserved = new Set(["dispatch_task", "task_status", "answer_permission_request", "enable_tool", "request_capability", "finish"]);
+  for (const capability of manifests) {
+    if (ids.has(capability.id)) throw new Error(`Duplicate capability: ${capability.id}`);
+    ids.add(capability.id);
+    for (const { name: action, effect } of capability.actions) {
+      const name = `${capability.id}_${action}`;
+      if (reserved.has(name) || toolActions.has(name)) throw new Error(`Duplicate tool: ${name}`);
+      toolActions.set(name, { capability: capability.id, action, effect });
+    }
+  }
+  for (const { capability, tools } of plugins) {
+    const names = new Set(tools.map(tool => tool.name));
+    if (names.size !== tools.length || names.size !== capability.actions.length ||
+        tools.some(tool => toolActions.get(tool.name)?.capability !== capability.id)) {
+      throw new Error(`Tools must match the actions declared by ${capability.id}`);
+    }
+  }
+  return { manifests, toolActions };
+}
+export type CapabilityRegistry = ReturnType<typeof createCapabilityRegistry>;
+export const { toolActions } = createCapabilityRegistry();
+
+// dispatchTool uses manifests.some to validate its allow list. Bind that legacy lookup
+// to the invoking harness, including when multiple harnesses dispatch concurrently.
+export const dispatchRegistry = new AsyncLocalStorage<CapabilityRegistry>();
+export const manifests = {
+  some(predicate: (capability: Capability) => boolean) {
+    return (dispatchRegistry.getStore()?.manifests ?? demoManifests).some(predicate);
+  },
+};
 
 export function createDemoCapabilities() {
   const calendar = new Map<string, string>();
