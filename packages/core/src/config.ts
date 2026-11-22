@@ -33,9 +33,11 @@ export function proactiveConfig(env = process.env) {
   const budget = Number(env.ALTER_PROACTIVE_DAILY_TOKENS ?? 200_000);
   if (!Number.isSafeInteger(budget) || budget < 0) throw new Error("ALTER_PROACTIVE_DAILY_TOKENS must be a nonnegative integer");
   const digestTime = env.ALTER_DIGEST_TIME?.trim() || "21:00";
+  const goalReviewTime = env.ALTER_GOAL_REVIEW_TIME?.trim() || "09:00";
   dailyMinutes(digestTime);
+  dailyMinutes(goalReviewTime);
   const mute = (env.ALTER_MUTE ?? "").toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
-  return { budget, digestTime, mute };
+  return { budget, digestTime, goalReviewTime, mute };
 }
 
 export function gatewayConfig(env = process.env) {

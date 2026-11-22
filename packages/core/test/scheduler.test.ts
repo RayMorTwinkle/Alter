@@ -68,7 +68,7 @@ it("sleeps durably, fires once per occurrence, catches up once and resumes regis
   app = await open();
   app.scheduler.register("review", handler);
   app.harness.resume();
-  await expectWake("2026-12-06T02:00Z");
+  await expectWake("2026-12-06T01:00Z");
   expect(handler).toHaveBeenCalledTimes(1);
   expect(handler.mock.calls[0]![0]).toMatchObject({ kind: "review", text: "复查" });
   const caughtUp = await notifications();
@@ -86,7 +86,7 @@ it("sleeps durably, fires once per occurrence, catches up once and resumes regis
   const surface = await observeSurface(app, () => {});
   try {
     app.harness.resume();
-    await expectWake("2026-12-06T02:00Z");
+    await expectWake("2026-12-06T01:00Z");
     expect(surface.snapshot().notifications).toEqual(caughtUp);
     advance("2026-12-06T02:00Z");
     await expectWake("2026-12-06T13:00Z");

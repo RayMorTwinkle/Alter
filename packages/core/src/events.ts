@@ -32,7 +32,7 @@ export function prefilter(event: ExternalEvent, seen: boolean, mute: readonly st
 }
 
 export async function startEventBus(harness: Harness, main: Conversation, time: ReturnType<typeof calendarTime>, now: () => number,
-  mute: string[], classify: (event: ExternalEvent, at: number, signal: AbortSignal) => Promise<Decision>) {
+  mute: string[], classify: (event: ExternalEvent, signal: AbortSignal) => Promise<Decision>) {
   const controller = new AbortController();
 
   async function finish(tx: Tx, progress: Progress, event: ExternalEvent, decision: Decision) {
@@ -46,7 +46,6 @@ export async function startEventBus(harness: Harness, main: Conversation, time: 
   }
 
   async function consume() {
-    const at = now();
     const event = await main.commit(async tx => {
       const progress = await tx.doc(Progress, main.id);
       const log = await tx.doc(Events, main.id);
@@ -63,7 +62,7 @@ export async function startEventBus(harness: Harness, main: Conversation, time: 
       return { ...event };
     }, context);
     if (!event) return;
-    const decision = await classify(event, at, controller.signal);
+    const decision = await classify(event, controller.signal);
     await main.commit(async tx => finish(tx, await tx.doc(Progress, main.id), event, decision), context);
   }
 

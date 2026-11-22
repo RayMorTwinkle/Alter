@@ -1,15 +1,53 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import type { Api, AssistantMessageEvent, Model, ProviderStreams, StreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
+import { withClientIdentity } from "@earendil-works/pi-ai/utils/identity";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
 import type { gatewayConfig } from "./config.ts";
-import { appendUsage, type UsageLine } from "./usage.ts";
+import { appendUsage, budgetExhausted, type ProactiveBudget, type UsageLine } from "./usage.ts";
 
 type Config = ReturnType<typeof gatewayConfig>;
 type Conversation = Exclude<UsageLine["conversation"], "triage">;
 export const gatewayDataDirectories = new WeakMap<Models, string>();
 const completions = openAICompletionsApi();
+
+// The gateway reports each fallback attempt. Other providers expose one terminal usage record.
+const proactiveAttempt = new AsyncLocalStorage<(line: UsageLine) => Promise<void>>();
+
+export function withProactiveUsage(models: Models, budget: ProactiveBudget): Models {
+  const streamSimple: Models["streamSimple"] = (model, context, options) => {
+    if (!options?.sessionId?.startsWith("proactive-")) return models.streamSimple(model, context, options);
+    async function* run() {
+      const permit = await budget.acquire(options?.signal);
+      if (!permit) throw new Error(budgetExhausted);
+      try {
+        options?.signal?.throwIfAborted();
+        const at = new Date(permit.at).toISOString();
+        let recorded = false;
+        const started = performance.now();
+        const stream = proactiveAttempt.run(async line => {
+          recorded = true;
+          await permit.record({ ...line, at, conversation: "task", proactive: true });
+        }, () => models.streamSimple(model, context, options));
+        for await (const event of stream) {
+          if (!recorded && (event.type === "done" || event.type === "error")) {
+            const msg = event.type === "done" ? event.message : event.error;
+            const { input, cacheRead, cacheWrite, output } = msg.usage;
+            await permit.record({ at, conversation: "task", proactive: true, model: msg.model, attempt: 1,
+              outcome: event.type === "done" ? "ok" : "error", ...(event.type === "error" && { errorKind: event.reason }),
+              latencyMs: Math.round(performance.now() - started), inputTokens: input + cacheRead + cacheWrite, outputTokens: output });
+          }
+          yield event;
+        }
+      } finally { permit.release(); }
+    }
+    return lazyStream(model, async () => run(), undefined, options.signal);
+  };
+  return { ...withClientIdentity(models, {}), streamSimple, completeSimple: (model, context, options) => options?.sessionId?.startsWith("proactive-")
+    ? streamSimple(model, context, options).result() : models.completeSimple(model, context, options) };
+}
 
 function errorKind(status: number | undefined, networkError: boolean, message = "") {
   if (status === 401 || status === 403) return "auth";
@@ -86,14 +124,17 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
           // even when zero) only when the gateway supplies a usage chunk.
           const { usage } = message;
           const reportedUsage = usage.totalTokens > 0 || usage.reasoning !== undefined;
-          // The tool-free caller accounts for triage across gateway and local providers alike.
-          if (!triage) await appendUsage(config.dataDir, {
-            at, conversation, model: id, attempt: index + 1, fallbackFrom: chain[index - 1],
-            outcome: kind ? "error" : "ok", errorKind: kind, latencyMs: elapsed(), firstTokenMs,
-            ...(reportedUsage ? {
-              inputTokens: usage.input + usage.cacheRead + usage.cacheWrite, outputTokens: usage.output,
-            } : {}),
-          });
+          // Triage records its own terminal message.
+          if (!triage) {
+            const record = proactiveAttempt.getStore() ?? ((line: UsageLine) => appendUsage(config.dataDir, line));
+            await record({
+              at, conversation, model: id, attempt: index + 1, fallbackFrom: chain[index - 1],
+              outcome: kind ? "error" : "ok", errorKind: kind, latencyMs: elapsed(), firstTokenMs,
+              ...(reportedUsage ? {
+                inputTokens: usage.input + usage.cacheRead + usage.cacheWrite, outputTokens: usage.output,
+              } : {}),
+            });
+          }
           if (kind && retryable.has(kind) && firstTokenMs === undefined && index + 1 < chain.length) break;
           if (event.type === "done" && firstTokenMs === undefined && start) yield start;
           yield event;

@@ -92,19 +92,19 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
       return id;
     }, context);
   }
-  async function ensureDigest(daily: string) {
+  async function ensureDaily(kind: string, text: string, daily: string) {
     const exists = await main().commit(async tx => {
       const { byId } = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
-      const managed = byId["daily-digest"];
+      const managed = byId[`daily-${kind}`];
       if (managed?.item.status === "scheduled" && managed.item.repeat?.daily !== daily) {
         await tx.signal(managed.worker, Cancel, String(managed.item.at), true);
         managed.item.at = time.nextDaily(now(), daily);
         managed.item.repeat = { daily };
       }
-      return Object.values(byId).some(({ item }) => item.kind === "digest");
+      return Object.values(byId).some(({ item }) => item.kind === kind);
     }, context);
     if (exists) return;
-    await create({ kind: "digest", text: "每日摘要", daily, at: new Date(time.nextDaily(now(), daily)).toISOString() }, "daily-digest");
+    await create({ kind, text, daily, at: new Date(time.nextDaily(now(), daily)).toISOString() }, `daily-${kind}`);
   }
   function list() {
     return main().commit(async tx => Object.values((await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId)
@@ -136,5 +136,5 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     defineTool({ name: "schedule_cancel", description: "Cancel a scheduled reminder by ID.", parameters: obj({ id: str() }), replay: "safe",
       execute: async ({ id }) => await cancel(id) ? reply(id) : reply("Unknown or finished schedule", true) }),
   ];
-  return { register, ensureDigest, create: (input: Input) => create(input), list, cancel, capability, tools };
+  return { register, ensureDaily, create: (input: Input) => create(input), list, cancel, capability, tools };
 }

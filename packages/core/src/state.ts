@@ -10,6 +10,8 @@ export type TaskRecord = {
   allow: string[];
   status: "running" | "completed" | "failed";
   failure?: string;
+  proactive?: true;
+  goal?: { text: string; timeZone: string };
 };
 
 export const Tasks = conversationDoc<{ byId: Record<string, TaskRecord> }>("tasks", () => ({ byId: {} }));
