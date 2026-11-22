@@ -1,6 +1,6 @@
-import { CaretRight, Link as LinkIcon } from "@phosphor-icons/react";
-import { useState } from "react";
-import { clock, pretty } from "../format.ts";
+import { CaretRight, Link as LinkIcon, Warning } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { clock, pretty, remaining } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Inline } from "../markdown.tsx";
 import type { Lease, LedgerEntry, PermissionRequest, Task } from "../types.ts";
@@ -56,6 +56,12 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const mine = request.audience === "user";
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const left = remaining(request.expiresAt - now);
 
   async function answer(allow: boolean) {
     setBusy(true);
@@ -72,6 +78,7 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
         <span className="approval-tool">{request.capability} · <code>{request.tool}</code></span>
         <span className={mine ? "badge" : "chip"}>{mine ? t.needsYou : t.handledByMain}</span>
       </header>
+      {request.taint && <p className="approval-taint"><Warning weight="fill" /> {t.tainted(request.taint.source)}</p>}
       <dl>
         <dt>{t.reason}</dt>
         <dd>{request.reason}</dd>
@@ -83,6 +90,7 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
           <input value={note} onChange={event => setNote(event.target.value)} placeholder={t.notePlaceholder} />
           <button className="btn" disabled={busy} onClick={() => void answer(false)}>{t.deny}</button>
           <button className="btn primary" disabled={busy} onClick={() => void answer(true)}>{t.approve}</button>
+          <span className="approval-expiry">{t.expiresIn(left.n, left.unit)}</span>
         </div>
       )}
     </article>

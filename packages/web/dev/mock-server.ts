@@ -80,6 +80,7 @@ async function runTask(text: string) {
   const request: PermissionRequest = {
     id: `permission-${id()}`, taskId, audience: "user", capability: "outbox", tool: "outbox_send",
     arguments: { message: "老闆您好，邀請您參加明天下午三點的週報會。" }, reason: task.brief,
+    expiresAt: Date.now() + 24 * 3_600_000, tainted: true, taint: { source: "mail_read", capability: "mail", at: Date.now() },
   };
   task.pending.push(request);
   push({ id: id(), kind: "permission", taskId, text: `${taskId} 需要你批准 outbox_send`, at: Date.now() });

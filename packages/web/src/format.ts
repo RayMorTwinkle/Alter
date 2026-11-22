@@ -17,6 +17,12 @@ export function pretty(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+// Rounded up so a request never reads "0 minutes" while it can still be answered.
+export function remaining(ms: number) {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
+  return minutes >= 120 ? { n: Math.ceil(minutes / 60), unit: "h" as const } : { n: minutes, unit: "m" as const };
+}
+
 export function compactNumber(n: number) {
   return n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
