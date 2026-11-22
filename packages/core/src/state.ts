@@ -4,6 +4,8 @@ export type Permission = "restricted" | "auto" | "full";
 export type TaskRecord = {
   conversationId: ConversationId;
   brief: string;
+  context: "fork" | "fresh";
+  createdAt: number;
   permission: Permission;
   allow: string[];
   status: "running" | "completed" | "failed";
