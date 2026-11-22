@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { defaultTimeZone } from "./clock.ts";
 
 export const defaultApprovalTimeoutMs = 24 * 60 * 60_000;
 
@@ -63,6 +64,6 @@ export function gatewayConfig(env = process.env) {
     thinking: { main: thinking("ALTER_MAIN_THINKING", "medium"), task: thinking("ALTER_TASK_THINKING", "high") },
     approvalTimeoutMs: validateApprovalTimeout(env.ALTER_APPROVAL_TIMEOUT_MINUTES === undefined
       ? defaultApprovalTimeoutMs : Number(env.ALTER_APPROVAL_TIMEOUT_MINUTES) * 60_000),
-    firstTokenMs, dataDir: dataDirectory(env),
+    firstTokenMs, dataDir: dataDirectory(env), timeZone: env.ALTER_TZ?.trim() || defaultTimeZone,
   };
 }

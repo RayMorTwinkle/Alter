@@ -29,7 +29,9 @@ export type AlterPlugin = {
 };
 
 export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = []) {
-  const manifests = [...demoManifests, ...plugins.map(plugin => plugin.capability)];
+  const pluginIds = new Set(plugins.map(plugin => plugin.capability.id));
+  const activeDemos = demoManifests.filter(cap => !pluginIds.has(cap.id));
+  const manifests = [...activeDemos, ...plugins.map(plugin => plugin.capability)];
   const toolActions = new Map<string, { capability: string; action: string; effect: Effect }>();
   const ids = new Set<string>();
   const reserved = new Set(["dispatch_task", "task_status", "answer_permission_request", "enable_tool", "request_capability", "finish"]);
@@ -49,12 +51,12 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = []) {
       throw new Error(`Tools must match the actions declared by ${capability.id}`);
     }
   }
-  return { manifests, toolActions };
+  return { manifests, toolActions, activeDemos };
 }
 export type CapabilityRegistry = ReturnType<typeof createCapabilityRegistry>;
 export const { toolActions } = createCapabilityRegistry();
 
-export function createDemoCapabilities() {
+export function createDemoCapabilities(activeDemos = demoManifests) {
   const calendar = new Map<string, string>();
   const notes = new Map<string, string>([["welcome", "Remember the planning meeting."]]);
   const outbox: string[] = [];
@@ -90,6 +92,6 @@ export function createDemoCapabilities() {
         return reply("Recorded in outbox");
       },
     }),
-  ];
+  ].filter(tool => activeDemos.some(cap => cap.actions.some(action => tool.name === `${cap.id}_${action.name}`)));
   return { calendar, notes, outbox, tools, extension: defineExtension({ name: "alter.capabilities", tools }) };
 }

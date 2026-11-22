@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { join } from "node:path";
 import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage } from "@alter/core";
 import { createBrowserPlugin } from "@alter/plugin-browser";
+import { createCalendarPlugin } from "@alter/plugin-calendar";
 import { createMailPlugin, mailConfigFromEnv } from "@alter/plugin-mail";
 import { createWebServer } from "./server.ts";
 
@@ -15,11 +16,12 @@ async function start() {
   const config = gatewayConfig();
   const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
   const mail = mailConfigFromEnv(process.env);
-  const plugins = mail ? [createMailPlugin(mail)] : [];
+  const plugins = [createCalendarPlugin({ dataDir: config.dataDir, timeZone: config.timeZone })];
+  if (mail) plugins.push(createMailPlugin(mail));
   if (process.env.ALTER_BROWSER !== "off") plugins.push(createBrowserPlugin());
   const app = await openAlter(
     await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking,
-    { plugins, approvalTimeoutMs: config.approvalTimeoutMs },
+    { plugins, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
   );
   console.log("Alter plugins:", plugins.map(plugin => plugin.capability.id).join(", ") || "none");
   try {

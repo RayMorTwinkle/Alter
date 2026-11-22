@@ -51,7 +51,7 @@ function script(c: PermissionCase) {
   return (last: Message) => {
     let next: Call | undefined;
     if (last.role === "user") {
-      const text = contentText(last.content);
+      const text = contentText(last.content).replace(/^\[当前时间 [^\n]*\]\n/, "");
       if (text === "eval-main") next = main[0];
       if (text === "eval-child") next = child[0];
       if (text.startsWith("eval-approve ")) next = call("answer", "answer_permission_request", {

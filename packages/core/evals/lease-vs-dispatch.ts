@@ -60,7 +60,7 @@ type ModelSetup = {
   taskModel?: Parameters<typeof openAlter>[3];
   thinking?: Parameters<typeof openAlter>[4];
 };
-type Options = ModelSetup & { scenario: Scenario; mode: Mode; dataDir: string; approvalTimeoutMs?: number };
+type Options = ModelSetup & { scenario: Scenario; mode: Mode; dataDir: string; approvalTimeoutMs?: number; timeZone?: string };
 
 type ToolCounts = { enable_tool: number; dispatch_task: number };
 
@@ -124,7 +124,7 @@ async function playTurns(app: AlterApp, scenario: Scenario, tools: ToolCounts, t
   }
 }
 
-export async function runScenario({ scenario, mode, dataDir, models, mainModel, taskModel, thinking, approvalTimeoutMs }: Options) {
+export async function runScenario({ scenario, mode, dataDir, models, mainModel, taskModel, thinking, approvalTimeoutMs, timeZone }: Options) {
   const tools = { enable_tool: 0, dispatch_task: 0 };
   const turnLatencyMs: number[] = [];
   let failure: string | null = null;
@@ -136,7 +136,7 @@ export async function runScenario({ scenario, mode, dataDir, models, mainModel, 
     const storage = await openNodeSqliteStorage(join(dataDir, "main.sqlite"));
     let app: AlterApp | undefined;
     try {
-      app = await openAlter(storage, models, mainModel, taskModel, thinking, { leasing: mode === "lease", approvalTimeoutMs });
+      app = await openAlter(storage, models, mainModel, taskModel, thinking, { leasing: mode === "lease", approvalTimeoutMs, timeZone });
       failure = await playTurns(app, scenario, tools, turnLatencyMs);
     } finally {
       if (app) await app.close();
@@ -203,7 +203,7 @@ async function evaluate() {
       for (const mode of modes) {
         const dataDir = await mkdtemp(join(out, `${repeat}-${scenario}-${mode}-`));
         const setup = await createGatewayModels({ ...config, dataDir });
-        const result = await runScenario({ scenario, mode, dataDir, ...setup, approvalTimeoutMs: config.approvalTimeoutMs });
+        const result = await runScenario({ scenario, mode, dataDir, ...setup, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs });
         const row = { ...result, repeat, dataDir: basename(dataDir), model: { main: config.main, task: config.task }, thinking: setup.thinking };
         await appendFile(log, JSON.stringify(row) + "\n");
         results.push(row);

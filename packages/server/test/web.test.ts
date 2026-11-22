@@ -109,7 +109,7 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
 it("delivers live cumulative text, replays it on reconnect, and queues messages with stable echo IDs", async () => {
   let release!: ServerResponse;
   const web = await setup(({ messages }, res) => {
-    if (messages.at(-1)?.content === "first") { release = res; delta(res, { content: "one" }); }
+    if (messages.at(-1)?.content?.endsWith("\nfirst")) { release = res; delta(res, { content: "one" }); }
     else say(res, "second answer");
   });
   await web.login();
@@ -129,6 +129,7 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   expect(queued.status).toBe(202);
   const second = await queued.json();
   await next.seen(e => e.event === "timeline" && e.data.id === second.id && e.data.kind === "user");
+  expect(next.events).toContainEqual({ event: "timeline", data: { id: second.id, at: expect.any(Number), kind: "user", text: "next" } });
   delta(release, { content: " two" });
   await next.seen(e => e.event === "delta" && e.data.text === "one two");
   say(release, " three");
@@ -155,7 +156,7 @@ it.each([
       if (last.role === "tool") return toolCall(res, "finish", { summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }] });
       return toolCall(res, call.tool, call.arguments);
     }
-    if (last.content === "delegate") return toolCall(res, "dispatch_task", { brief: "send greeting", context: "fresh", permission, allow: [] });
+    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send greeting", context: "fresh", permission, allow: [] });
     say(res, "ack");
   });
   await web.login();
@@ -198,7 +199,7 @@ it.each([
 
 it("stops only the active turn and continues an already queued input", async () => {
   const web = await setup(({ messages }, res) => {
-    if (messages.at(-1)?.content === "stop me") delta(res, { content: "partial" });
+    if (messages.at(-1)?.content?.endsWith("\nstop me")) delta(res, { content: "partial" });
     else say(res, "continued");
   });
   await web.login();
@@ -239,7 +240,7 @@ it("serves the SPA and typed assets, rejecting raw, encoded and symlink traversa
 it("rebuilds the 200-item window, lease state and legacy task metadata from SQLite", async () => {
   const web = await setup(({ model, messages }, res) => {
     if (model === "offline/task") return toolCall(res, "finish", { summary: "ready", refs: [] });
-    if (messages.at(-1)?.content === "delegate") {
+    if (messages.at(-1)?.content?.endsWith("\ndelegate")) {
       return toolCall(res, "dispatch_task", { brief: "look", context: "fork", permission: "full", allow: [] });
     }
     say(res, "ack");

@@ -7,6 +7,8 @@ import {
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, validateApprovalTimeout } from "./config.ts";
+import { inputClock } from "./clock.ts";
+import { mainClocks } from "./timeline.ts";
 import { Tasks } from "./state.ts";
 import { BackgroundTask, dispatchTool, TaskTools } from "./tasks.ts";
 
@@ -19,20 +21,26 @@ export const leaseWindow = 30;
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { leasing?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number } = {},
+  options: { leasing?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number; timeZone?: string; now?: () => number } = {},
 ) {
   const leasing = options.leasing ?? true;
-  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
-    (leasing ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
-    "多步或探索性工作用 dispatch_task 派单，可用能力有 calendar、notes（示例笔记 welcome）、outbox（模拟发送）。" +
-    "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。";
-  const demo = createDemoCapabilities();
+  const clock = inputClock(options.timeZone, options.now);
   const plugins = options.plugins ?? [];
   const capabilities = createCapabilityRegistry(plugins);
-  const { manifests, toolActions } = capabilities;
+  const demo = createDemoCapabilities(capabilities.activeDemos);
+  const descriptions: Record<string, string> = {
+    calendar: "calendar（示例日历，仅标题）", notes: "notes（示例笔记 welcome）", outbox: "outbox（模拟发送）",
+  };
+  const available = [...capabilities.activeDemos.map(cap => descriptions[cap.id] ?? cap.id), ...plugins.map(({ capability }) =>
+    capability.id === "calendar" ? "calendar（日历，可管理标题、时间、地点、备注）" : capability.id)];
+  const leasable = new Set(capabilities.manifests.filter(cap => leasing && cap.mainLeasable).map(cap => cap.id));
+  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
+    (leasable.has("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
+    `多步或探索性工作用 dispatch_task 派单，可用能力有 ${available.join("、")}。` +
+    "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。";
+  const { toolActions } = capabilities;
   const tools = [...demo.tools, ...plugins.flatMap(plugin => plugin.tools)];
   const extension = defineExtension({ name: demo.extension.name, tools });
-  const leasable = new Set(manifests.filter(cap => leasing && cap.mainLeasable).map(cap => cap.id));
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
   const broker = createBroker(() => main, capabilities, timeout);
   const taskExtensions = [extension, TaskTools, broker];
@@ -46,7 +54,7 @@ export async function openAlter(
   }
 
   const controls: ToolRegistration[] = [
-    dispatchTool(capabilities, taskExtensions, taskModel, thinking.task),
+    dispatchTool(capabilities, taskExtensions, taskModel, clock, thinking.task),
     defineTool({
       name: "task_status", description: "Show task status and any pending permission requests.",
       parameters: obj({ taskId: opt(str()) }), replay: "safe",
@@ -128,10 +136,7 @@ export async function openAlter(
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases, granted capabilities and the conversational history.
   await main.commit(async tx => {
-    const instructions = plugins.length
-      ? mainInstructions + " 可派给任务的插件能力：" + plugins.map(p => p.capability.id).join("、") + "。"
-      : mainInstructions;
-    await configure(tx, main.id, { extensions: [controlPlane, extension, broker], model: mainModel, thinkingLevel: thinking.main, instructions });
+    await configure(tx, main.id, { extensions: [controlPlane, extension, broker], model: mainModel, thinkingLevel: thinking.main, instructions: mainInstructions });
     const leases = await tx.doc(Leases, main.id);
     for (const id of Object.keys(leases.lastUsed)) if (!leasable.has(id)) delete leases.lastUsed[id];
     await updateOffered(tx, main.id, leases.lastUsed);
@@ -170,5 +175,6 @@ export async function openAlter(
     await shutdown();
     throw error;
   }
+  mainClocks.set(main, clock);
   return { harness, main, demo, capabilities, close: () => closing ??= shutdown() };
 }
