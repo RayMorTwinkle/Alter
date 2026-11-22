@@ -20,7 +20,7 @@ export function appendUsage(dir: string, line: UsageLine) {
   return appendFile(join(dir, "usage.jsonl"), JSON.stringify(line) + "\n", { mode: 0o600 });
 }
 
-export async function usageSummary(dir: string) {
+export async function readUsage(dir: string): Promise<UsageLine[]> {
   let contents: string;
   try {
     contents = await readFile(join(dir, "usage.jsonl"), "utf8");
@@ -28,9 +28,12 @@ export async function usageSummary(dir: string) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
+  return contents.split("\n").filter(Boolean).map(row => JSON.parse(row));
+}
+
+export async function usageSummary(dir: string) {
   const models = new Map<string, { latencies: number[]; failures: number; aborted: number; fallbacks: number; inputTokens: number; outputTokens: number }>();
-  for (const row of contents.split("\n").filter(Boolean)) {
-    const line: UsageLine = JSON.parse(row);
+  for (const line of await readUsage(dir)) {
     const group = models.get(line.model) ?? { latencies: [], failures: 0, aborted: 0, fallbacks: 0, inputTokens: 0, outputTokens: 0 };
     group.latencies.push(line.latencyMs);
     // A user-initiated abort is not a provider failure.
