@@ -2,17 +2,18 @@ import { obj, str } from "@earendil-works/pi-schema";
 import { defineExtension, defineTool, reply, type Conversation, type ToolRegistration } from "./runtime.ts";
 
 export type Effect = "read" | "write-local" | "external-send" | "irreversible" | "unknown";
-export type ToolAction = { capability: string; action: string; effect: Effect; guarded?: true };
+type ActionPolicy = { effect: Effect; guarded?: true; seenArg?: string };
+export type ToolAction = ActionPolicy & { capability: string; action: string };
 export type Capability = {
   id: string;
   mainLeasable: boolean;
-  actions: { name: string; effect: Effect; guarded?: true }[];
+  actions: (ActionPolicy & { name: string })[];
 };
 
 export const demoManifests: Capability[] = [
   { id: "calendar", mainLeasable: true, actions: [
     { name: "list", effect: "read" }, { name: "create", effect: "write-local" },
-    { name: "update", effect: "write-local" },
+    { name: "update", effect: "write-local", guarded: true },
   ] },
   { id: "notes", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },
   { id: "outbox", mainLeasable: false, actions: [{ name: "send", effect: "external-send" }] },
@@ -41,10 +42,10 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = [], d
   for (const capability of manifests) {
     if (ids.has(capability.id)) throw new Error(`Duplicate capability: ${capability.id}`);
     ids.add(capability.id);
-    for (const { name: action, effect, guarded } of capability.actions) {
+    for (const { name: action, ...policy } of capability.actions) {
       const name = `${capability.id}_${action}`;
       if (reserved.has(name) || toolActions.has(name)) throw new Error(`Duplicate tool: ${name}`);
-      toolActions.set(name, { capability: capability.id, action, effect, ...(guarded && { guarded }) });
+      toolActions.set(name, { capability: capability.id, action, ...policy });
     }
   }
   for (const { capability, tools } of plugins) {
