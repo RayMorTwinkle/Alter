@@ -409,7 +409,7 @@ it("requires user approval before sending as a Feishu user after a full task rea
 it("authenticates memory routes and streams full lists for tool writes, expiry and web edits", async () => {
   let at = 100;
   const web = await setup(({ messages }, res) => {
-    if (messages.at(-1)?.content?.endsWith("\n记下")) return toolCall(res, "memory_save", { kind: "goal", text: "考试", due: 101 });
+    if (messages.at(-1)?.content?.endsWith("\n记下")) return toolCall(res, "memory_save", { kind: "goal", text: "考试", due: "1970-01-01T00:00:00.101Z" });
     say(res, "已记录");
   }, false, undefined, () => at);
   const edit = (method: string, id: string, value?: unknown) => fetch(web.base + "/api/memory/" + id, {

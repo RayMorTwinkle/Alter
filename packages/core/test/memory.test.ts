@@ -46,3 +46,28 @@ it("persists memories and keeps both substring search paths in sync with edits a
     expect(reopened.search("请实习")[0]?.status).toBe("done");
   } finally { await stop(); }
 });
+
+it("takes ISO deadlines in the user's time zone and revives a goal whose deadline moves forward", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-memory-due-"));
+  const at = Date.parse("2026-11-22T07:00:00Z");
+  const memory = createMemory(dir, () => at, "Asia/Shanghai");
+  const close = await memory.start();
+  try {
+    const call = (name: string, args: Record<string, unknown>) =>
+      memory.tools.find(tool => tool.name === name)!.execute(args as never, {} as never, {} as never);
+    await call("memory_save", { kind: "goal", text: "操作系统期末", due: "2026-12-15" });
+    const goal = memory.list()[0]!;
+    // A date means the whole local day: the deadline is midnight at the start of Dec 16 in Shanghai.
+    expect(goal.due).toBe(Date.parse("2026-12-15T16:00:00Z"));
+    expect(memory.summary()).toContain("期限 2026-12-16 00:00");
+    memory.update(goal.id, { due: at - 1 });
+    expect(memory.list()[0]!.status).toBe("pending");
+    await call("memory_update", { id: goal.id, due: "2026-12-15T09:00" });
+    expect(memory.list()[0]).toMatchObject({ status: "active", due: Date.parse("2026-12-15T01:00:00Z") });
+    await expect(call("memory_update", { id: goal.id, due: "12/15" })).rejects.toThrow("ISO");
+  } finally {
+    await close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+

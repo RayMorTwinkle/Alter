@@ -38,7 +38,7 @@ export async function openAlter(
   const registry = createRegistry();
   const scheduler = createScheduler(() => main, registry, timeZone, now);
   const clock = inputClock(options.timeZone, options.now);
-  const memory = createMemory(options.dataDir ?? storageDirectories.get(storage), options.now);
+  const memory = createMemory(options.dataDir ?? storageDirectories.get(storage), options.now, options.timeZone);
   const plugins: AlterPlugin[] = [memory, ...(options.plugins ?? [])];
   const capabilities = createCapabilityRegistry([...plugins, scheduler], options.demos ?? true);
   const demo = createDemoCapabilities(capabilities.activeDemos);
