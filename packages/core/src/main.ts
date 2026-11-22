@@ -15,22 +15,24 @@ export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, 
   "leases", () => ({ turns: 0, lastUsed: {} }),
 );
 export const leaseWindow = 30;
-const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。简短、频繁的日程操作可用 enable_tool 租用 calendar。" +
-  "多步或探索性工作用 dispatch_task 派单，可用能力有 calendar、notes（示例笔记 welcome）、outbox（模拟发送）。" +
-  "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。";
 
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { plugins?: AlterPlugin[]; approvalTimeoutMs?: number } = {},
+  options: { leasing?: boolean; plugins?: AlterPlugin[]; approvalTimeoutMs?: number } = {},
 ) {
+  const leasing = options.leasing ?? true;
+  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
+    (leasing ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
+    "多步或探索性工作用 dispatch_task 派单，可用能力有 calendar、notes（示例笔记 welcome）、outbox（模拟发送）。" +
+    "用 task_status 查进度，收到任务报告后回复用户。你可以答复受限任务的能力申请；对外发送、不可逆操作总是由用户亲自批准，allow 清单不能代替；系统会自动向用户弹出审批，派单时不必在 brief 里提审批。";
   const demo = createDemoCapabilities();
   const plugins = options.plugins ?? [];
   const capabilities = createCapabilityRegistry(plugins);
   const { manifests, toolActions } = capabilities;
   const tools = [...demo.tools, ...plugins.flatMap(plugin => plugin.tools)];
   const extension = defineExtension({ name: demo.extension.name, tools });
-  const leasable = new Set(manifests.filter(cap => cap.mainLeasable).map(cap => cap.id));
+  const leasable = new Set(manifests.filter(cap => leasing && cap.mainLeasable).map(cap => cap.id));
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
   const broker = createBroker(() => main, capabilities, timeout);
   const taskExtensions = [extension, TaskTools, broker];
@@ -59,6 +61,8 @@ export async function openAlter(
       },
     }),
     mainApprovalTool(() => main),
+  ];
+  if (leasing) controls.push(
     defineTool({
       name: "enable_tool", description: "Lease a main-leasable capability for direct use.",
       parameters: obj({ capability: str(), reason: str({ minLength: 1 }) }), replay: "safe",
@@ -72,7 +76,7 @@ export async function openAlter(
         return reply(`Enabled ${capability}`);
       },
     }),
-  ];
+  );
 
   // afterRun children finish before queued follow-ups are placed, including on recovery.
   const AdvanceLeases = defineTask<null, { phase: "advance" }, null>({
