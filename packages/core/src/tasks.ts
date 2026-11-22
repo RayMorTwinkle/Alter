@@ -24,11 +24,16 @@ const ReviewAnswer = defineTask<null, { phase: "review" }, YieldDecision>({
   abort: (_, runtime, ctx) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
 });
 
+// Some models double-escape newlines inside tool arguments. Only unescape text that has no real newline.
+export const unescapeNewlines = (text: string) => text.includes("\n") || !text.includes("\\n") ? text : text.replaceAll("\\n", "\n");
+
 const finish = defineTool({
   name: "finish", description: "Complete the task, record references, and report to main. Call this tool alone.",
   parameters: obj({ summary: nonempty, refs: arr(obj({ kind: nonempty, ref: nonempty })) }),
   replay: "safe",
-  async execute({ summary, refs }, api, ctx) {
+  async execute(args, api, ctx) {
+    const { refs } = args;
+    const summary = unescapeNewlines(args.summary);
     if ((await api.snapshot(LiveDoc, api.conversationId, ctx))?.tools?.length !== 1) return reply(reminder, true);
     const main = (await api.conversation(ROOT_CONVERSATION_ID, ctx))!;
     await api.commit(async tx => {
@@ -141,7 +146,8 @@ export function dispatchTool(
           : await tx.forkConversation(api.conversationId, at, options);
         await configure(tx, child.id, {
           model: taskModel, thinkingLevel: taskThinking, extensions: taskExtensions, tools: null, modelTools: null, maxTurns: 40,
-          instructions: "Carry out the assigned brief. Request any missing capability. " + reminder,
+          instructions: "Carry out the assigned brief. Call tools directly even when they need approval: the system pauses the call " +
+            "and asks the approver, so never stop to ask for approval yourself. Request any missing capability. " + reminder,
         });
         (await tx.doc(TaskIdentity, child.id)).taskId = taskId;
         tasks.byId[taskId] = {

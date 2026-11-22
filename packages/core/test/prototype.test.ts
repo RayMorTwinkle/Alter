@@ -15,6 +15,7 @@ import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
+import { unescapeNewlines } from "../src/tasks.ts";
 
 type Alter = Awaited<ReturnType<typeof openAlter>>;
 type Route = (text: string, last: Message, history: Message[], offered: string[]) => AssistantMessage;
@@ -91,14 +92,11 @@ it("dispatches a fresh notes task and delivers its ledger summary to the main mo
   }]);
 });
 
-it.each([true, false])("parks a restricted send until main decides allow=%s", async allow => {
+it.each([true, false])("routes a restricted send to the user even when main allowed outbox, allow=%s", async allow => {
   let sendResult = "";
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("send greeting");
+    if (text === "delegate") return dispatch("send greeting", "restricted", ["outbox"]);
     if (text === "send greeting") return call("outbox_send", { message: "hello" });
-    if (text.startsWith("permission request ")) {
-      return call("answer_permission_request", { requestId: text.split(" ")[2]!.slice(0, -1), allow, note: "keep it private" });
-    }
     if (last.role === "toolResult" && last.toolName === "outbox_send") {
       sendResult = text;
       return finish(text);
@@ -106,8 +104,11 @@ it.each([true, false])("parks a restricted send until main decides allow=%s", as
     return say("OK");
   });
   await input(app, "delegate");
+  const request = await parked(app);
+  expect(request.audience).toBe("user");
+  await answerUserPermission(app.main, { requestId: request.id, allow, note: "keep it private" });
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
-  expect((await incoming(app)).filter(line => /^permission request permission-\d+: task task-\d+ wants outbox because send greeting$/.test(line))).toHaveLength(1);
+  expect((await incoming(app)).filter(line => line.startsWith("permission request "))).toEqual([]);
   expect(sendResult).toContain(allow ? "Recorded in outbox" : "keep it private");
   expect(app.demo.outbox).toEqual(allow ? ["hello"] : []);
   const audit = await app.harness.snapshot(Audit, app.main.id, context);
@@ -136,7 +137,6 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   const route: Route = (text, last) => {
     if (text === "delegate") return dispatch("record after restart");
     if (text === "record after restart") return call("outbox_send", { message: "survived" });
-    if (text === "approve now") return call("answer_permission_request", { requestId, allow: true });
     if (last.role === "toolResult" && last.toolName === "outbox_send") return finish(text);
     return say("acknowledged");
   };
@@ -150,7 +150,7 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   const second = await open(route, await reopen());
   second.harness.resume();
   expect((await parked(second)).id).toBe(requestId);
-  await input(second, "approve now");
+  await answerUserPermission(second.main, { requestId, allow: true });
   await expect.poll(async () => (await ledger(second)).length).toBe(1);
   await second.main.waitForIdle(context);
   expect(second.demo.outbox).toEqual(["survived"]);
@@ -159,7 +159,6 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   const third = await open(route, await reopen());
   third.harness.resume();
   await third.main.waitForIdle(context);
-  expect((await incoming(third)).filter(text => text.startsWith("permission request "))).toHaveLength(1);
   expect((await incoming(third)).filter(text => text.endsWith("finished: Recorded in outbox"))).toHaveLength(1);
   expect(await ledger(third)).toHaveLength(1);
 });
@@ -302,6 +301,12 @@ it.each(["restricted", "full"] as const)("audits explicit capability requests an
     return say("OK");
   });
   await input(app, "delegate");
+  if (permission === "restricted") {
+    // Main grants the capability; the send itself still waits for the user.
+    const send = await parked(app);
+    expect([send.tool, send.audience]).toEqual(["outbox_send", "user"]);
+    await answerUserPermission(app.main, { requestId: send.id, allow: true });
+  }
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(app.demo.outbox).toEqual(["hello"]);
   const requests = (await incoming(app)).filter(text => text.startsWith("permission request "));
@@ -446,4 +451,10 @@ it("leases a declared plugin only in the harness where it is installed", async (
   await input(plain, "clock please");
   await input(plain, "delegate");
   expect(results).toEqual(["Enabled clock", "noon", "Capability is not leasable", "Unknown capability in allow"]);
+});
+
+it("unescapes newlines only when a summary has none", () => {
+  expect(unescapeNewlines("a\\n\\nb")).toBe("a\n\nb");
+  expect(unescapeNewlines("a\nuse \\n in code")).toBe("a\nuse \\n in code");
+  expect(unescapeNewlines("plain")).toBe("plain");
 });

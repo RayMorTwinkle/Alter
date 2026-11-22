@@ -142,12 +142,18 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   expect(await (await web.read("/api/usage")).json()).toMatchObject([{ model: "offline/main", calls: 2 }]);
 });
 
-it.each(["auto", "restricted"])("observes a %s task and enforces the broker audience", async permission => {
+const send = { tool: "outbox_send", capability: "outbox", arguments: { message: "hello" }, reason: "send greeting" };
+const grant = { tool: "request_capability", capability: "calendar", arguments: { capability: "calendar", reason: "need dates" }, reason: "need dates" };
+it.each([
+  { permission: "auto", call: send, audience: "user" },
+  { permission: "restricted", call: send, audience: "user" },
+  { permission: "restricted", call: grant, audience: "main" },
+])("observes a $permission task and routes $call.tool to $audience", async ({ permission, call, audience }) => {
   const web = await setup(({ model, messages }, res) => {
     const last = messages.at(-1)!;
     if (model === "offline/task") {
       if (last.role === "tool") return toolCall(res, "finish", { summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }] });
-      return toolCall(res, "outbox_send", { message: "hello" });
+      return toolCall(res, call.tool, call.arguments);
     }
     if (last.content === "delegate") return toolCall(res, "dispatch_task", { brief: "send greeting", context: "fresh", permission, allow: [] });
     say(res, "ack");
@@ -162,11 +168,11 @@ it.each(["auto", "restricted"])("observes a %s task and enforces the broker audi
   expect(task).toEqual({ taskId: expect.any(String), conversationId: expect.any(String), createdAt: expect.any(Number),
     context: "fresh", brief: "send greeting", permission, status: "running", allow: [], pending: [request] });
   expect(task.createdAt).toBeGreaterThan(0);
-  expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience: permission === "auto" ? "user" : "main",
-    capability: "outbox", tool: "outbox_send", arguments: { message: "hello" }, reason: "send greeting" });
+  expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience,
+    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason });
   expect(feed.events).toContainEqual({ event: "tasks", data: [task] });
   const decide = () => web.post("/api/permissions/" + request.id, { allow: true, note: "OK" });
-  if (permission === "restricted") {
+  if (audience === "main") {
     expect((await decide()).status).toBe(409);
     expect((await web.state()).pending).toEqual([request]);
     return;
