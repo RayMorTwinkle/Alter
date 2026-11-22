@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { join } from "node:path";
 import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage } from "@alter/core";
+import { createBrowserPlugin } from "@alter/plugin-browser";
 import { createMailPlugin, mailConfigFromEnv } from "@alter/plugin-mail";
 import { createWebServer } from "./server.ts";
 
@@ -13,9 +14,9 @@ async function start() {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid ALTER_WEB_PORT");
   const config = gatewayConfig();
   const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
-  // Connectors load only when configured, so a fresh checkout still starts with the demo capabilities.
   const mail = mailConfigFromEnv(process.env);
   const plugins = mail ? [createMailPlugin(mail)] : [];
+  if (process.env.ALTER_BROWSER !== "off") plugins.push(createBrowserPlugin());
   const app = await openAlter(
     await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking,
     { plugins, approvalTimeoutMs: config.approvalTimeoutMs },
