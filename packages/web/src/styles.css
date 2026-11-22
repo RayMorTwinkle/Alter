@@ -207,6 +207,16 @@ time { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums;
 .agenda-day { display: grid; gap: 6px; }
 .agenda-day + .agenda-day { margin-top: 8px; }
 .agenda-day h3 { margin: 4px 4px 0; display: flex; gap: 8px; align-items: baseline; font-size: 13px; font-weight: 500; color: var(--muted); }
+.memory-group { display: grid; gap: 6px; }
+.memory-group h3 { margin: 4px 4px 0; font-size: 13px; font-weight: 500; color: var(--muted); }
+.memory-item { display: flex; align-items: flex-start; gap: 8px; background: var(--paper); border-radius: var(--radius); padding: 10px 6px 10px 12px; }
+.memory-item.done .memory-text { color: var(--muted); }
+.memory-text { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-edit { width: 100%; font: inherit; font-size: 14px; resize: vertical; border: 0; border-radius: var(--radius-s); background: var(--fill); padding: 6px 8px; color: var(--ink); }
+.memory-actions { flex: none; display: flex; opacity: .55; transition: opacity .15s; }
+.memory-item:hover .memory-actions, .memory-actions:focus-within { opacity: 1; }
+.memory-actions .icon-btn { width: 28px; height: 28px; }
+.chip.warn { background: var(--accent-soft); color: var(--accent); }
 .agenda-day h3 strong { color: var(--ink); font-weight: 650; }
 .agenda-item { display: flex; gap: 12px; background: var(--paper); border-radius: var(--radius); padding: 10px 12px; }
 .agenda-time {
@@ -286,6 +296,7 @@ time { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums;
   .composer { width: calc(100% - 24px); margin-bottom: 10px; }
   .msg time { opacity: 1; }
   .pair-label { display: none; }
+  .memory-actions { opacity: 1; }
   .tabbar {
     display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--surface);
     padding-bottom: env(safe-area-inset-bottom);

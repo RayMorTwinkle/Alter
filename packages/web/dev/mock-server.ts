@@ -4,6 +4,12 @@ import type { AgendaEvent, LedgerEntry, PermissionRequest, Snapshot, Task, Timel
 
 const port = Number(process.env.PORT ?? 4318);
 const now = Date.now();
+const memory = [
+  { id: "1", kind: "goal", text: "12 月中旬的操作系统期末考试", due: now + 21 * 86_400_000, status: "active", createdAt: now - 86_400_000, updatedAt: now - 86_400_000 },
+  { id: "2", kind: "goal", text: "投完 3 家后端实习", due: now - 2 * 86_400_000, status: "pending", createdAt: now - 9 * 86_400_000, updatedAt: now - 2 * 86_400_000 },
+  { id: "3", kind: "profile", text: "回覆偏好繁體中文，簡潔、先給結論", status: "active", createdAt: now - 5 * 86_400_000, updatedAt: now - 5 * 86_400_000 },
+  { id: "4", kind: "fact", text: "導師是王老師，郵箱在通訊錄裡", status: "active", createdAt: now - 3 * 86_400_000, updatedAt: now - 3 * 86_400_000 },
+];
 let seq = 100;
 const id = () => String(++seq);
 
@@ -173,6 +179,16 @@ createServer(async (req, res) => {
   if (transcript) return json(res, 200, { items: transcripts[decodeURIComponent(transcript[1]!)] ?? [] });
   if (path === "/api/stop") { setBusy(false); return json(res, 204); }
   if (path === "/api/calendar") return json(res, 200, agenda());
+  if (path === "/api/memory") return json(res, 200, memory);
+  const memoryItem = /^\/api\/memory\/(.+)$/.exec(path);
+  if (memoryItem) {
+    const index = memory.findIndex(item => item.id === decodeURIComponent(memoryItem[1]!));
+    if (index < 0) return json(res, 404, { error: "Unknown memory" });
+    if (req.method === "DELETE") memory.splice(index, 1);
+    else Object.assign(memory[index]!, await body(req), { updatedAt: Date.now() });
+    emit("memory", memory);
+    return json(res, 204);
+  }
   if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000 });
   if (path === "/api/usage") {
     return json(res, 200, [

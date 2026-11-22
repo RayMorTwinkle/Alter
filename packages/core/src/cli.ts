@@ -67,7 +67,7 @@ async function chat() {
       detach();
     }
   } finally {
-    await app.harness.close(context);
+    await app.close();
   }
 }
 

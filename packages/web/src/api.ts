@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, FeishuPairing, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, FeishuPairing, MemoryItem, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -32,9 +32,13 @@ export const api = {
   usage: () => request<UsageRow[]>("/api/usage"),
   calendar: () => request<Agenda>("/api/calendar"),
   feishu: () => request<FeishuPairing>("/api/feishu"),
+  memory: () => request<MemoryItem[]>("/api/memory"),
+  updateMemory: (id: string, patch: Partial<Pick<MemoryItem, "text" | "status">>) =>
+    request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
+  deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -43,6 +47,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
     dispatch({ type: "connection", connection: "open" });
     // Changes made while disconnected are not replayed; a 404 means this server has no calendar.
     api.calendar().then(agenda => dispatch({ type: "agenda", agenda }), () => {});
+    api.memory().then(memory => dispatch({ type: "memory", memory }), () => {});
   };
   source.onerror = () => {
     dispatch({ type: "connection", connection: "lost" });
@@ -65,6 +70,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "ledger": return dispatch({ type: "ledger", ledger: data });
         case "busy": return dispatch({ type: "busy", busy: data.busy });
         case "calendar": return dispatch({ type: "agenda", agenda: data });
+        case "memory": return dispatch({ type: "memory", memory: data });
       }
     });
   }
