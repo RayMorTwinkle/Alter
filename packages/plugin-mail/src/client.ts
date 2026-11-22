@@ -8,12 +8,14 @@ import { validAddress, type MailConfig } from "./config.ts";
 
 type Folder = Pick<ListResponse, "path" | "specialUse" | "flags" | "specialUseSource">;
 export interface MailConnection {
+  capabilities: Map<string, unknown>;
   connect(): Promise<void>;
   close(): void;
   on(event: "close" | "error" | "exists", listener: () => void): unknown;
   off(event: "close" | "exists", listener: () => void): unknown;
   list(): Promise<Folder[]>;
-  mailboxOpen(path: string, options: { readOnly: true }): Promise<Pick<MailboxObject, "uidValidity" | "uidNext">>;
+  // 163 omits UIDNEXT from SELECT, so uidNext can be missing at runtime despite the imapflow type.
+  mailboxOpen(path: string, options: { readOnly: true }): Promise<Pick<MailboxObject, "uidValidity"> & { uidNext?: number }>;
   search(query: SearchObject, options: { uid: true; strict: true }): Promise<number[] | false | undefined>;
   fetchAll(ids: number[], query: FetchQueryObject, options: { uid: true }): Promise<FetchMessageObject[]>;
   fetchOne(uid: number, query: FetchQueryObject, options: { uid: true }): Promise<FetchMessageObject | false>;

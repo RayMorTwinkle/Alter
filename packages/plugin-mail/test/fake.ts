@@ -16,10 +16,11 @@ export function fakeMail() {
   const folders = [{ path: "custom/sent", flags: new Set(["\\Sent"]) }, { path: "custom/drafts", flags: new Set(["\\Drafts"]) }];
   class Session extends EventEmitter implements MailConnection {
     selected = "";
+    capabilities = new Map<string, unknown>([["IDLE", true]]);
     connect = vi.fn(async () => {});
     close = vi.fn(() => { this.emit("close"); });
     list = vi.fn(async () => folders);
-    mailboxOpen = vi.fn(async (path: string) => {
+    mailboxOpen = vi.fn(async (path: string): Promise<{ uidValidity: bigint; uidNext?: number }> => {
       this.selected = path;
       return { uidValidity: 11n, uidNext: Math.max(0, ...inbox.keys()) + 1 };
     });

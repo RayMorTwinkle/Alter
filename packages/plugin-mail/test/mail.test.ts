@@ -1,10 +1,11 @@
 import { Duplex } from "node:stream";
 import { ImapFlow, type ImapTransportSocket } from "imapflow";
 import { simpleParser } from "mailparser";
-import { context, type ToolRegistration } from "@alter/core";
+import { context, type ExternalEvent, type ToolRegistration } from "@alter/core";
 import { expect, it, vi } from "vitest";
 import { createMailPlugin, mailConfigFromEnv } from "../src/index.ts";
 import { folderPath, withImap } from "../src/client.ts";
+import { watchInbox } from "../src/watch.ts";
 import { config, fakeMail, messageId, outgoing } from "./fake.ts";
 
 function setup() {
@@ -181,6 +182,27 @@ it("coalesces EXISTS, catches up by UID after reconnect, and stops during backof
   }
   expect(app.sessions).toHaveLength(2);
   expect(app.sessions.every(session => session.close.mock.calls.length)).toBe(true);
+});
+
+it("polls servers without IDLE and finds the cursor when SELECT omits UIDNEXT", async () => {
+  const app = setup();
+  const createSession = app.clients.imap.getMockImplementation()!;
+  app.clients.imap.mockImplementation(() => {
+    const session = createSession();
+    session.capabilities.delete("IDLE");
+    session.mailboxOpen.mockResolvedValue({ uidValidity: 11n });
+    return session;
+  });
+  function arrive(uid: number) { app.inbox.set(uid, { uid, seq: uid, envelope: { subject: "Message " + uid, from: [{ address: "a@b.test" }] } }); }
+  arrive(3);
+  const emit = vi.fn(async (_event: ExternalEvent) => {});
+  const stop = await watchInbox(config, app.clients, { emit }, 20);
+  try {
+    arrive(7);
+    await expect.poll(() => emit.mock.calls.map(([event]) => event.ref)).toEqual(["INBOX/11/7"]);
+  } finally {
+    await stop();
+  }
 });
 
 it("keeps the server's automatic Sent copy and closes the operation connection", async () => {

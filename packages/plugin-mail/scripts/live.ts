@@ -32,14 +32,18 @@ await withImap(config, defaultClients, async client => {
   if (!await inSent(client, id)) throw new Error(`Message missing from Sent: ${id}`);
   console.log("Verified in Sent", id);
 });
+// 163 has no IDLE, so this also covers the polling fallback: watch, self-send, wait for the event.
 let received = 0;
 const stop = await watchInbox(config, defaultClients, {
   async emit(event) { received++; console.log(event); },
-});
+}, 10_000);
 try {
-  console.log("Watching INBOX for 30 seconds. Deliver a new message now to verify IDLE.");
+  const probe = { to: config.address, subject: "Alter 163 watch check", text: new Date().toISOString() };
+  await defaultClients.smtp(config, config.address, await compose(config, probe));
+  console.log("Watching INBOX for 30 seconds after a self-sent probe.");
   await delay(30_000);
 } finally {
   await stop();
-  console.log("New messages observed during the IDLE check:", received);
+  console.log("New messages observed during the watch check:", received);
+  if (!received) process.exitCode = 1;
 }
