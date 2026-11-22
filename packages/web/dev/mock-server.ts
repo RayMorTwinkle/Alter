@@ -8,7 +8,7 @@ let seq = 100;
 const id = () => String(++seq);
 
 const timeline: TimelineItem[] = [
-  { id: "1", kind: "user", text: "幫我看一下 welcome 這條筆記寫了什麼", at: now - 3_600_000 },
+  { id: "1", kind: "user", text: "幫我看一下 welcome 這條筆記寫了什麼", at: now - 3_600_000, source: "feishu" },
   { id: "2", kind: "assistant", text: "好的，我派一個任務去讀取 welcome 筆記。", at: now - 3_598_000, model: "opencode-go/glm-5.3" },
   { id: "3", kind: "report", taskId: "task-14", text: "task task-14 finished: 已讀取筆記「welcome」，內容為：**Remember the planning meeting.**", at: now - 3_590_000 },
   { id: "4", kind: "assistant", text: "welcome 筆記只有一句話：\n\n> Remember the planning meeting.\n\n意思是「記得規劃會議」。需要我幫你在日曆上找時間嗎？", at: now - 3_588_000, model: "opencode-go/glm-5.3" },
@@ -173,6 +173,7 @@ createServer(async (req, res) => {
   if (transcript) return json(res, 200, { items: transcripts[decodeURIComponent(transcript[1]!)] ?? [] });
   if (path === "/api/stop") { setBusy(false); return json(res, 204); }
   if (path === "/api/calendar") return json(res, 200, agenda());
+  if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000 });
   if (path === "/api/usage") {
     return json(res, 200, [
       { model: "opencode-go/glm-5.3", calls: 12, failureRate: "0.0%", aborted: 1, fallbacks: 0, inputTokens: 9508, outputTokens: 1290, p50Ms: 1825, p95Ms: 4430 },

@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, FeishuPairing, Snapshot, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -31,6 +31,7 @@ export const api = {
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
   usage: () => request<UsageRow[]>("/api/usage"),
   calendar: () => request<Agenda>("/api/calendar"),
+  feishu: () => request<FeishuPairing>("/api/feishu"),
 };
 
 const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar"] as const;

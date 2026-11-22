@@ -50,6 +50,18 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
 
   useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
 
+  // The code rotates every 10 minutes until the owner pairs; a 404 means Feishu is not configured.
+  const [pairCode, setPairCode] = useState("");
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = () => api.feishu().then(status => {
+      setPairCode(status.paired ? "" : status.code);
+      if (!status.paired) timer = setTimeout(poll, 15_000);
+    }, () => setPairCode(""));
+    void poll();
+    return () => clearTimeout(timer);
+  }, []);
+
   const waiting = userPending(state).length;
   useEffect(() => {
     const prefix = waiting ? `(${waiting}) ` : state.busy ? "· " : "";
@@ -94,6 +106,12 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
           <i />{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}
         </span>
         <div className="topbar-actions">
+          {pairCode && (
+            <span className="pair-code" title={t.feishuPairHint}>
+              <span className="pair-label">{t.feishuPair}</span>
+              <b>{pairCode.slice(0, 3)} {pairCode.slice(3)}</b>
+            </span>
+          )}
           <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.usage} aria-label={t.usage}><ChartBar /></button>
           <button className="text-btn" onClick={onToggleLocale}>{t.language}</button>
           <button className="icon-btn ghost" onClick={onLogout} title={t.logout} aria-label={t.logout}><SignOut /></button>

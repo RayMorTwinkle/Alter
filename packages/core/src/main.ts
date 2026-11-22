@@ -176,5 +176,5 @@ export async function openAlter(
     throw error;
   }
   mainClocks.set(main, clock);
-  return { harness, main, demo, capabilities, close: () => closing ??= shutdown() };
+  return { harness, main, demo, capabilities, events: host, close: () => closing ??= shutdown() };
 }

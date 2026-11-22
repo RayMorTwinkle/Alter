@@ -60,7 +60,7 @@ function Item({ item, pending, onAnswer, onOpenTask }: {
   const t = useT();
   switch (item.kind) {
     case "user":
-      return <article className="msg user"><Markdown text={item.text} /><time>{clock(item.at)}</time></article>;
+      return <article className="msg user"><Markdown text={item.text} /><time>{item.source === "feishu" && `${t.viaFeishu} · `}{clock(item.at)}</time></article>;
     case "assistant":
       return (
         <article className="msg assistant">
