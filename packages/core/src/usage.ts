@@ -1,12 +1,27 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, open, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { raceWithAbortSignal } from "@earendil-works/pi-ai/utils/abort";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { calendarTime } from "./calendar-time.ts";
 import { dataDirectory, loadRepoEnv } from "./config.ts";
 
 export type UsageLine = {
   at: string;
-  conversation: "main" | "task" | "triage" | "judge";
+  conversation?: "main" | "task" | "triage" | "judge";
+  role?: string;
+  thinking?: string;
+  taskId?: string;
+  wakeId?: string;
+  wakeSource?: string;
+  wakeAt?: number;
+  fallback?: boolean;
+  retry?: number;
+  costUsd?: number | null;
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  tools?: string[];
+  statsOnly?: true; // Regular non-gateway providers were outside the legacy usage report.
   proactive?: true;
   model: string;
   attempt: number;
@@ -19,24 +34,74 @@ export type UsageLine = {
   outputTokens?: number;
 };
 
-export function appendUsage(dir: string, line: UsageLine) {
-  return appendFile(join(dir, "usage.jsonl"), JSON.stringify(line) + "\n", { mode: 0o600 });
+export function splitUsage({ input, output, cacheRead, cacheWrite }: Usage) {
+  return { input, cacheRead, cacheWrite, inputTokens: input + cacheRead + cacheWrite, outputTokens: output };
 }
 
-export async function readUsage(dir: string): Promise<UsageLine[]> {
-  let contents: string;
+export const usageRole = (line: UsageLine) => line.role ?? (line.proactive && line.conversation === "task" ? "goal" : line.conversation) ?? "unknown";
+export const totalInput = (line: Pick<UsageLine, "input" | "cacheRead" | "cacheWrite" | "inputTokens">) => line.input === undefined ? line.inputTokens ?? 0
+  : line.input + (line.cacheRead ?? 0) + (line.cacheWrite ?? 0);
+
+async function estimateCost(dir: string, line: UsageLine) {
+  if (line.input === undefined || line.outputTokens === undefined) return null;
   try {
-    contents = await readFile(join(dir, "usage.jsonl"), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    const prices = JSON.parse(await readFile(join(dir, "prices.json"), "utf8"))?.[line.model];
+    const counts = { input: line.input, cacheRead: line.cacheRead, cacheWrite: line.cacheWrite, output: line.outputTokens };
+    let cost = 0;
+    for (const [key, count] of Object.entries(counts)) {
+      const price = prices?.[key];
+      if (count === undefined || typeof price !== "number" || !Number.isFinite(price) || price < 0) return null;
+      cost += count * price;
+    }
+    return cost / 1_000_000;
+  } catch { return null; }
+}
+
+function normalize(line: UsageLine) {
+  return { ...line, role: usageRole(line), fallback: line.fallback ?? line.fallbackFrom !== undefined,
+    retry: line.retry ?? 0, costUsd: line.costUsd ?? null };
+}
+
+export async function appendUsage(dir: string, line: UsageLine) {
+  const row = normalize(line);
+  if (line.costUsd === undefined) row.costUsd = await estimateCost(dir, line);
+  await appendFile(join(dir, "usage.jsonl"), JSON.stringify(row) + "\n", { mode: 0o600 });
+}
+
+export async function* usageLines(dir: string): AsyncGenerator<UsageLine> {
+  let file;
+  try { file = await open(join(dir, "usage.jsonl")); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  return contents.split("\n").filter(Boolean).map(row => JSON.parse(row));
+  try {
+    const { size } = await file.stat();
+    if (!size) return;
+    let tail = "";
+    for await (const chunk of file.createReadStream({ end: size - 1, encoding: "utf8", autoClose: false })) {
+      const rows = (tail + chunk).split("\n");
+      tail = rows.pop()!;
+      for (const row of rows) if (row.trim()) yield normalize(JSON.parse(row));
+    }
+    if (tail.trim()) {
+      // A concurrent append can straddle the size snapshot. Its complete row appears on the next read.
+      let row: UsageLine;
+      try { row = JSON.parse(tail); } catch { return; }
+      yield normalize(row);
+    }
+  } finally { await file.close(); }
+}
+
+export async function readUsage(dir: string) {
+  const rows: UsageLine[] = [];
+  for await (const line of usageLines(dir)) rows.push(line);
+  return rows;
 }
 
 export const budgetExhausted = "今日主动预算已用完";
 export type ProactiveBudget = ReturnType<typeof createProactiveBudget>;
-const tokens = (line: UsageLine) => (line.inputTokens ?? 0) + (line.outputTokens ?? 0);
+const tokens = (line: UsageLine) => totalInput(line) + (line.outputTokens ?? 0);
 
 export function createProactiveBudget(time: ReturnType<typeof calendarTime>, limit: number, now: () => number, dir?: string) {
   let cached: { day: number; balance: Promise<{ used: number }> } | undefined;
@@ -44,8 +109,8 @@ export function createProactiveBudget(time: ReturnType<typeof calendarTime>, lim
 
   async function restore(day: number, end: number) {
     let used = 0;
-    for (const line of dir ? await readUsage(dir) : []) {
-      if (line.conversation !== "triage" && !line.proactive) continue;
+    for await (const line of dir ? usageLines(dir) : []) {
+      if (usageRole(line) !== "triage" && usageRole(line) !== "goal" && !line.proactive) continue;
       const at = Date.parse(line.at);
       if (at >= day && at < end) used += tokens(line);
     }
@@ -86,8 +151,13 @@ export function usageTotals(lines: UsageLine[]) {
   const empty = () => ({ input: 0, output: 0, tokens: 0, calls: 0, aborted: 0 });
   const totals = { main: empty(), task: empty(), triage: empty(), judge: empty(), total: empty() };
   for (const line of lines) {
-    for (const group of [totals[line.conversation], totals.total]) {
-      group.input += line.inputTokens ?? 0;
+    if (line.statsOnly) continue;
+    const role = line.conversation ?? usageRole(line);
+    const groups = [totals.total];
+    if (role === "task" || role === "main" || role === "triage" || role === "judge") groups.push(totals[role]);
+    else if (role === "goal") groups.push(totals.task);
+    for (const group of groups) {
+      group.input += totalInput(line);
       group.output += line.outputTokens ?? 0;
       group.tokens = group.input + group.output;
       group.calls++;
@@ -99,15 +169,16 @@ export function usageTotals(lines: UsageLine[]) {
 
 export async function usageSummary(dir: string, conversation?: UsageLine["conversation"]) {
   const models = new Map<string, { latencies: number[]; failures: number; aborted: number; fallbacks: number; inputTokens: number; outputTokens: number }>();
-  for (const line of await readUsage(dir)) {
-    if (conversation && line.conversation !== conversation) continue;
+  for await (const line of usageLines(dir)) {
+    if (line.statsOnly) continue;
+    if (conversation && (line.conversation ?? usageRole(line)) !== conversation) continue;
     const group = models.get(line.model) ?? { latencies: [], failures: 0, aborted: 0, fallbacks: 0, inputTokens: 0, outputTokens: 0 };
     group.latencies.push(line.latencyMs);
     // A user-initiated abort is not a provider failure.
     if (line.errorKind === "aborted") group.aborted++;
     else if (line.outcome === "error") group.failures++;
-    if (line.fallbackFrom !== undefined) group.fallbacks++;
-    group.inputTokens += line.inputTokens ?? 0;
+    if (line.fallbackFrom !== undefined || line.fallback) group.fallbacks++;
+    group.inputTokens += totalInput(line);
     group.outputTokens += line.outputTokens ?? 0;
     models.set(line.model, group);
   }

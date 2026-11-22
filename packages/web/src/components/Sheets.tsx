@@ -93,32 +93,6 @@ function TranscriptRow({ item }: { item: TranscriptItem }) {
   }
 }
 
-export function UsageSheet({ onClose }: { onClose: () => void }) {
-  const t = useT();
-  const [rows, setRows] = useState<UsageRow[] | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => { api.usage().then(setRows, err => setError(String(err.message ?? err))); }, []);
-  return (
-    <Sheet title={t.usage} onClose={onClose}>
-      {error && <p className="form-error">{error}</p>}
-      {!rows && !error && <p className="empty">{t.loading}</p>}
-      {rows?.length === 0 && <p className="empty">{t.noUsage}</p>}
-      {rows?.map(row => (
-        <article key={row.model} className="usage">
-          <code>{row.model}</code>
-          <dl>
-            <div><dt>{t.calls}</dt><dd>{row.calls}</dd></div>
-            <div><dt>{t.failureRate}</dt><dd>{row.failureRate}</dd></div>
-            <div><dt>{t.fallbacks}</dt><dd>{row.fallbacks}</dd></div>
-            <div><dt>{t.latency}</dt><dd>{seconds(row.p50Ms)} / {seconds(row.p95Ms)}</dd></div>
-            <div><dt>{t.tokens}</dt><dd>{compactNumber(row.inputTokens)} / {compactNumber(row.outputTokens)}</dd></div>
-          </dl>
-        </article>
-      ))}
-    </Sheet>
-  );
-}
-
 export function NotificationsSheet({ items, onClose, onFeedback }: {
   items: Notification[]; onClose: () => void; onFeedback: (id: string, feedback: "useful" | "useless") => void;
 }) {

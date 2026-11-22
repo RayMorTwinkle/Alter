@@ -1,4 +1,4 @@
-# Web API 契约（v1.10）
+# Web API 契约（v1.11）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -144,6 +144,7 @@ type TranscriptItem =
 | `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
 | `GET` / `PATCH` | `/api/settings` | 返回 `{ approvalModel }`。更新时提交同形对象，值为 `shadow`、`auto` 或 `off`，非法值返回 `400` |
 | `GET` | `/api/approvals/stats` | `{ compared, agreed, agreementRate, deniedButInScope }`。仅统计同时有模型判断和用户决定的请求。一致率为 0–1，没有可对照样本时为 null |
+| `GET` | `/api/stats?range=7d` | `Stats`（v1.11）。需要登录，默认 `7d`。支持 `day`、`7d`、`30d`、`all`；非法、空值或重复参数返回 `400` |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
 | `GET` | `/api/feishu` | `FeishuPairing`（v1.6 含账号连接状态与可选显示名）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
 | `GET` | `/api/feishu/oauth/start` | 需要登录；`302` 跳转至飞书授权页 |
@@ -167,6 +168,54 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直接执行。
 
 `timeline` 返回最近 200 条；更早的用 `GET /api/state?before=<id>` 分页（v1 可不实现）。
+
+## 调用、任务与唤醒统计（v1.11）
+
+完整 TypeScript 返回类型见 [Stats](../../packages/web/src/types.ts)。`at` 是服务端采样时的 Unix 毫秒时间。窗口按用户配置时区的本地日期计算，包含今天，截至 `at`。`daily` 由早到晚补齐空日。`all` 从最早有记录的本地日期开始，空库返回今天一行。
+
+| 字段 | 统计口径 |
+|---|---|
+| `total`、`byRole[]`、`byModel[]`、`daily[].usage` | 按调用开始时间累加模型尝试。角色为可扩展字符串，如 `main`、`task`、`triage`、`goal`、`judge`、`watch`、`heartbeat` |
+| `tasks` | 按创建时间筛选任务，明细含截至采样时的用量、模型、思考强度、轮数、工具名与次数、耗时、审计条目、结果摘要、`continuedFrom` 和发起派单的 `wakeId`。成功率为完成数除以已结束数，失败和取消均计入分母，分母为零返回 `null` |
+| `wakes` | 按实际开始的主会话回合筛选。来源示例为 `user-web`、`user-feishu`、`user-cli`、`report`、`approval`、`schedule`。同一次唤醒内的工具循环和回退共用 ID。多条输入同时启动一个回合时取第一条来源。用量只合计该主会话回合；派单数由任务创建记录关联。单纯投递通知不产生唤醒 |
+| `approvals` | `decisions` 按窗口内的 Audit 时间分别计数，`park` 表示曾等待审批，`allow` 和 `deny` 包含自动策略决定。`pending` 为采样时待处理的请求。四种用户决定、模型判断、按说明处理和最终过期分别计数，详见下文 |
+| `latency` | `firstToken` 与 `total` 各返回 `samples / p50Ms / p95Ms`。用毫秒最近秩计算，只纳入相应延迟已上报的尝试，无样本时分位数为 `null` |
+| `funnel`、`watchWakeAccuracy` | 漏斗复用 `/api/funnel` 的通知保留与投递规则。当前缺少盯梢唤醒反馈，准确率为 `null` |
+| `topTasks`、`daily` | 费用可确定的任务按美元降序取前十，金额相同按任务 ID 排序。日序列还给出当日创建的任务数、其中已完成数、当日唤醒数 |
+
+**审批统计。** `userDecisions` 分别统计 `once / statement / task-full / deny`；`judgments` 统计审批模型的 `inScope / outOfScope`。每个请求的判断和用户决定都到齐时进入 `shadow`，采用与 v1.10 的 `/api/approvals/stats` 相同的四个字段和比较规则。`shadowAgreementRate` 为 `shadow.agreementRate` 的便捷字段。按各事件的实际时间归入窗口，配对取两者中较晚的时间。v1.10 留存的无时间戳事件仅计入 `all`。
+
+`byApprover` 固定返回三行：`user` 计用户实际提交的决定；`judge` 计已批准说明范围内由模型直接放行的调用；`timeout` 与 `timeouts` 都计 `auto` 模式软超时后按说明放行或暂缓的次数。影子判断只进入判断和配对统计。软超时后用户补批会再产生一次用户决定；最终过期单独计入 `expired`。旧记录无法区分软超时与直接放行的部分不追溯归类。任务的 `reviews` 按请求 ID 关联用户选择、模型结论、暂缓或过期及时间；任务用量含关联的 judge 调用，任务工具和轮数只计执行任务的模型。
+
+每个用量对象含 `calls / input / cacheRead / cacheWrite / output / tokens / cacheHitRate / costUsd / errors / aborted / fallbacks / retries`。`tokens` 是四类 token 之和，命中率用累计的 `cacheRead / (input + cacheRead + cacheWrite)`。只汇总已报告 token。旧行的合并输入计入 `input`；分组包含无法拆分的正输入或分母为零时，命中率为 `null`。主动中止计入 `aborted`，供应商失败计入 `errors`。切换模型的后续尝试计入 `fallbacks`，显式重试同一模型计入 `retries`。网关关闭了 SDK 内部自动重试。
+
+费用在写入时用数据目录下可选的 `prices.json` 估算。文件格式为 `Record<模型 ID, { input: number, cacheRead: number, cacheWrite: number, output: number }>`，单位为美元／百万 token。默认价格表为空。缺少价格、缺少用量或分组内任一尝试无法估价时，`costUsd` 为 `null`。修改价格影响后续调用，历史估价保留。
+
+任务 `rounds` 按逻辑模型调用计数，同轮的备用尝试单独计入 `usage.calls`。工具计数按模型发出的工具调用计，包括被拒绝的调用。任务无可关联用量行时，按该任务简报到结束条目之间的持久化对话恢复模型、轮数、工具和已报告 token，标为 `usageSource: "transcript"`。对话只保留终态回答，无法还原中间回退；这些恢复值仅用于任务明细。缺少历史唤醒 ID 的调用仅计入调用汇总。
+
+<details>
+<summary>离线网关的一次 Web 唤醒：GET /api/stats?range=day 完整响应</summary>
+
+```json
+{
+  "range": "day",
+  "timeZone": "Asia/Taipei",
+  "at": 1795399200000,
+  "total": {"calls": 1, "input": 6, "output": 3, "cacheRead": 2, "cacheWrite": 0, "tokens": 11, "costUsd": null, "cacheHitRate": 0.25, "errors": 0, "aborted": 0, "fallbacks": 0, "retries": 0},
+  "byRole": [{"role": "main", "calls": 1, "input": 6, "output": 3, "cacheRead": 2, "cacheWrite": 0, "tokens": 11, "costUsd": null, "cacheHitRate": 0.25, "errors": 0, "aborted": 0, "fallbacks": 0, "retries": 0}],
+  "byModel": [{"model": "offline/main", "calls": 1, "input": 6, "output": 3, "cacheRead": 2, "cacheWrite": 0, "tokens": 11, "costUsd": null, "cacheHitRate": 0.25, "errors": 0, "aborted": 0, "fallbacks": 0, "retries": 0}],
+  "tasks": {"count": 0, "completed": 0, "terminal": 0, "successRate": null, "items": []},
+  "wakes": {"count": 1, "bySource": {"user-web": 1}, "items": [{"wakeId": "wake-19", "wakeSource": "user-web", "wakeAt": 1795399200000, "usage": {"calls": 1, "input": 6, "output": 3, "cacheRead": 2, "cacheWrite": 0, "tokens": 11, "costUsd": null, "cacheHitRate": 0.25, "errors": 0, "aborted": 0, "fallbacks": 0, "retries": 0}, "dispatchedTasks": 0}]},
+  "approvals": {"decisions": {"park": 0, "allow": 0, "deny": 0}, "pending": [], "userDecisions": {"once": 0, "statement": 0, "task-full": 0, "deny": 0}, "judgments": {"inScope": 0, "outOfScope": 0}, "byApprover": [{"approver": "user", "count": 0}, {"approver": "judge", "count": 0}, {"approver": "timeout", "count": 0}], "timeouts": 0, "expired": 0, "shadow": {"compared": 0, "agreed": 0, "agreementRate": null, "deniedButInScope": 0}, "shadowAgreementRate": null},
+  "funnel": {"timeZone": "Asia/Taipei", "days": [{"date": "2026-11-23", "triggered": 0, "passed": 0, "pushed": 0, "read": 0, "useful": 0, "useless": 0, "digests": 0, "reminders": 0}], "precision": null},
+  "watchWakeAccuracy": null,
+  "latency": {"firstToken": {"samples": 1, "p50Ms": 115, "p95Ms": 115}, "total": {"samples": 1, "p50Ms": 118, "p95Ms": 118}},
+  "topTasks": [],
+  "daily": [{"date": "2026-11-23", "usage": {"calls": 1, "input": 6, "output": 3, "cacheRead": 2, "cacheWrite": 0, "tokens": 11, "costUsd": null, "cacheHitRate": 0.25, "errors": 0, "aborted": 0, "fallbacks": 0, "retries": 0}, "tasks": 0, "succeeded": 0, "wakes": 1}]
+}
+```
+
+</details>
 
 ## SSE 事件（`/api/events`）
 

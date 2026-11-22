@@ -27,19 +27,25 @@ export const Requests = conversationDoc<PermissionState>("permissions", () => ({
 export const Audit = conversationDoc<{ entries: AuditEntry[]; last: Record<string, AuditEntry["decision"]>; refused?: Record<string, true> }>(
   "audit", () => ({ entries: [], last: {}, refused: {} }),
 );
-type Review = { ended?: "deferred" | "expired"; itemCount?: number; judgment?: Judgment; user?: ApprovalDecision; note?: string };
-const Reviews = conversationDoc<{ byId: Record<string, Review> }>("approval-reviews", () => ({ byId: {} }));
+export type Review = {
+  taskId?: string; tool?: string; ended?: "deferred" | "expired"; itemCount?: number; judgment?: Judgment; user?: ApprovalDecision; note?: string;
+  userAt?: number; judgedAt?: number; judgeAllowedAt?: number; timeoutAt?: number; expiredAt?: number;
+};
+export const Reviews = conversationDoc<{ byId: Record<string, Review> }>("approval-reviews", () => ({ byId: {} }));
+
+export function shadowAgreement(reviews: readonly Review[]) {
+  let compared = 0, agreed = 0, deniedButInScope = 0;
+  for (const { judgment, user } of reviews) {
+    if (!judgment || !user) continue;
+    compared++;
+    if (judgment.inScope === (user !== "deny")) agreed++;
+    else if (user === "deny") deniedButInScope++;
+  }
+  return { compared, agreed, agreementRate: compared ? agreed / compared : null, deniedButInScope };
+}
+
 export async function approvalStats(main: Conversation) {
-  return main.commit(async tx => {
-    let compared = 0, agreed = 0, deniedButInScope = 0;
-    for (const { judgment, user } of Object.values((await tx.doc(Reviews, main.id)).byId)) {
-      if (!judgment || !user) continue;
-      compared++;
-      if (judgment.inScope === (user !== "deny")) agreed++;
-      else if (user === "deny") deniedButInScope++;
-    }
-    return { compared, agreed, agreementRate: compared ? agreed / compared : null, deniedButInScope };
-  }, context);
+  return main.commit(async tx => shadowAgreement(Object.values((await tx.doc(Reviews, main.id)).byId)), context);
 }
 const Decision = defineSignal({ name: "alter.permission", version: 1, schema: obj({ allow: bool(), note: opt(str()) }) });
 const Reviewed = defineSignal({ name: "alter.reviewed", version: 1, schema: bool() });
@@ -64,7 +70,7 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
       if (status !== "delivered" && !(status === "closed" && !req.wakeKey && req.defaultAt && now >= req.defaultAt)) return reply(status, true);
     }
     const { byId } = await tx.doc(Reviews, main.id);
-    byId[requestId] = { ...byId[requestId], user: decision, ...(note && { note }) };
+    byId[requestId] = { ...byId[requestId], taskId: req.taskId, tool: req.tool, user: decision, userAt: now, ...(note && { note }) };
     if (task && (await tx.doc(TaskIdentity, task.conversationId)).taskId === req.taskId) {
       const scope = await tx.doc(ScopeDoc, task.conversationId);
       if (decision === "task-full") scope.full = true;
@@ -103,25 +109,26 @@ export async function migrateRequests(tx: Tx, main: Conversation, at: number, ti
   }
 }
 
-async function expire(tx: Tx, main: Conversation, req: Request) {
+async function expire(tx: Tx, main: Conversation, req: Request, at: number) {
   const { byId } = await tx.doc(Reviews, main.id);
-  byId[req.id] = { ...byId[req.id], ended: "expired" };
+  byId[req.id] = { ...byId[req.id], taskId: req.taskId, tool: req.tool, ended: "expired", expiredAt: at };
   delete (await tx.doc(Requests, main.id)).pending[req.id];
   await main.submit(tx, { type: "input", whenBusy: "followUp", requestId: `expired-${req.id}`,
     content: `Notify the user: task ${req.taskId}, request ${req.id} (${req.tool}): Approval expired without a decision` });
 }
 
 export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number, defaultMs: number,
-  mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall) => Promise<Judgment>) {
-  const review = defineTask<{ id: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
+  mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }) => Promise<Judgment>) {
+  const review = defineTask<{ id: string; taskId?: string; wakeId?: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
     { phase: "review" }, null>({
     name: "alter.approval-review", version: 1, initial: () => ({ phase: "review" }),
     phases: { async review({ input }, api, ctx) {
       const main = getMain();
-      const judgment = await judge(input.statement, { tool: input.tool, arguments: JSON.parse(input.argumentsJson) });
+      const judgment = await judge(input.statement, { tool: input.tool, arguments: JSON.parse(input.argumentsJson) },
+        { taskId: input.taskId, wakeId: input.wakeId });
       await api.commit(async tx => {
         const reviews = await tx.doc(Reviews, main.id);
-        reviews.byId[input.id] = { ...reviews.byId[input.id], judgment };
+        reviews.byId[input.id] = { ...reviews.byId[input.id], judgment, judgedAt: api.now() };
         await tx.signal(input.toolTask, Reviewed, input.id, true);
         return { status: "terminal", outcome: { status: "completed", result: null } };
       }, ctx);
@@ -134,7 +141,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
       const main = getMain();
       const req = (await tx.doc(Requests, main.id)).pending[input.id];
       if (req && api.now() < req.expiresAt) return { status: "sleeping", checkpoint: { phase: "expire" }, until: req.expiresAt };
-      if (req) await expire(tx, main, req);
+      if (req) await expire(tx, main, req, api.now());
       return { status: "terminal", outcome: { status: "completed", result: null } };
     }, ctx) },
     abort: (_, api, ctx) => api.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
@@ -197,7 +204,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           const seen = !risky && url && state?.seen?.includes(url);
           const sensitive = (taint && !seen) || (risky && task && task.permission !== "full");
           if (task?.proactive && sensitive) return block("Proactive research cannot request approval");
-          if (req && at >= req.expiresAt) { await expire(tx, main, req); return block(expiredMessage); }
+          if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
           const scope = await tx.doc(ScopeDoc, api.conversationId);
           const argumentsJson = JSON.stringify(call.arguments, (_, value) =>
             value && typeof value === "object" && !Array.isArray(value)
@@ -219,8 +226,8 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             req = pending[id]!;
             if (eligible && setting !== "off") {
               const statement = scope.items.slice(0, scope.approved);
-              byId[id] = { itemCount: statement.length };
-              await tx.createTask(review, { id, toolTask: api.taskId, statement,
+              byId[id] = { taskId, tool: call.name, itemCount: statement.length };
+              await tx.createTask(review, { id, taskId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement,
                 tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
             }
             if (!checking) { scope.shown = scope.items.length; record("park"); }
@@ -232,6 +239,8 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
               return { sleep: { until: req.expiresAt, signals: [Reviewed.key(id), Decision.key(req.wakeKey)] } };
             }
             if (result?.judgment?.inScope && result.itemCount) {
+              if (req.checking) result.judgeAllowedAt = at;
+              else result.timeoutAt = at;
               scope.approved ??= req.statement?.length ?? 0;
               delete pending[id];
               record("allow");
@@ -251,7 +260,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             if (setting === "auto") scope.approved ??= req.statement?.length ?? 0;
             if (!req.deferred) {
               req.deferred = true;
-              byId[id] = { ...byId[id], ended: "deferred" };
+              byId[id] = { ...byId[id], taskId, tool: call.name, ended: "deferred", ...(setting === "auto" && { timeoutAt: at }) };
               await tx.createTask(expiry, { id }, { ownership: { kind: "conversation" }, background: true });
             }
             return block(deferredMessage);

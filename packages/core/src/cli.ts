@@ -41,7 +41,7 @@ export async function chatCommand({ main, harness }: AlterApp, line: string, pri
     const answer = await answerUserPermission(main, { requestId, decision: command === "/approve" ? "once" : "deny", note: note.join(" ") || undefined });
     print(contentText(answer.output));
   } else if (line) {
-    await submitMessage(main, line);
+    await submitMessage(main, line, "cli");
   }
 }
 

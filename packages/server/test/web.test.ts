@@ -93,7 +93,7 @@ async function stream(read: (path: string) => Promise<Response>) {
 it("authenticates API requests, enforces JSON writes, and revokes the session including its open streams", async () => {
   const web = await setup();
   await expect(createWebServer(web.app, { password: "", dataDir: web.dir })).rejects.toThrow("ALTER_WEB_PASSWORD");
-  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/feishu", "/api/unknown"]) {
+  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/stats", "/api/feishu", "/api/unknown"]) {
     const response = await web.read(path);
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: expect.any(String) });
@@ -103,6 +103,8 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   await web.login();
   expect((await web.post("/api/messages", { text: "no" }, "text/plain")).status).toBe(415);
   expect((await web.post("/api/messages", { text: " " })).status).toBe(400);
+  for (const query of ["range=", "range=week", "range=day&range=day"]) expect((await web.read("/api/stats?" + query)).status).toBe(400);
+  expect(await (await web.read("/api/stats")).json()).toMatchObject({ range: "7d", total: { calls: 0, costUsd: null } });
   const state = { timeline: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   expect(await web.state()).toEqual(state);
   expect((await web.read("/api/feishu")).status).toBe(404);
@@ -155,9 +157,10 @@ it.each([
   { permission: "auto", call: send, audience: "user" },
   { permission: "restricted", call: send, audience: "user" },
 ])("observes a $permission task and routes $call.tool to $audience", async ({ permission, call, audience }) => {
-  const web = await setup(({ model, messages }, res) => {
+  const web = await setup(({ model, messages, tools }, res) => {
     const last = messages.at(-1)!;
     if (model === "offline/task") {
+      if (!tools?.length) return say(res, '{"inScope":true,"reason":"符合说明"}');
       if (last.role === "tool") return toolCall(res, "finish", { summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }] });
       return toolCall(res, call.tool, call.arguments);
     }
@@ -188,6 +191,22 @@ it.each([
   expect(updated.tasks[0]).toMatchObject({ status: "completed", pending: [] });
   expect(updated.pending).toEqual([]);
   expect(web.app.demo.outbox).toEqual(["hello"]);
+  await web.app.main.waitForIdle(context);
+  await expect.poll(async () => (await (await web.read("/api/approvals/stats")).json()).compared).toBe(1);
+  const stats = await (await web.read("/api/stats?range=day")).json();
+  expect(stats.approvals.shadow).toEqual(await (await web.read("/api/approvals/stats")).json());
+  expect(stats).toMatchObject({
+    tasks: { count: 1, successRate: 1, items: [{ taskId: task.taskId, thinking: "high", rounds: 2,
+      models: ["offline/task"], tools: { outbox_send: 1, finish: 1 }, result: "sent invitation",
+      approvals: [{ decision: "park" }, { decision: "allow" }, { decision: "allow" }],
+      reviews: [{ requestId: request.id, user: "statement", judgment: { inScope: true } }],
+      durationMs: expect.any(Number), usage: { calls: 3, tokens: 33, cacheHitRate: 0.25, costUsd: null } }] },
+    wakes: { count: 2, bySource: { "user-web": 1, report: 1 }, items: expect.arrayContaining([
+      expect.objectContaining({ wakeId: stats.tasks.items[0].wakeId, wakeSource: "user-web", dispatchedTasks: 1,
+        usage: expect.objectContaining({ calls: 2 }) }),
+      expect.objectContaining({ wakeSource: "report", dispatchedTasks: 0 }),
+    ]) }, approvals: { decisions: { park: 1, allow: 2, deny: 0 }, pending: [] }, topTasks: [],
+  });
   const transcript = await web.read(`/api/tasks/${task.taskId}/transcript`);
   expect(await transcript.json()).toMatchObject({ items: expect.arrayContaining([
     { kind: "user", text: "send greeting", at: expect.any(Number) },

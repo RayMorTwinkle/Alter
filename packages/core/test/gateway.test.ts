@@ -9,6 +9,7 @@ import { openAlter } from "../src/main.ts";
 import { Notifications } from "../src/notifications.ts";
 import { createGatewayModels } from "../src/models.ts";
 import { context, MemoryStorage, openNodeSqliteStorage } from "../src/runtime.ts";
+import { stats } from "../src/stats.ts";
 import { Tasks } from "../src/state.ts";
 import { appendUsage, usageSummary, type UsageLine } from "../src/usage.ts";
 import { delta, fakeGateway, httpError, say, toolCall } from "./fixtures/gateway.ts";
@@ -61,9 +62,9 @@ it.each([
   expect(b).toEqual({ ...a, model: backup });
   const logs = await app.logs();
   expect(logs).toHaveLength(2);
-  expect(logs[0]).toEqual({ at: expect.any(String), conversation: "main", model: primary, attempt: 1,
+  expect(logs[0]).toEqual({ at: expect.any(String), conversation: "main", role: "main", thinking: "off", tools: [], costUsd: null, retry: 0, fallback: false, model: primary, attempt: 1,
     outcome: "error", errorKind, latencyMs: expect.any(Number) });
-  expect(logs[1]).toEqual({ at: expect.any(String), conversation: "main", model: backup, attempt: 2, fallbackFrom: primary,
+  expect(logs[1]).toEqual({ at: expect.any(String), conversation: "main", role: "main", thinking: "off", tools: [], costUsd: null, retry: 0, fallback: true, input: 6, cacheRead: 2, cacheWrite: 0, model: backup, attempt: 2, fallbackFrom: primary,
     outcome: "ok", latencyMs: expect.any(Number), firstTokenMs: expect.any(Number), inputTokens: 8, outputTokens: 3 });
   expect(new Date(logs[0]!.at).toISOString()).toBe(logs[0]!.at);
   expect(logs[1]!.latencyMs).toBeGreaterThanOrEqual(logs[1]!.firstTokenMs!);
@@ -105,6 +106,14 @@ it("exhausts the chain once in order and aggregates failures and incoming fallba
     model, calls: 1, failureRate: "100.0%", aborted: 0, fallbacks: index ? 1 : 0, inputTokens: 0, outputTokens: 0,
     p50Ms: expect.any(Number), p95Ms: expect.any(Number),
   })));
+});
+
+it("distinguishes a configured same-model retry from switching models", async () => {
+  let calls = 0;
+  const app = await setup((_, res) => ++calls === 1 ? httpError(res, 429) : say(res, "ok"), 2000, [primary, primary]);
+  await app.stream().result();
+  expect(await app.logs()).toMatchObject([{ model: primary, fallback: false, retry: 0 }, { model: primary, fallback: false, retry: 1 }]);
+  expect(await usageSummary(app.dir)).toMatchObject([{ calls: 2, fallbacks: 1 }]);
 });
 
 it("surfaces a bad request without fallback", async () => {
@@ -182,9 +191,18 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
     const uses = logs.filter(l => l.conversation === conversation);
     expect(uses.map(l => l.model)).toEqual(Array(conversation === "main" ? 3 : 2).fill([primary, conversation === "main" ? backup : taskBackup]).flat());
   }
+  const mainCalls = logs.filter(l => l.role === "main");
+  const taskCalls = logs.filter(l => l.role === "task");
+  expect(mainCalls.map(l => l.wakeSource)).toEqual(["user-cli", "user-cli", "user-cli", "user-cli", "report", "report"]);
+  expect(new Set(mainCalls.map(l => l.wakeId)).size).toBe(2);
+  expect(taskCalls.every(l => l.taskId?.startsWith("task-") && l.wakeId === mainCalls[0]!.wakeId)).toBe(true);
   const entries = await runtime.main.entries({}, 100, undefined, context);
   expect(entries.items.flatMap(e => e.model ?? []).filter(m => m.role === "assistant").map(m => m.model)).toEqual([backup, backup, backup]);
   const summary = await usageSummary(app.dir);
+  const legacy = await stats("all", runtime.timeZone, { app: runtime, dir: join(app.dir, "no-usage") });
+  expect(legacy.tasks.items).toMatchObject([{ usageSource: "transcript", rounds: 2, models: [taskBackup],
+    tools: { outbox_send: 1, finish: 1 }, usage: { calls: 2, tokens: 22, costUsd: null } }]);
+  expect(legacy.total.calls).toBe(0);
   expect(summary.find(row => row.model === backup)).toMatchObject({ calls: 3, fallbacks: 3, failureRate: "0.0%", inputTokens: 24, outputTokens: 9 });
 });
 
@@ -303,7 +321,7 @@ it("charges each goal gateway attempt once, including fallback, to the task budg
   now += 60_000;
   app.harness.resume();
   await expect.poll(async () => (await app.harness.snapshot(Notifications, app.main.id, context))?.entries[0]?.body).toBe("已复查");
-  const charged = { conversation: "task", proactive: true, at: new Date(now).toISOString() };
+  const charged = { conversation: "task", role: "goal", taskId: expect.stringMatching(/^task-goal-/), proactive: true, at: new Date(now).toISOString() };
   expect(await f.logs()).toMatchObject([
     { ...charged, model: primary, attempt: 1, outcome: "error" },
     { ...charged, model: taskBackup, attempt: 2, fallbackFrom: primary, inputTokens: 8, outputTokens: 3 },

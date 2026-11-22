@@ -11,6 +11,8 @@ export type TaskRecord = {
   messages?: { at: number; text: string }[];
   context: "fork" | "fresh";
   createdAt: number;
+  endedAt?: number;
+  wakeId?: string;
   permission: Permission;
   status: "running" | "completed" | "failed" | "cancelled";
   failure?: string;
@@ -19,7 +21,7 @@ export type TaskRecord = {
 };
 
 export const Tasks = conversationDoc<{ byId: Record<string, TaskRecord> }>("tasks", () => ({ byId: {} }));
-export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number }>(
+export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number; wakeId?: string }>(
   "task-identity", () => ({ taskId: "", reminders: 0 }),
 );
 export type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };

@@ -11,7 +11,7 @@ import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./t
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
 export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "checking"> & { arguments: unknown };
-type Task = Omit<TaskRecord, "conversationId" | "worker" | "lastEntry" | "messages" | "status"> & {
+type Task = Omit<TaskRecord, "conversationId" | "worker" | "lastEntry" | "messages" | "wakeId" | "endedAt" | "status"> & {
   status: Exclude<TaskRecord["status"], "cancelled">;
   taskId: string; conversationId: string; allow: string[]; pending: PermissionRequest[];
 };
@@ -52,7 +52,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
   }
 
   function updateTasks() {
-    state.tasks = Object.entries(records).map(([taskId, { worker, lastEntry, messages, status, ...task }]) => ({
+    state.tasks = Object.entries(records).map(([taskId, { worker, lastEntry, messages, wakeId, endedAt, status, ...task }]) => ({
       ...task, allow: [], taskId, status: status === "cancelled" ? "failed" : status, ...(status === "cancelled" && { failure: status }),
       conversationId: String(task.conversationId), pending: state.pending.filter(req => req.taskId === taskId),
     }));

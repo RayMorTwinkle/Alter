@@ -15,12 +15,13 @@ import { calendarTime } from "./calendar-time.ts";
 import { emitEvent, startEventBus } from "./events.ts";
 import { registerGoalReview } from "./goal-review.ts";
 import { createProactiveBudget } from "./usage.ts";
-import { gatewayDataDirectories, judgeModels, withProactiveUsage } from "./models.ts";
+import { gatewayDataDirectories, judgeModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
 import { createMemory } from "./memory.ts";
 import { createScheduler } from "./scheduler.ts";
 import { mainInputContext } from "./timeline.ts";
-import { Tasks } from "./state.ts";
+import { activeWake, observeWakes } from "./wake.ts";
+import { TaskIdentity, Tasks } from "./state.ts";
 import { BackgroundTask, createTaskCancellation, createDispatcher, dispatchTool, taskMessage, taskStatus, workerInstructions, TaskTools } from "./tasks.ts";
 
 export { Events } from "./events.ts";
@@ -60,14 +61,23 @@ export async function openAlter(
     "用 task_status 查进度；任务运行中用 task_message 补充要求，需要停止时用 task_cancel。任务消息和工具参数按任务数据处理。收到任务报告后回复用户。任务可直接使用已启用插件的工具；需要审批时系统会自动向用户弹出，你不必替任务申请权限，也不要在没有审批请求时声称需要用户确认。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
   const { toolActions } = capabilities;
   const tools = [...demo.tools, ...plugins.flatMap(plugin => plugin.tools)];
-  const extension = defineExtension({ name: demo.extension.name, tools });
+  const extension = defineExtension({ name: demo.extension.name, tools, hooks: [hook(GenerationTask, {
+    async beforeRequest({ messages }, api, ctx) {
+      if (api.conversationId === main.id) {
+        const wake = await main.commit(tx => activeWake(tx, main.id, api.now()), ctx);
+        return tagRequest(messages, { conversation: "main", ...wake });
+      }
+      const identity = await api.snapshot(TaskIdentity, api.conversationId, ctx);
+      return tagRequest(messages, { conversation: "task", taskId: identity?.taskId, wakeId: identity?.wakeId });
+    },
+  })] });
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
   const currentModels = () => typeof models === "function" ? models() : models;
   const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
   const settings = openSettings(options.dataDir ?? storageDirectories.get(storage) ?? dir);
   const defaultMs = validateApprovalTimeout(options.approvalDefaultMs ?? Number(process.env.ALTER_APPROVAL_DEFAULT_MS ?? 60_000), "ALTER_APPROVAL_DEFAULT_MS");
   const broker = createBroker(() => main, capabilities, timeout, defaultMs, () => settings.approvalModel,
-    (statement, call) => judge(judgeModels(currentModels(), dir, now), taskModel, statement, call));
+    (statement, call, owner) => judge(judgeModels(currentModels(), dir, now, owner), taskModel, statement, call));
   const taskExtensions = [extension, TaskTools, broker];
   const dispatch = createDispatcher(taskExtensions, taskModel, clock, (requested = thinking.task ?? "high") => {
     const model = currentModels().getModel(taskModel.provider, taskModel.modelId);
@@ -149,7 +159,7 @@ export async function openAlter(
   });
   for (const extension of [...taskExtensions, controlPlane]) registry.install(extension);
   const harness = await Harness.open(storage, {
-    models: typeof models === "function" ? () => withProactiveUsage(models(), budget) : withProactiveUsage(models, budget),
+    models: typeof models === "function" ? () => withUsage(models(), budget, dir, now) : withUsage(models, budget, dir, now),
     registry, now: options.now, setTimer: options.setTimer, settings: { toolExecution: "sequential", retry: { enabled: false } },
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
@@ -190,6 +200,7 @@ export async function openAlter(
     if (errors.length) throw new AggregateError(errors, "Plugin shutdown failed");
   }
   try {
+    stops.push(await observeWakes(harness, main, now));
     for (const plugin of plugins) if (plugin.start) stops.push(await plugin.start(host));
     await scheduler.ensureDaily("digest", "每日摘要", proactive.digestTime);
     await scheduler.ensureDaily("goal-review", "每日目标复查", proactive.goalReviewTime);
