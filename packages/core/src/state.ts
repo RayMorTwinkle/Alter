@@ -16,13 +16,14 @@ export type TaskRecord = {
   permission: Permission;
   status: "running" | "completed" | "failed" | "cancelled";
   failure?: string;
+  triggerSource?: "scheduled";
   proactive?: true;
   heartbeatAt?: number; heartbeatId?: string;
   goal?: { text: string; timeZone: string };
 };
 
 export const Tasks = conversationDoc<{ byId: Record<string, TaskRecord> }>("tasks", () => ({ byId: {} }));
-export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number; wakeId?: string }>(
+export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number; wakeId?: string; scheduled?: true }>(
   "task-identity", () => ({ taskId: "", reminders: 0 }),
 );
 export type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };

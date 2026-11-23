@@ -187,6 +187,15 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       const id = path.split("/")[3]!;
       const found = method === "PATCH" ? app.memory.update(id, await body(req)) : app.memory.delete(id);
       if (!found) throw new HttpError(404, "Unknown memory");
+    } else if (method === "GET" && path === "/api/schedules") {
+      return json(res, 200, await app.schedules.list());
+    } else if ((method === "PATCH" || method === "DELETE") && /^\/api\/schedules\/[^/]+$/.test(path)) {
+      const id = path.split("/")[3]!;
+      if (method === "PATCH") {
+        const patch = await body(req);
+        if (typeof patch.paused !== "boolean" || Object.keys(patch).length !== 1) throw new HttpError(400, "Expected { paused: boolean }");
+        if (!await app.schedules.pause(id, patch.paused)) throw new HttpError(404, "Unknown or finished schedule");
+      } else if (!await app.schedules.cancel(id)) throw new HttpError(404, "Unknown schedule");
     } else if (method === "GET" && path === "/api/calendar" && calendar) {
       return json(res, 200, agenda());
     } else if (method === "GET" && path === "/api/feishu" && options.feishu) {

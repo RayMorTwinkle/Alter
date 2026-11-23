@@ -5,7 +5,7 @@ import type { Capability } from "./capabilities.ts";
 import { addNotification, digestDay, Notifications } from "./notifications.ts";
 import {
   context, conversationDoc, createRegistry, defineExtension, defineSignal, defineTask, defineTool, reply,
-  ROOT_CONVERSATION_ID, type Conversation, type TaskId, type Tx,
+  ROOT_CONVERSATION_ID, type Conversation, type TaskId, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 
 export type ScheduleItem = {
@@ -19,7 +19,8 @@ export const Schedules = conversationDoc<{ byId: Record<string, { item: Schedule
 const Cancel = defineSignal({ name: "alter.schedule-cancel", version: 1, schema: bool() });
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
-export function createScheduler(main: () => Conversation, registry: ReturnType<typeof createRegistry>, timeZone: string, now: () => number) {
+export function createScheduler(main: () => Conversation, registry: ReturnType<typeof createRegistry>, timeZone: string, now: () => number,
+  scheduled?: { list(): Promise<unknown[]>; cancel(id: string): Promise<boolean>; tools: ToolRegistration[]; actions: Capability["actions"] }) {
   const time = calendarTime(timeZone);
   function taskFor(kind: string, handler: Handler) {
     return defineTask<string, { phase: "tick" }, null>({
@@ -145,17 +146,18 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
   }
 
   const capability: Capability = { id: "schedule", mainLeasable: false, actions: [
-    { name: "create", effect: "write-local", guarded: true }, { name: "list", effect: "read" },
-    { name: "cancel", effect: "write-local", guarded: true },
+    { name: "create", effect: "write-local", guarded: true }, { name: "list", effect: "write-local" },
+    { name: "cancel", effect: "write-local", guarded: true }, ...(scheduled?.actions ?? []),
   ] };
   const tools = [
     defineTool({ name: "schedule_create", description: "Set a reminder. at is the first ISO date-time (local unless qualified). daily repeats at local HH:mm.",
       parameters: obj({ text: str({ pattern: "\\S" }), at: str(), daily: opt(str()) }), replay: "safe",
       execute: async (args, api) => reply(await create({ ...args, kind: "reminder" }, `schedule-${api.taskId}`)) }),
-    defineTool({ name: "schedule_list", description: "List reminders and their IDs, next times and statuses.",
-      parameters: obj({}), replay: "safe", execute: async () => reply(JSON.stringify(await list())) }),
-    defineTool({ name: "schedule_cancel", description: "Cancel a scheduled reminder by ID.", parameters: obj({ id: str() }), replay: "safe",
-      execute: async ({ id }) => await cancel(id) ? reply(id) : reply("Unknown or finished schedule", true) }),
+    defineTool({ name: "schedule_list", description: "List reminders and scheduled tasks with IDs and next times.",
+      parameters: obj({}), replay: "safe", execute: async () => reply(JSON.stringify([...await list(), ...(await scheduled?.list() ?? [])])) }),
+    defineTool({ name: "schedule_cancel", description: "Cancel a scheduled task or reminder by ID.", parameters: obj({ id: str() }), replay: "safe",
+      execute: async ({ id }) => await scheduled?.cancel(id) || await cancel(id) ? reply(id) : reply("Unknown or finished schedule", true) }),
+    ...(scheduled?.tools ?? []),
   ];
   return { register, ensureDaily, ensureAdaptive, create: (input: Input) => create(input), list, cancel, capability, tools };
 }

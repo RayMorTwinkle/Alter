@@ -110,7 +110,7 @@ export function createProactiveBudget(time: ReturnType<typeof calendarTime>, lim
   async function restore(day: number, end: number) {
     let used = 0;
     for await (const line of dir ? usageLines(dir) : []) {
-      if (usageRole(line) !== "triage" && usageRole(line) !== "goal" && !line.proactive) continue;
+      if (!line.proactive && !["triage", "goal", "heartbeat", "schedule"].includes(usageRole(line))) continue;
       const at = Date.parse(line.at);
       if (at >= day && at < end) used += tokens(line);
     }

@@ -105,7 +105,7 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   expect((await web.post("/api/messages", { text: " " })).status).toBe(400);
   for (const query of ["range=", "range=week", "range=day&range=day"]) expect((await web.read("/api/stats?" + query)).status).toBe(400);
   expect(await (await web.read("/api/stats")).json()).toMatchObject({ range: "7d", total: { calls: 0, costUsd: null } });
-  const state = { timeline: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state = { timeline: [], schedules: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   expect(await web.state()).toEqual(state);
   expect((await web.read("/api/feishu")).status).toBe(404);
   const feed = await stream(web.read);
@@ -578,4 +578,39 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
   await web.app.scheduler.cancel("adaptive-heartbeat");
   await events.seen(e => e.event === "heartbeat" && e.data.type === "schedule" && e.data.nextAt === null);
   expect(await view()).toMatchObject({ enabled: false, nextAt: null });
+});
+
+it("creates a schedule from main, lists, pauses and deletes it over HTTP and replaces the SSE list", async () => {
+  const at = Date.parse("2026-11-27T00:00Z");
+  const web = await setup(({ messages }, res) => {
+    if (messages.at(-1)?.content?.endsWith("\n安排")) {
+      return toolCall(res, "schedule_task", { brief: "看进展", action: "wake", trigger: { kind: "every", minutes: 5 } });
+    }
+    return say(res, "已安排");
+  }, false, undefined, () => at);
+  const path = "/api/schedules";
+  const edit = (method: string, id: string, value?: unknown) => fetch(web.base + path + "/" + id, {
+    method, headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value),
+  });
+  expect((await web.read(path)).status).toBe(401);
+  expect((await edit("PATCH", "unknown", { paused: true })).status).toBe(401);
+  await web.login();
+  const feed = await stream(web.read);
+  expect(await (await web.read(path)).json()).toEqual([]);
+  expect((await web.post("/api/messages", { text: "安排" })).status).toBe(202);
+  await feed.seen(e => e.event === "schedules" && e.data.length === 1);
+  const [item] = await (await web.read(path)).json();
+  expect(item).toMatchObject({ brief: "看进展", paused: false, nextAt: at + 300_000 });
+  for (const invalid of [{}, { paused: 1 }, { paused: true, brief: "other" }]) {
+    expect((await edit("PATCH", item.id, invalid)).status).toBe(400);
+  }
+  expect((await edit("PATCH", item.id, { paused: true })).status).toBe(204);
+  await feed.seen(e => e.event === "schedules" && e.data[0]?.paused === true);
+  expect((await web.state()).schedules[0]?.paused).toBe(true);
+  expect((await edit("PATCH", item.id, { paused: false })).status).toBe(204);
+  expect((await edit("DELETE", item.id)).status).toBe(204);
+  await feed.seen(e => e.event === "schedules" && e.data.length === 0);
+  expect(await (await web.read(path)).json()).toEqual([]);
+  expect((await edit("DELETE", item.id)).status).toBe(404);
+  expect((await edit("PATCH", "constructor", { paused: false })).status).toBe(404);
 });
