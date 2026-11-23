@@ -97,9 +97,12 @@ export function approvalCards(app: AlterApp, store: ReturnType<typeof openState>
         } catch (error) { failed("update", id, error); }
         continue;
       }
-      const status = receipt.status ?? "已在其他入口处理";
+      // A feedback card whose question has left the bank is a schema 2.0 card; Feishu refuses to downgrade it.
+      const approval = id.startsWith("permission-");
+      const elements = [{ tag: "div", text: plain(receipt.status ?? (approval ? "已在其他入口处理" : "题目已更新")) }];
       try {
-        await transport.updateCard(receipt.messageId, { config: { update_multi: true }, elements: [{ tag: "div", text: plain(status) }] });
+        await transport.updateCard(receipt.messageId, approval ? { config: { update_multi: true }, elements }
+          : { schema: "2.0", config: { update_multi: true }, header: { title: plain("Alter 回访") }, body: { elements } });
         await app.main.commit(async tx => { delete (await tx.doc(Cards, app.main.id)).byId[id]; }, context);
       } catch (error) { failed("update", id, error); }
     }
