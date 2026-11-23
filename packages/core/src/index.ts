@@ -18,6 +18,7 @@ export { observeSurface, stopMainTurn, type AlterApp, type AlterSurface, type Pe
 export { readTranscript, submitMessage, type TimelineItem, type TranscriptItem } from "./timeline.ts";
 export { classify } from "./triage.ts";
 export { prefilter } from "./events.ts";
+export { interacted } from "./feedback-settings.ts";
 export { funnel } from "./funnel.ts";
 export { Notifications, updateNotification, type Notification } from "./notifications.ts";
 export type { ScheduleItem } from "./scheduler.ts";

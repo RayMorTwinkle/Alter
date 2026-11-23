@@ -1,5 +1,6 @@
 import { interacted, Preferences } from "./feedback-settings.ts";
 import { createHash, randomUUID } from "node:crypto";
+import { inactive, Reports } from "./report-state.ts";
 import { calendarTime } from "./calendar-time.ts";
 import type { AlterPlugin } from "./capabilities.ts";
 import { rateRun, recentRuns, recordRun, type HeartbeatReason, type HeartbeatRun } from "./heartbeat-runs.ts";
@@ -73,6 +74,7 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
       await recordRun(tx, run);
       return { run, nextAt };
     }
+    if (await inactive(tx, at)) return result("skipped", "inactive");
     const busy = (await tx.doc(LiveDoc, ROOT_CONVERSATION_ID)).run || (await tx.doc(InboxDoc, ROOT_CONVERSATION_ID)).items.length;
     if (manual && busy) return result("skipped", "busy");
     if (!settings().enabled || (manual && (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item.status !== "scheduled")) {
@@ -123,12 +125,15 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     state.firstEntry = first;
     return result("ran", null);
   }
-  scheduler.register("heartbeat", async (item, tx, at) => ({ nextAt: (await inspect(tx, at, item.at)).nextAt }));
+  scheduler.register("heartbeat", async (item, tx, at) => {
+    if (!await inactive(tx, at)) return { nextAt: (await inspect(tx, at, item.at)).nextAt };
+  });
   return {
     async start(at: number, reset = false) {
       const config = settings();
+      const paused = await main().commit(tx => inactive(tx, at), context);
       const state = reset ? await main().commit(async tx => (await tx.doc(Heartbeat, ROOT_CONVERSATION_ID)).history.at(-1)?.intervalMs, context) : undefined;
-      await scheduler.ensureAdaptive("heartbeat", "主会话巡检", config.enabled ? allowed(at + (state ?? base)) : undefined,
+      await scheduler.ensureAdaptive("heartbeat", "主会话巡检", config.enabled && !paused ? allowed(at + (state ?? base)) : undefined,
         config.start + "-" + config.end, reset);
     },
     run: () => main().commit(async tx => (await inspect(tx, now())).run, context),
@@ -140,8 +145,9 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     view: () => main().commit(async tx => {
       const { state, signals } = await inputs(tx, now());
       const item = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item;
-      const enabled = settings().enabled && item?.status === "scheduled";
-      return { enabled, nextAt: enabled ? item.at : null,
+      const enabled = settings().enabled && item?.status === "scheduled" && !await inactive(tx, now());
+      const report = (await tx.doc(Reports, ROOT_CONVERSATION_ID)).view!;
+      return { report: { ...report }, enabled, nextAt: enabled ? item.at : null,
         intervalMs: Math.max(2 * hour, Math.min(48 * hour, state.history.at(-1)?.intervalMs ?? base)),
         adoption: state.adoptionRate, signals, runs: await recentRuns(tx) };
     }, context),

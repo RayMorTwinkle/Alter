@@ -444,7 +444,7 @@ it.each([true, false])("serves a local-day funnel with Feishu configured=%s", as
   }, context);
   expect(await (await web.read("/api/funnel?days=1")).json()).toEqual({
     timeZone: "Asia/Shanghai", precision: null, days: [{ date: "2026-12-02", triggered: 1, passed: 1,
-      pushed: configured ? 0 : 1, read: 0, useful: 0, useless: 0, digests: 0, reminders: 0 }],
+      pushed: 0, read: 0, useful: 0, useless: 0, digests: 0, reminders: 0 }],
   });
 });
 
@@ -477,10 +477,15 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
   const events = await stream(web.read);
   const view = async () => (await web.read("/api/heartbeat")).json();
   const initial = await view();
+  expect(initial.report).toMatchObject({ intervalDays: 3, time: "21:00", activeDays: 1, paused: false });
   expect(initial).toMatchObject({ enabled: true, intervalMs: 5 * 3_600_000, adoption: 0.5,
     signals: { dueGoals: 0, backlog: 0, userMessages24h: 0 }, runs: [] });
   await web.post("/api/messages", { text: "提醒我留意活动" });
   await web.app.main.waitForIdle(context);
+  const patch = await fetch(web.base + "/api/settings", { method: "PATCH", headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" },
+    body: JSON.stringify({ heartbeat: { end: "20:00" } }) });
+  expect(patch.status).toBe(200);
+  await events.seen(e => e.event === "heartbeat" && e.data.type === "report" && e.data.report.time === "19:59");
   const response = await web.post("/api/heartbeat/run", {});
   expect(response.status).toBe(202);
   const run: HeartbeatRun = await response.json();
@@ -520,7 +525,7 @@ it("creates a schedule from main, lists, pauses and deletes it over HTTP and rep
   const at = Date.parse("2026-11-27T00:00Z");
   const web = await setup(({ messages }, res) => {
     if (messages.at(-1)?.content?.endsWith("\n安排")) {
-      return toolCall(res, "schedule_task", { brief: "看进展", action: "wake", trigger: { kind: "every", minutes: 5 } });
+      return toolCall(res, "schedule_create", { brief: "看进展", type: "wake", trigger: { kind: "every", minutes: 5 } });
     }
     return say(res, "已安排");
   }, false, undefined, () => at);
@@ -536,7 +541,7 @@ it("creates a schedule from main, lists, pauses and deletes it over HTTP and rep
   expect((await web.post("/api/messages", { text: "安排" })).status).toBe(202);
   await feed.seen(e => e.event === "schedules" && e.data.length === 1);
   const [item] = await (await web.read(path)).json();
-  expect(item).toMatchObject({ brief: "看进展", paused: false, nextAt: at + 300_000 });
+  expect(item).toMatchObject({ type: "wake", brief: "看进展", paused: false, nextAt: at + 300_000 });
   for (const invalid of [{}, { paused: 1 }, { paused: true, brief: "other" }]) {
     expect((await edit("PATCH", item.id, invalid)).status).toBe(400);
   }

@@ -76,7 +76,7 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_read", "memory_search", "memory_write"];
-const controls = ["dispatch_task", "enable_tool", ...memoryTools, "notify", "schedule_cancel", "schedule_create", "schedule_list", "schedule_pause", "schedule_task", "task_cancel", "task_message", "task_status", "watch", "watch_cancel", "watch_list"];
+const controls = ["dispatch_task", "enable_tool", "feedback_answer", ...memoryTools, "notify", "schedule_create", "schedule_list", "schedule_set", "task_message", "task_status", "task_stop", "watch", "watch_cancel", "watch_list"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "declare_permissions", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
@@ -319,7 +319,7 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   expect(await ledger(third)).toHaveLength(1);
 });
 
-it("expires an unanswered user approval and notifies main once", async () => {
+it("expires an unanswered approval and wakes main only with the task report", async () => {
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   try {
@@ -340,7 +340,8 @@ it("expires an unanswered user approval and notifies main once", async () => {
     app.harness.resume();
     await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual([expect.stringContaining("Approval expired without a decision")]);
     await app.main.waitForIdle(context);
-    expect(notifications).toEqual([`Notify the user: task ${request.taskId}, request ${request.id} (${tool}): Approval expired without a decision`]);
+    expect(notifications).toEqual([]);
+    expect((await incoming(app)).filter(text => text.includes(`task ${request.taskId} finished:`))).toHaveLength(1);
     expect(app.demo.outbox).toEqual([]);
     expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
     expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.tool === tool).map(e => e.decision))
@@ -991,23 +992,23 @@ it("offers schedules without leases and parks tainted reminder creation and canc
     if (text === "lease") return call("enable_tool", { capability: "remote", reason: "read" });
     if (text === "read") return call("remote_read", {});
     if (text === "list") return call("schedule_list", {});
-    if (text === "create") return call("schedule_create", { text: "回电话", at: "2027-01-01T11:30", daily: "11:30" });
-    return call("schedule_cancel", { id });
+    if (text === "create") return call("schedule_create", { type: "reminder", brief: "回电话", trigger: { kind: "daily", time: "11:30" } });
+    return call("schedule_set", { id, status: "deleted" });
   }, new MemoryStorage(), [externalPlugin().plugin], undefined, { now: () => at }, false);
   await input(app, "lease");
   await input(app, "read");
   await input(app, "list");
-  const reminders = async () => (await app.scheduler.list()).filter(item => item.kind === "reminder");
-  for (const action of ["create", "cancel"]) {
+  const reminders = async () => app.schedules.list();
+  for (const action of ["create", "set"]) {
     await app.main.submit({ type: "input", content: action }, context);
     const request = await parked(app);
     expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action, tainted: true });
-    expect((await reminders()).map(item => item.status)).toEqual(action === "create" ? [] : ["scheduled"]);
+    expect((await reminders()).map(item => item.type)).toEqual(action === "create" ? [] : ["reminder"]);
     await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
     await app.main.waitForIdle(context);
-    id = (await reminders())[0]!.id;
+    if (action === "create") id = (await reminders())[0]!.id;
   }
-  expect(await reminders()).toMatchObject([{ id, text: "回电话", status: "cancelled" }]);
+  expect(await reminders()).toEqual([]);
 });
 
 it("continues an ended conversation with its history and taint", async () => {
@@ -1111,9 +1112,11 @@ it("cancels a continued task during approval, removes the card, and stays cancel
     if (text === "start") return dispatch("seed", "auto");
     if (text === "seed") return finish("seeded");
     if (text === "continue") return call("dispatch_task", { brief: "deliver", continue_from: id });
+    if (text === "resume stopped") return call("dispatch_task", { brief: "wrap up", continue_from: id });
+    if (text === "wrap up") return finish("resumed safely");
     if (text === "deliver") return call("outbox_send", { message: "never sent" });
     if (text === "message") return call("task_message", { taskId: id, message: "pending update" });
-    if (text === "stop") return call("task_cancel", { taskId: id });
+    if (text === "stop") return call("task_stop", { taskId: id });
     if (last.role === "toolResult" && last.toolName === "outbox_send") return finish("sent");
     return say("ok");
   };
@@ -1141,10 +1144,14 @@ it("cancels a continued task during approval, removes the card, and stays cancel
   expect((await next.harness.snapshot(LiveDoc, task.conversationId, context))?.run).toBeUndefined();
   expect((await ledger(next)).map(e => e.summary)).toEqual(["seeded", "cancelled"]);
   expect((await next.harness.snapshot(Requests, next.main.id, context))!.pending).toEqual({});
+  await input(next, "resume stopped");
+  await expect.poll(async () => (await ledger(next)).at(-1)?.summary).toBe("resumed safely");
+  const resumed = (await next.harness.snapshot(Tasks, next.main.id, context))!.byId[(await ledger(next)).at(-1)!.taskId]!;
+  expect(resumed).toMatchObject({ continuedFrom: id, conversationId: task.conversationId });
   expect(next.demo.outbox).toEqual([]);
 });
 
-it("interrupts an outstanding model request before acknowledging task_cancel", async () => {
+it("interrupts an outstanding model request before acknowledging task_stop", async () => {
   let id = "";
   let waiting = false;
   let aborted = false;
@@ -1158,8 +1165,8 @@ it("interrupts an outstanding model request before acknowledging task_cancel", a
         resolve(finish("too late"));
       }, { once: true }));
     }
-    if (text === "stop") return call("task_cancel", { taskId: id });
-    if (last.role === "toolResult" && last.toolName === "task_cancel") receipt = text;
+    if (text === "stop") return call("task_stop", { taskId: id });
+    if (last.role === "toolResult" && last.toolName === "task_stop") receipt = text;
     return say("ok");
   });
   await input(app, "start");
@@ -1167,7 +1174,7 @@ it("interrupts an outstanding model request before acknowledging task_cancel", a
   id = Object.keys((await app.harness.snapshot(Tasks, app.main.id, context))!.byId)[0]!;
   await input(app, "stop");
   expect(aborted).toBe(true);
-  expect(receipt).toContain("cancelled");
+  expect(receipt).toContain("continue_from");
   expect((await ledger(app)).map(e => e.summary)).toEqual(["cancelled"]);
 });
 

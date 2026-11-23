@@ -174,7 +174,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
     const ms = Date.parse(line.at);
     if (!Number.isFinite(ms) || ms > at) continue;
     const role = usageRole(line);
-    const proactiveWake = role === "heartbeat" || role === "schedule";
+    const proactiveWake = role === "heartbeat" || role === "schedule" || role === "report-due";
     if (includes(ms)) {
       addUsage(total, line);
       addUsage(bucket(roles, role, emptyUsage), line);

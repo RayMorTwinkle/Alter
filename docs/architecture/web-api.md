@@ -1,4 +1,4 @@
-# Web API 契约（v1.20）
+# Web API 契约（v1.21）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -446,3 +446,12 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 事件通知可带原始事件类别 `category`。新分诊偏好用来源和类别的 JSON 二元组字符串作键，旧记录沿用来源名。无需主事务时也可通过 `await app.settings.feedback()` 读取回访参数。参数答案与当前值相同且没有新的记忆变更时，`changeIds` 为空。
 
 飞书使用卡片 JSON 2.0 表单。提交按钮通过 `card.action.trigger` 回传整张表单，服务端核对已配对的用户和已发送卡片的消息 ID。[飞书表单容器](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/form-container)
+
+## v1.21 唤醒、定时安排与近况报告（#94）
+
+- `GET /api/schedules`、`GET /api/state` 和 `schedules` SSE 中的每项都提供 `type: "reminder" | "task" | "wake"`。保留同值的旧字段 `action` 供现有客户端读取。旧安排保留 ID、暂停状态和到期时间。三个类型分别直接通知、直接派任务、唤醒主会话。
+- 主会话通过 `schedule_create({ type, trigger, brief, thinking?, continue_from? })` 创建，`schedule_list({})` 查看，`schedule_set({ id, trigger?, brief?, thinking?, status? })` 修改。状态接受 `active | paused | deleted`。任务中断工具为 `task_stop`，可用 `dispatch_task` 的 `continue_from` 接续。
+- `GET /api/heartbeat` 增加 `report: { intervalDays, activeDays, time, nextAt, paused }`。活跃天数按用户时区统计最近七个日历日，计入聊天、审批、通知读回执与反馈、Web 登录和显式写操作。SSE 重连和后台轮询不计入。基础间隔为 1、2、3 天，乘以反馈设置 `reportFrequency`（0.5、1、2，默认 1），四舍五入后最短一天。首次检查在安装后的第一个报告时刻。时间采用 `ALTER_REPORT_TIME`（默认 21:00），落在巡检窗外时取窗内时刻。`nextAt` 为 Unix 毫秒，长期无互动或在下次报告前将进入暂停时为 null。连续 168 小时无互动时暂停巡检和报告。回来后有内容就立即补报，空报告跳过。巡检跳过原因增加 `inactive`。
+- `heartbeat` SSE 增加 `{ type: "report", report }`，报告设置变化时同步。重连时读取 `GET /api/heartbeat`。唤醒统计增加 `triage` 和 `report-due` 两种来源。分诊的 now 事件由主会话判断，只有主会话调用 notify 才会转告用户。通知的安静时段规则继续生效。报告通知的 source 为 report。分诊事件保留在通知记录中，漏斗的 pushed 仅将有投递凭据的历史 now 事件算作已推送。
+- 报告末尾按题号展示最多两道反馈题，保留出题时的题干和选项。用户可在 Web「回访与反馈」或直接回复作答。主会话用 `feedback_answer({ issueId, options, other? })` 提交，`issueId` 为该次出题的 `id`，选项为显示原文。与 Web 作答共用校验、幂等和偏好变更记录。
+- `ALTER_DIGEST_TIME` 已废弃。目标复查和固定每日摘要停止调度，审批最终过期通过任务报告反馈。历史统计仍可含 goal 角色。

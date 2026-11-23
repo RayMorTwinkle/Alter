@@ -141,9 +141,9 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
         <span className={`status ${state.connection !== "open" ? "lost" : state.busy ? "busy" : ""}`}>
           <i /><span className="status-text">{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}</span>
         </span>
-        {heartbeat?.enabled && heartbeat.nextAt && (
+        {heartbeat?.enabled && (heartbeat.nextAt || heartbeat.report.paused) && (
           <button className="next-heartbeat" onClick={() => setShowHeartbeat(true)} title={t.heartbeat.title}>
-            <Binoculars /><span className="label">{t.heartbeat.next}</span> {clock(heartbeat.nextAt)}
+            <Binoculars /><span className="label">{t.heartbeat.next}</span> {heartbeat.nextAt ? clock(heartbeat.nextAt) : t.heartbeat.paused}
           </button>
         )}
         <div className="topbar-actions">

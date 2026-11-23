@@ -44,6 +44,11 @@ it("sleeps durably, fires once per occurrence, catches up once and resumes regis
     { provider: "unused", modelId: "unused" }, undefined, {}, { timeZone: "Asia/Taipei", now: () => now, setTimer });
   let app = await open();
   onTestFinished(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
+  const retired = vi.fn();
+  for (const kind of ["digest", "goal-review"]) {
+    app.scheduler.register(kind, retired);
+    await app.scheduler.create({ kind, text: "旧版每日任务", at: "2026-12-01T09:30", daily: "09:30" });
+  }
   const handler = vi.fn();
   app.scheduler.register("review", handler);
   const create = (text: string, at: string, daily?: string, kind = "reminder") => app.scheduler.create({ kind, text, at, daily });
@@ -70,8 +75,11 @@ it("sleeps durably, fires once per occurrence, catches up once and resumes regis
   app = await open();
   app.scheduler.register("review", handler);
   app.harness.resume();
-  await expectWake("2026-12-06T01:00Z");
+  await expectWake("2026-12-06T02:00Z");
   expect(handler).toHaveBeenCalledTimes(1);
+  expect(retired).not.toHaveBeenCalled();
+  expect((await app.scheduler.list()).map(s => s.kind)).not.toContain("digest");
+  expect((await app.scheduler.list()).map(s => s.kind)).not.toContain("goal-review");
   expect(handler.mock.calls[0]![0]).toMatchObject({ kind: "review", text: "复查" });
   const caughtUp = await notifications();
   expect(caughtUp).toHaveLength(3);
@@ -79,22 +87,23 @@ it("sleeps durably, fires once per occurrence, catches up once and resumes regis
     expect.objectContaining({ at: now, level: "digest", body: "晨会" }),
     expect.objectContaining({ at: now, level: "digest", body: "缴费" }),
   ]));
-  expect(await app.scheduler.list()).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: repeat, at: Date.parse("2026-12-06T02:00Z"), repeat: { daily: "10:00" } }),
-    expect.objectContaining({ id: once, status: "done" }), expect.objectContaining({ id: missed, status: "done" }), expect.objectContaining({ id: cancelled, status: "cancelled" }),
+  expect(await app.schedules.list()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: repeat, type: "reminder", nextAt: Date.parse("2026-12-06T02:00Z"), trigger: { kind: "daily", time: "10:00" } }),
+    expect.objectContaining({ id: once, nextAt: null }), expect.objectContaining({ id: missed, nextAt: null }),
   ]));
+  expect((await app.schedules.list()).some(item => item.id === cancelled)).toBe(false);
   await app.close();
   app = await open();
   const surface = await observeSurface(app, () => {});
   try {
     app.harness.resume();
-    await expectWake("2026-12-06T01:00Z");
+    await expectWake("2026-12-06T02:00Z");
     expect(surface.snapshot().notifications).toEqual(caughtUp);
     advance("2026-12-06T02:00Z");
     await expectWake("2026-12-06T13:00Z");
     expect(new Set(surface.snapshot().notifications.map(item => item.id)).size).toBe(4);
     expect(surface.snapshot()).toMatchObject({ busy: false, timeline: [], tasks: [], ledger: [] });
-    expect(await app.scheduler.cancel(repeat)).toBe(true);
+    expect(await app.schedules.cancel(repeat)).toBe(true);
     await expectWake("2026-12-06T13:00Z");
   } finally { surface.detach(); }
 });

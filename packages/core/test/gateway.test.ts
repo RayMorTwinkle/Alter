@@ -300,7 +300,7 @@ it("uses Shanghai as the default time zone and reads ALTER_TZ", () => {
 
 it("accounts for a single tool-free task-model attempt per event, including gateway errors", async () => {
   let count = 0;
-  const f = await setup((_, res) => ++count === 1 ? say(res, '{"level":"now","reason":"请尽快查看"}') : httpError(res, 503));
+  const f = await setup((_, res) => ++count === 1 ? say(res, '{"level":"digest","reason":"请尽快查看"}') : httpError(res, 503));
   const runtime = await openAlter(new MemoryStorage(), f.models, f.mainModel, f.taskModel);
   cleanup.push(runtime.close);
   for (const ref of ["one", "two"]) {
@@ -316,19 +316,16 @@ it("accounts for a single tool-free task-model attempt per event, including gate
   expect((await runtime.harness.snapshot(Notifications, runtime.main.id, context))?.entries[0]?.level).toBe("digest");
 });
 
-it("charges each goal gateway attempt once, including fallback, to the task budget", async () => {
-  const f = await setup(({ model }, res) => model === primary ? httpError(res, 429) : toolCall(res, "finish", { summary: "已复查", refs: [] }));
+it("keeps goals available to heartbeat without launching a daily research worker", async () => {
+  const f = await setup((_, res) => say(res, "ok"));
   let now = Date.parse("2026-12-01T00:59Z");
-  const app = await openAlter(new MemoryStorage(), f.models, f.mainModel, f.taskModel, {}, { timeZone: "Asia/Taipei",
-    now: () => now, plugins: [{ capability: { id: "browser", mainLeasable: false, actions: [] }, tools: [] }] });
+  const app = await openAlter(new MemoryStorage(), f.models, f.mainModel, f.taskModel, {}, { timeZone: "Asia/Taipei", now: () => now });
   cleanup.push(app.close);
   app.memory.save({ kind: "goal", text: "备考" });
   now += 60_000;
   app.harness.resume();
-  await expect.poll(async () => (await app.harness.snapshot(Notifications, app.main.id, context))?.entries[0]?.body).toBe("已复查");
-  const charged = { conversation: "task", role: "goal", taskId: expect.stringMatching(/^task-goal-/), proactive: true, at: new Date(now).toISOString() };
-  expect(await f.logs()).toMatchObject([
-    { ...charged, model: primary, attempt: 1, outcome: "error" },
-    { ...charged, model: taskBackup, attempt: 2, fallbackFrom: primary, inputTokens: 8, outputTokens: 3 },
-  ]);
+  await expect.poll(() => app.harness.wake().active).toBe(false);
+  expect((await app.scheduler.list()).some(s => s.kind === "goal-review")).toBe(false);
+  expect(app.memory.list()).toMatchObject([{ kind: "goal", text: "备考" }]);
+  expect(f.requests).toHaveLength(0);
 });

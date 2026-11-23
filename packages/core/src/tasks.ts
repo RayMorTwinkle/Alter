@@ -1,7 +1,5 @@
 import { arr, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
-import { calendarTime } from "./calendar-time.ts";
-import { addNotification } from "./notifications.ts";
 import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
 import { submitWake } from "./timeline.ts";
 import { Audit, Requests } from "./broker.ts";
@@ -41,14 +39,6 @@ export const unescapeNewlines = (text: string) => text.includes("\n") || !text.i
 
 async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId: string, at: number, summary: string) {
   const failed = task.status === "failed";
-  if (task.proactive) {
-    if (!task.goal) throw new Error("Missing goal for proactive task");
-    await addNotification(tx, {
-      id: `goal-${taskId}`, at, kind: "goal", level: failed && summary === budgetExhausted ? "silent" : "digest", source: "goal", status: "unread",
-      title: `目标：${task.goal.text}`, body: failed ? `调研未完成：${summary}` : summary, ref: taskId,
-    }, calendarTime(task.goal.timeZone).midnight(at));
-    return;
-  }
   await inheritTaint(tx, task.conversationId, main.id);
   if (task.watch) (await tx.doc(Taint, main.id)).first ??= { source: "watch-report", capability: "task", at };
   if (!failed && task.heartbeatAt !== undefined) {
@@ -128,7 +118,7 @@ async function failTask(tx: Tx, main: ConversationHandle, taskId: string, failur
   task.endedAt = at;
   task.failure = failure;
   await clearRequests(tx, main.id, taskId, !aborted);
-  if (!aborted || task.proactive) await report(tx, main, task, taskId, at, failure);
+  if (!aborted) await report(tx, main, task, taskId, at, failure);
 }
 
 // The background task owns the conversation and sleeps until its brief settles. Main stays available.
@@ -184,14 +174,15 @@ export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }
 type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom" | "triggerSource"> & { thinking?: ModelThinkingLevel };
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
   resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
-  return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs, goal?: TaskRecord["goal"],
+  return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs,
     watch?: { worker: TaskId; settings: NonNullable<TaskRecord["watch"]>; tools: Extension; instructions: string }) => {
     const tasks = await tx.doc(Tasks, mainId);
     if (tasks.byId[taskId]) return;
     const stamp = clock();
-    const wake = !args.triggerSource && (!goal || args.continuedFrom) ? await activeWake(tx, mainId, stamp.at) : undefined;
-    const inspection = goal || args.triggerSource ? undefined : await activeHeartbeat(tx);
+    const wake = !args.triggerSource ? await activeWake(tx, mainId, stamp.at) : undefined;
+    const inspection = args.triggerSource ? undefined : await activeHeartbeat(tx);
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
+    const goal = previous?.goal; // Preserve read-only scope when resuming historical research.
     const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
     if (previous) {
       const identity = await tx.doc(TaskIdentity, previous.conversationId);
@@ -214,10 +205,6 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       instructions: watch?.instructions ?? (goal ? "完成只读调研后单独调用 finish，提供摘要与引用。" : workerInstructions),
     });
     await inheritTaint(tx, mainId, childId);
-    if (goal && !previous) {
-      const provider = await tx.doc(ProviderDoc, childId);
-      provider.sessionId = `proactive-${provider.sessionId}`;
-    }
     if (inspection || previous?.heartbeatAt !== undefined) {
       const provider = await tx.doc(ProviderDoc, childId);
       const session = provider.sessionId.replace(/^heartbeat-/, "");
@@ -276,7 +263,7 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>) {
         if (latest.status === "running") return reply(`Task ${identity.taskId} is running; use task_message`, true);
         await api.waitForTask(latest.worker, ctx);
         await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, thinking, continuedFrom: continue_from,
-          context: previous.context, permission: previous.permission }, previous.goal), ctx);
+          context: previous.context, permission: previous.permission }), ctx);
       } else {
         if (!context || !permission) return reply("A new task requires context and permission", true);
         await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, context, permission, thinking }), ctx);
@@ -385,13 +372,13 @@ export function createTaskCancellation(host: () => Harness) {
     return task.status === "cancelled" ? task.worker : reply(`Task already ${task.status}`, true);
   }
   const tool = defineTool({
-    name: "task_cancel", description: "Stop a running task and withdraw its pending approvals.",
+    name: "task_stop", description: "Interrupt a running task and withdraw pending approvals. Resume its conversation later with continue_from.",
     parameters: obj({ taskId: nonempty }), replay: "safe",
     async execute({ taskId }, api, ctx) {
       const result = await api.commit(tx => cancel(tx, taskId, api.now()), ctx);
       if (typeof result !== "number") return result;
       await api.waitForTask(result, ctx);
-      return reply(`Task ${taskId}: cancelled`);
+      return reply(`Task ${taskId}: stopped. Resume with dispatch_task using continue_from.`);
     },
   });
   return { tool, stop, cancel };

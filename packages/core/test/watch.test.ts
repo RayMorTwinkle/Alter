@@ -80,6 +80,7 @@ it("creates through main, batches for 30s, sleeps, then finishes in the same tai
   }]);
   await f.app.events.emit(event("m1"));
   await expect.poll(async () => (await f.app.harness.snapshot(Notifications, f.app.main.id, context))?.entries[0]).toMatchObject({ ref: "m1", level: "silent", filtered: "duplicate" });
+  expect((await stats("day", "UTC", { app: f.app, dir: f.dir })).wakes.bySource.triage).toBeUndefined();
   await f.due(start + 30_000);
   f.advance(29_999);
   await f.app.watches.message(event("m2", f.clock.at));
@@ -169,7 +170,7 @@ it("charges one unit per wake even for a zero-token provider and restores the sh
   expect(f.main.state.callCount).toBe(0);
 });
 
-it("keeps polling during a parked tainted send and task_cancel withdraws the approval", async () => {
+it("keeps polling during a parked tainted send and task_stop withdraws the approval", async () => {
   const f = await setup();
   vi.stubEnv("ALTER_WATCH_BATCH_MS", "7");
   await f.app.close();
@@ -186,7 +187,7 @@ it("keeps polling during a parked tainted send and task_cancel withdraws the app
   await expect.poll(() => g.app.notifications.isClaimed("during-approval")).toBe(true);
   expect(await requests()).toMatchObject([{ taskId: id, tainted: true }]);
   expect(await g.app.watches.list()).toMatchObject([{ wakes: 1 }]);
-  f.main.setResponses([call("task_cancel", { taskId: id }), say("已停止")]);
+  f.main.setResponses([call("task_stop", { taskId: id }), say("已停止")]);
   await submitMessage(g.app.main, "停止盯梢");
   await g.app.main.waitForIdle(context);
   expect(await requests()).toEqual([]);

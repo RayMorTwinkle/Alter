@@ -95,6 +95,7 @@ export function HeartbeatSheet({ view, onClose, onChange }: { view: HeartbeatVie
             {t.interval(hours(view.intervalMs))} · {t.adoption} {Math.round(view.adoption * 100)}%
             {" "}· {t.signals(view.signals.dueGoals, view.signals.backlog, view.signals.userMessages24h)}
           </p>
+          <p className="hb-why">{view.report.paused ? t.reportPaused : t.report(view.report.intervalDays, view.report.activeDays, view.report.nextAt ? clock(view.report.nextAt) : null)}</p>
           <p className="hb-hint">{t.hint}</p>
           {error && <p className="form-error">{error}</p>}
         </section>

@@ -2,6 +2,7 @@ import { FeedbackOutcomes, interacted, triageScope } from "./feedback-settings.t
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import { obj, oneOf, str } from "@earendil-works/pi-schema";
 import type { calendarTime } from "./calendar-time.ts";
+import { acknowledgeReport } from "./report-state.ts";
 import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
 import { context, defineTool, reply, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Tx } from "./runtime.ts";
 
@@ -46,7 +47,7 @@ function pushed(buffer: Buffer, item: Notification) {
   append(buffer, dataLine([item.id, item.source.slice(0, 48), item.title.slice(0, 140)]), 1420, 20);
 }
 function digest(buffer: Buffer, item: Notification) {
-  append(buffer, dataLine([item.id, item.source.slice(0, 48), item.title.slice(0, 120), (item.body ?? "").slice(0, 160)]), 2400);
+  append(buffer, dataLine([item.ref ?? item.id, item.source.slice(0, 48), item.title.slice(0, 120), (item.body ?? "").slice(0, 160)]), 2400);
 }
 export async function wakeNotifications(tx: Tx, since = -Infinity) {
   const state = await tx.doc(WakeNotifications, ROOT_CONVERSATION_ID);
@@ -83,8 +84,10 @@ export function notifyTool(time: ReturnType<typeof calendarTime>) {
       const receipt = await tx.doc(NotifyReceipt, id, null);
       if (!receipt.sent) {
         receipt.level = level === "now" && time.quietHours(at) ? "digest" : level;
-        await addNotification(tx, { id, at, kind: "notify", title, body, source: "alter", status: "unread",
-          level: receipt.level, ...inspection }, time.midnight(at));
+        const footer = await acknowledgeReport(tx);
+        await addNotification(tx, { id, at, kind: "notify", title, body: footer ? [body, footer].filter(Boolean).join("\n\n") : body,
+          source: footer === undefined ? "alter" : "report", status: "unread",
+          level: receipt.level, ...inspection });
         receipt.sent = true;
       }
       return reply(id);
@@ -93,26 +96,27 @@ export function notifyTool(time: ReturnType<typeof calendarTime>) {
 export const NotifyReceipt = defineDocFamily<{ sent: boolean; level?: "now" | "digest" }, null>({ kind: "alter.notify-receipt", version: 1,
   family: true, scope: "session", initial: () => ({ sent: false }), checkpointWhen: () => false });
 
-export async function digestDay(tx: Tx, day: number) {
-  const state = await tx.doc(DigestDay, ROOT_CONVERSATION_ID);
-  if (state.day !== day) {
-    state.day = day;
-    state.overflow = [];
-    delete state.sent;
+const ReportDigests = conversationDoc<{ count: number; lines: string[]; initialized?: true }>(
+  "report-digests", () => ({ count: 0, lines: [] }));
+export async function reportDigests(tx: Tx) {
+  const buffer = await tx.doc(ReportDigests, ROOT_CONVERSATION_ID);
+  if (!buffer.initialized) {
+    const { entries } = await tx.doc(Notifications, ROOT_CONVERSATION_ID);
+    const { overflow } = await tx.doc(DigestDay, ROOT_CONVERSATION_ID);
+    for (const item of [...overflow, ...entries.toReversed()]) if (item.level === "digest" && item.source !== "report") digest(buffer, item);
+    buffer.initialized = true;
   }
-  return state;
+  return buffer;
 }
 
-export async function addNotification(tx: Tx, item: Notification, day: number) {
+export async function addNotification(tx: Tx, item: Notification, _legacyDay?: number) {
   const { entries } = await tx.doc(Notifications, ROOT_CONVERSATION_ID);
-  if (item.level === "digest") digest((await wakeNotifications(tx)).digest, item);
-  entries.unshift(item);
-  if (entries.length <= 500) return;
-  const oldest = entries.pop()!;
-  if (oldest.level === "digest" && oldest.status === "unread" && oldest.at >= day) {
-    const state = await digestDay(tx, day);
-    if (!state.sent) state.overflow.push(oldest);
+  if (item.level === "digest") {
+    digest((await wakeNotifications(tx)).digest, item);
+    if (item.source !== "report") digest(await reportDigests(tx), item);
   }
+  entries.unshift(item);
+  if (entries.length > 500) entries.pop();
 }
 
 export const notificationClocks = new WeakMap<Conversation, () => number>();

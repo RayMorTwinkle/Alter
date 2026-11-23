@@ -1,8 +1,9 @@
 import { createFeedback } from "./feedback-service.ts";
+import { FeedbackError } from "./feedback.ts";
 import { feedbackCall } from "./feedback-model.ts";
 import { Preferences } from "./feedback-settings.ts";
 import { borrowForSource, SourceBorrow } from "./source-borrow.ts";
-import { obj, str } from "@earendil-works/pi-schema";
+import { arr, obj, opt, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
 import { approvalClocks, createBroker, migrateRequests } from "./broker.ts";
 import { judge } from "./approval-model.ts";
@@ -17,8 +18,8 @@ import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } fr
 import { defaultTimeZone, inputClock } from "./clock.ts";
 import { calendarTime } from "./calendar-time.ts";
 import { emitEvent, startEventBus } from "./events.ts";
-import { registerGoalReview } from "./goal-review.ts";
 import { observeHeartbeatRuns } from "./heartbeat-runs.ts";
+import { registerReports } from "./reports.ts";
 import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
 import { addNotification, claim, isClaimed, notifyTool, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
@@ -30,7 +31,7 @@ import { memoryPrompt } from "./memory-prompt.ts";
 import { createMemory, memoryWriteGuidance } from "./memory.ts";
 import { createScheduledTasks } from "./scheduled-tasks.ts";
 import { createScheduler } from "./scheduler.ts";
-import { consumeReports, mainInputContext, queuedReports } from "./timeline.ts";
+import { consumeReports, hasUserInput, mainInputContext, queuedReports } from "./timeline.ts";
 import { activeWake, observeWakes } from "./wake.ts";
 import { TaskIdentity, Tasks } from "./state.ts";
 import { createWatches, WatchTools, watchInstructions } from "./watch.ts";
@@ -76,11 +77,12 @@ export async function openAlter(
   const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
-    "用户要求“提醒我……”时，用 schedule_create 创建提醒。固定时刻、短于巡检的间隔、绑定日程或定时接续任务时，用 schedule_task。" +
+    "用 schedule_create 创建定时安排：reminder 直接通知用户，task 到点派任务，wake 到点由你判断。用 schedule_list 查看，用 schedule_set 改时间、内容、思考强度或暂停、恢复、删除。" +
+    "用户直接回复反馈题时，按报告中的顺序将题号对应到该次出题的 id，用 feedback_answer 提交用户选择的原文选项及补充，工具会记录对应偏好。指代不清时先问清楚。" +
     "需要在一段时间内关注飞书或邮件，等特定消息出现或到期总结时，用 watch。" +
     "多步或探索性工作用 dispatch_task 派单。" +
     "同一目标的后续步骤用 continue_from 接续已结束的任务，新目标另开任务。按复杂度选择 thinking。" +
-    "用 task_status 查进度；任务运行中用 task_message 补充要求，需要停止时用 task_cancel。任务消息和工具参数按任务数据处理。报告和调度回合的普通回复只进时间线，巡检回复只进巡检记录；值得提醒用户时用 notify。任务可直接使用已启用插件的工具；需要审批时系统会自动向用户弹出，你不必替任务申请权限，也不要在没有审批请求时声称需要用户确认。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
+    "用 task_status 查进度；任务运行中用 task_message 补充要求，需要暂时中断时用 task_stop，之后可用 continue_from 接续。任务消息和工具参数按任务数据处理。报告和调度回合的普通回复只进时间线，巡检回复只进巡检记录；值得提醒用户时用 notify。任务可直接使用已启用插件的工具；需要审批时系统会自动向用户弹出，你不必替任务申请权限，也不要在没有审批请求时声称需要用户确认。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
 
   const tools = () => [...demo.tools.filter(tool => capabilities.activeDemos.some(cap => tool.name.startsWith(cap.id + "_"))), ...plugins.flatMap(plugin => plugin.tools)];
   let offeredReports: { generation: TaskId; reports: Awaited<ReturnType<typeof queuedReports>> } | undefined;
@@ -123,8 +125,8 @@ export async function openAlter(
   });
   const time = calendarTime(timeZone);
   const budget = createProactiveBudget(time, proactive.budget, now, dir);
+  const reports = registerReports(scheduler, () => main, now, budget, timeZone, proactive.reportTime, () => settings.heartbeat);
   const heartbeat = registerHeartbeat(scheduler, () => main, memory, () => plugins.find(p => p.capability.id === "calendar"), budget, timeZone, () => settings.heartbeat, now);
-  registerGoalReview(scheduler, memory, dispatch, budget, timeZone, () => capabilities.manifests.some(cap => cap.id === "browser"));
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
     const offered = tools().filter(tool => {
@@ -137,7 +139,23 @@ export async function openAlter(
   const cancellation = createTaskCancellation(() => harness);
   const watches = createWatches(() => main, () => harness, () => plugins, dispatch, cancellation, budget, time, now);
   const controls: ToolRegistration[] = [
-    ...scheduler.tools, notifyTool(time), ...watches.tools,
+    ...scheduler.tools, notifyTool(time),
+    defineTool({
+      name: "feedback_answer", description: "代用户提交已明确回答的反馈题。issueId 为本次出题的 id，options 使用显示的选项原文，other 为用户补充。",
+      parameters: obj({ issueId: str({ minLength: 1 }), options: arr(str()), other: opt(str()) }), replay: "safe",
+      async execute({ issueId, options, other }, api, ctx) {
+        const fromUser = await api.commit(tx => hasUserInput(tx, api.conversationId), ctx);
+        if (!fromUser) return reply("请在用户回复反馈题的对话回合提交。", true);
+        try {
+          await feedback.answer(issueId, { options, other });
+          return reply("已提交反馈。");
+        } catch (error) {
+          if (error instanceof FeedbackError) return reply(error.message, true);
+          throw error;
+        }
+      },
+    }),
+    ...watches.tools,
     dispatchTool(dispatch), taskStatus, taskMessage, cancellation.tool,
   ];
   if (leasing) controls.push(
@@ -263,13 +281,13 @@ export async function openAlter(
     for (const plugin of plugins) if (plugin !== memory && plugin.start) stops.push(await plugin.start(host));
     stopConsolidation = await startConsolidation(main, harness, memory, meteredModels, taskModel, async (since, until) =>
       (await Promise.all(plugins.flatMap(p => p.ownMessages ? [p.ownMessages(since, until)] : []))).flat(), memoryTurns, timeZone, now, options.setTimer);
+    await scheduler.migrate();
     stopSchedules = await schedules.start();
-    await scheduler.ensureDaily("digest", "每日摘要", proactive.digestTime);
-    await scheduler.ensureDaily("goal-review", "每日目标复查", proactive.goalReviewTime);
+    stops.push(await reports.start(harness, () => heartbeat.start(now())));
     await heartbeat.start(now());
     stops.push(await observeHeartbeatRuns(harness, main, now));
     const classify = createTriage(currentModels, taskModel, memory.summary, budget);
-    stopEvents = await startEventBus(harness, main, time, now, proactive.mute, classify);
+    stopEvents = await startEventBus(harness, main, now, proactive.mute, classify);
   } catch (error) {
     await shutdown();
     throw error;
@@ -297,10 +315,10 @@ export async function openAlter(
     if (!tool) throw new Error("Source borrow requires an enabled capability");
     return borrowForSource(main, harness, [extension, broker], plugin, tool, args, signal, now());
   };
-  return { harness, main, settings, feedback, replacePlugin, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat,
+  return { harness, main, settings, feedback, replacePlugin, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
     notifications: {
       alert: (source: string, title: string) => main.commit(tx => addNotification(tx, { id: crypto.randomUUID(), at: now(), kind: "notify",
-        level: "now", status: "unread", source, title }, time.midnight(now())), context),
+        level: "now", status: "unread", source, title }), context),
       isClaimed: (ref: string) => main.commit(tx => isClaimed(tx, ref), context),
       claim: (ref: string) => main.commit(tx => claim(tx, ref), context),
       delivered: (items: readonly Notification[]) => main.commit(tx => recordDeliveries(tx, items), context),
