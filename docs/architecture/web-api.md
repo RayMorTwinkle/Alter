@@ -1,4 +1,4 @@
-# Web API 契约（v1.16）
+# Web API 契约（v1.18）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -264,6 +264,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | event | data | 说明 |
 |---|---|---|
 | `watches` | `Watch[]` | 盯梢记录变化（v1.14） |
+| `ext-plugins` | `ExtPluginView[]` | 首连、重连、审批、运行状态或版本变更时整体替换（v1.17） |
 | `sources` | `SourceView[]` | 首次连接、重连、实例配置或轮询状态变化时整体替换（v1.16） |
 | `snapshot` | 同 `/api/state` | 首次连接与重连时 |
 | `timeline` | `TimelineItem` | 新条目（含用户自己发的消息回显） |
@@ -379,3 +380,36 @@ JSON 请求头可引用本实例的命名密钥。例如：
 `status.lastPollAt` 和 `status.nextPollAt` 为 Unix 毫秒。实例停用时 `nextPollAt` 为 null。全插件停用会暂停计时器。`todayCount` 是按服务时区计算的当日已送入分诊条数。`error` 在成功后为 null，失败时返回安全的错误原因。连续失败按实例间隔的 2、4、8 倍退避，最高 64 倍。GitHub 保存 Last-Modified 供下次条件请求使用，304 只更新状态，调度时间同时满足 X-Poll-Interval。
 
 SSE 在连接、重连、实例配置或轮询状态变化时发送 `sources`，数据与 `GET /api/sources` 相同。增删或重命名实例也更新 `plugins` 事件，模板插件的 `provides.sources` 按创建顺序列出实例名称。
+
+## 自写插件（v1.18）
+
+| 方法 | 路径 | 输入与结果 |
+|---|---|---|
+| GET | `/api/ext-plugins` | 返回 `ExtPluginView[]`，含待审批、当前 SHA、历史版本、连续失败次数和来源进度摘要 |
+| POST | `/api/ext-plugins/install` | `{"path":"/absolute/package"}`。201 返回 `{manifest,sha,directory,codeUrl,dependencies,summary,permissions,expanded,removed}`。首次安装与升级都需亲批 |
+| POST | `/api/ext-plugins/:id/approve` | `{"sha":"…"}`。只批准当前待审批 SHA，重新校验目录内容，成功返回 204 |
+| POST | `/api/ext-plugins/:id/reject` | `{}`。撤回待审包，204 |
+| POST | `/api/ext-plugins/:id/rollback` | `{}` 回到上一版本，或用 `{"sha":"…"}` 指定历史版本。同步恢复该版本 KV 和来源进度，204 |
+| POST | `/api/ext-plugins/:id/disable`、`…/enable` | `{}`。停用或启用已批准版本，204。隔离版本须更换代码 |
+| DELETE | `/api/ext-plugins/:id` | 删除安装记录、版本、状态及密钥，204 |
+
+以上沿用 Web 会话 Cookie 和 JSON 写接口。待审批记录无期限，独立于任务审批模型。
+SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本同时出现在 `plugins`，标识符为 `ext-<id>`。
+借用能力的 broker 审计记录含 `borrower`，值为清单中的插件 ID。
+密钥经已有的 `PATCH /api/plugins/ext-<id>` 写入 `settings`，读取只返回 `{set:boolean}`。
+
+包入口是 `index.mjs`，从 `@alter/plugin-sdk` 导入 `definePlugin`，默认导出工具和来源处理器。
+工具签名为 `(args,ctx)`，来源为 `(ctx)`，返回含 `id,title` 和可选 `url,body,repo,type,publishedAt` 的条目数组。
+来源首次轮询建立基线，后续事件标记为外部、不可信。每批最多发送 20 条明细，超出部分合并通知。
+清单 schemaVersion 为 1。输入输出使用显式类型 JSON Schema 子集，支持 properties、required、additionalProperties、items、enum 和 description。未知关键字在安装时拒绝。
+清单可省略 `network` 和 `requires`。`network` 的每项包含主机、HTTP 方法和字面路径前缀，仅作展示和版本差异比较。`requires` 为字符串数组，每项写明所需的外部程序或设备及用途，例如 `["adb（查询设备）", "已连接的安卓手机"]`。
+
+`summary` 为多行文本。首行固定为「此插件以你的权限运行，可以读写文件、联网、执行命令」。其余列出插件说明、直接 npm 依赖、外部程序或设备、声明的网络用途、密钥用途、工具及其副作用、消息来源、借用能力和代码目录。`codeUrl` 是源目录的本地文件 URL。`dependencies` 将直接依赖名映射到 package.json 声明的版本或来源。
+
+安装先将包复制到 Alter 数据目录内的待审批副本。有 npm 依赖必须提供 `package.json` 和 `package-lock.json`。有锁文件即在副本中执行 `npm ci --ignore-scripts`，失败则安装接口返回 400。审批绑定规范化文件路径和内容的 SHA-256，覆盖代码、包元数据和锁文件。源目录已有的 `node_modules` 不参与复制或哈希。批准时复核代码，启用 npm 在待审批副本中安装的依赖。每次运行前校验代码哈希，依赖目录沿用安装结果。旧沙箱版本需在新权限说明下重新亲批。
+
+同一插件的调用串行执行，每次调用启动独立 Node 进程，通过 stdio JSON-RPC 通信。插件可直接使用 `fetch`、`fs` 和 `child_process`。子进程环境只继承 PATH、HOME、LANG、系统临时目录和 Windows 运行所需目录变量，并剔除与声明密钥同名的变量。声明的密钥全部配置后才注册工具、轮询来源。
+
+`ctx.http.request` 提供宿主侧密钥请求头注入，跨源跳转清除请求头。代发仍限制公开 HTTPS 地址、超时、响应大小和频率，每插件每分钟最多 60 跳。只读调用期间的代发限无请求体的 GET/HEAD，受污点影响时拒绝查询串。宿主记录代发决策。直连请求由插件自行处理。代码哈希不符时隔离该版本。连续调用失败 5 次暂停插件，来源连续 3 次返回无效结构时暂停该来源。
+
+`resources.memoryMB` 约束插件进程的 V8 老生代和 RSS。独立监测线程每 100 ms 采样进程 RSS，超过上限时终止该进程。宿主按 `timeoutMs` 终止超时调用。插件另行启动的外部程序自行管理其资源。

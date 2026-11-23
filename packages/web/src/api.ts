@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, ApprovalStats, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryItem, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryItem, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -43,6 +43,10 @@ export const api = {
   createSource: (spec: SourceCreate) => request<SourceCreateResult>("/api/sources", { body: spec }),
   updateSource: (id: string, patch: SourcePatch) => request<SourceView>(`/api/sources/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   deleteSource: (id: string) => request<void>(`/api/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  extPlugins: () => request<ExtPluginView[]>("/api/ext-plugins"),
+  extPluginAction: (id: string, action: "approve" | "reject" | "rollback" | "disable" | "enable", body: Record<string, string> = {}) =>
+    request<void>(`/api/ext-plugins/${encodeURIComponent(id)}/${action}`, { body }),
+  deleteExtPlugin: (id: string) => request<void>(`/api/ext-plugins/${encodeURIComponent(id)}`, { method: "DELETE" }),
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: patch }),
   approvalStats: () => request<ApprovalStats>("/api/approvals/stats"),
@@ -63,7 +67,7 @@ export const api = {
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -73,6 +77,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
     // Changes made while disconnected are not replayed; a 404 means this server has no calendar.
     api.calendar().then(agenda => dispatch({ type: "agenda", agenda }), () => {});
     api.memory().then(memory => dispatch({ type: "memory", memory }), () => {});
+    api.extPlugins().then(extPlugins => dispatch({ type: "extPlugins", extPlugins }), () => {});
   };
   source.onerror = () => {
     dispatch({ type: "connection", connection: "lost" });
@@ -100,6 +105,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "heartbeat": return dispatch({ type: "heartbeat" });
         case "schedules": return dispatch({ type: "schedules", schedules: data });
         case "watches": return dispatch({ type: "watches", watches: data });
+        case "ext-plugins": return dispatch({ type: "extPlugins", extPlugins: data });
       }
     });
   }

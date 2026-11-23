@@ -3,6 +3,10 @@ import type { ApprovalCall, ApprovalContext } from "./approval-model.ts";
 import { defineExtension, defineTool, reply, type Conversation, type ConversationDocToken, type ConversationId, type JsonObject, type ToolRegistration } from "./runtime.ts";
 
 export type Effect = "read" | "write-local" | "external-send" | "irreversible" | "unknown";
+const effects = ["read", "write-local", "external-send", "irreversible"] as const;
+export function permitsBorrow(ceiling: string, effect: Effect) {
+  return effect !== "unknown" && effects.indexOf(effect) <= effects.findIndex(e => e === ceiling);
+}
 type ActionPolicy = { effect: Effect; guarded?: true; seenArg?: string };
 export type ToolAction = ActionPolicy & { capability: string; action: string };
 export type Capability = {

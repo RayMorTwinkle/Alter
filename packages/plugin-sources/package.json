@@ -8,7 +8,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@alter/core": "workspace:*"
+    "@alter/core": "workspace:*",
+    "@alter/plugin-sdk": "workspace:*"
   },
   "exports": {
     ".": "./src/index.ts"

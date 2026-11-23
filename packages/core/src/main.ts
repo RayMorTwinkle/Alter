@@ -1,3 +1,4 @@
+import { borrowForSource, SourceBorrow } from "./source-borrow.ts";
 import { obj, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
 import { approvalClocks, createBroker, migrateRequests } from "./broker.ts";
@@ -7,7 +8,7 @@ import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, typ
 import {
   AgentDoc, configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, LiveDoc, ProviderDoc, reply, storageDirectories, ToolTask, type Conversation,
-  type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type TaskId, type Tx,
+  type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type JsonObject, type ToolRegistration, type TaskId, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } from "./config.ts";
 import { defaultTimeZone, inputClock } from "./clock.ts";
@@ -17,7 +18,7 @@ import { registerGoalReview } from "./goal-review.ts";
 import { observeHeartbeatRuns } from "./heartbeat-runs.ts";
 import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
-import { claim, isClaimed, notifyTool, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
+import { addNotification, claim, isClaimed, notifyTool, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
 import { createProactiveBudget } from "./usage.ts";
 import { gatewayDataDirectories, judgeModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
@@ -162,7 +163,7 @@ export async function openAlter(
   });
 
   const controlPlane = defineExtension({
-    name: "alter.main", tools: controls, tasks: [AdvanceLeases, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
+    name: "alter.main", tools: controls, tasks: [SourceBorrow, AdvanceLeases, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
     hooks: [
       hook(BackgroundTask, {
         async onTaskEnd(taskId) {
@@ -270,8 +271,15 @@ export async function openAlter(
       stopSchedules = await schedules.start();
     }
   }
-  return { harness, main, settings, replacePlugin, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat,
+  const borrowSource = async (plugin: string, name: string, args: JsonObject, signal: AbortSignal) => {
+    const tool = tools().find(t => t.name === name);
+    if (!tool) throw new Error("Source borrow requires an enabled capability");
+    return borrowForSource(main, harness, [extension, broker], plugin, tool, args, signal, now());
+  };
+  return { harness, main, settings, replacePlugin, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat,
     notifications: {
+      alert: (source: string, title: string) => main.commit(tx => addNotification(tx, { id: crypto.randomUUID(), at: now(), kind: "notify",
+        level: "now", status: "unread", source, title }, time.midnight(now())), context),
       isClaimed: (ref: string) => main.commit(tx => isClaimed(tx, ref), context),
       claim: (ref: string) => main.commit(tx => claim(tx, ref), context),
       delivered: (items: readonly Notification[]) => main.commit(tx => recordDeliveries(tx, items), context),

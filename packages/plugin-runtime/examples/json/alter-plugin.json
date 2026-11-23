@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "json",
+  "version": "1.0.0",
+  "displayName": "JSON 消息",
+  "description": "轮询JSON 消息",
+  "tools": [],
+  "sources": [
+    {
+      "name": "json",
+      "minIntervalSeconds": 300
+    }
+  ],
+  "network": [
+    {
+      "host": "hn.algolia.com",
+      "methods": [
+        "GET"
+      ],
+      "pathPrefixes": [
+        "/api/v1/search"
+      ]
+    }
+  ],
+  "secrets": [],
+  "borrows": [],
+  "resources": {
+    "memoryMB": 128,
+    "timeoutMs": 20000,
+    "storageKB": 64
+  }
+}

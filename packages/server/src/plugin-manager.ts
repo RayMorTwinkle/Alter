@@ -1,5 +1,6 @@
 import { reply, type AlterApp, type AlterPlugin, type AlterSurface, type PluginDescription, type PluginStatus, type PluginView } from "@alter/core";
 import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
+import type { ExternalPlugins } from "./ext-plugins.ts";
 import type { Sources } from "@alter/plugin-sources";
 import type { Agenda } from "./server.ts";
 import { openSecrets } from "./secrets.ts";
@@ -178,4 +179,5 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
     async close() { closed = true; await Promise.all([...plugins.values()].map(p => p.close())); },
   };
 }
-export type PluginManager = ReturnType<typeof createPluginManager> & { sources?: Sources };
+export type PluginManager = Omit<ReturnType<typeof createPluginManager>, "get"> & { sources?: Sources; ext?: ExternalPlugins;
+  get(id: string): Pick<ReturnType<ReturnType<typeof createPluginManager>["get"]>, "patch" | "check"> };

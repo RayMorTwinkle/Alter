@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
 import { clock } from "../format.ts";
-import type { ApprovalStats, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
+import { ExtPlugins } from "./ExtPlugins.tsx";
+import type { ExtPluginView, ApprovalStats, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
 
 type Draft = Record<string, string | boolean>;
@@ -283,7 +284,7 @@ function Sources() {
   );
 }
 
-export function SettingsSheet({ onClose, onToggleLocale }: { onClose: () => void; onToggleLocale: () => void }) {
+export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { onClose: () => void; onToggleLocale: () => void; extPlugins?: ExtPluginView[] }) {
   const all = useT();
   const t = all.settings;
   const [plugins, setPlugins] = useState<PluginView[] | null>(null);
@@ -304,6 +305,8 @@ export function SettingsSheet({ onClose, onToggleLocale }: { onClose: () => void
   return (
     <Sheet title={t.title} onClose={onClose}>
       {error && <p className="form-error">{error}</p>}
+
+      <ExtPlugins plugins={extPlugins} />
 
       <section className="settings-block">
         <h3>{t.plugins}</h3>

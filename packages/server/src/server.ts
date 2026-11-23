@@ -9,6 +9,7 @@ import {
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
 import { templates, SourceError } from "@alter/plugin-sources";
+import { PluginError } from "@alter/plugin-runtime";
 import type { PluginManager } from "./plugin-manager.ts";
 import { redirectUri, settingsWriter } from "./settings-api.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
@@ -27,7 +28,7 @@ function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" }).end(JSON.stringify(data));
 }
 
-async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(req: IncomingMessage, optional = false): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of req.iterator({ destroyOnReturn: false })) {
@@ -35,6 +36,7 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
     if (length > 1024 * 1024) { req.resume(); throw new HttpError(413, "Request too large"); }
     chunks.push(chunk);
   }
+  if (optional && !length) return {};
   try {
     const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (value && typeof value === "object" && !Array.isArray(value)) return value;
@@ -98,6 +100,10 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       broadcast("calendar", agenda());
     }
     if (clients.size) broadcast("plugins", plugins.list());
+  });
+  const ext = plugins?.ext;
+  const stopExt = ext?.subscribe(() => {
+    if (clients.size) { broadcast("ext-plugins", ext.list()); broadcast("plugins", plugins!.list()); }
   });
   const sources = plugins?.sources;
   const stopSources = sources?.subscribe(namesChanged => {
@@ -179,6 +185,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (clients.has(res)) webDelivery(snapshot.notifications);
       if (surface.partial) write(res, frame("delta", surface.partial));
       if (plugins) write(res, frame("plugins", plugins.list()));
+      if (ext) write(res, frame("ext-plugins", ext.list()));
       if (sources) write(res, frame("sources", sources.list()));
       return;
     } else if (method === "POST" && path === "/api/messages") {
@@ -273,6 +280,15 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       const id = path.split("/")[3]!;
       if (method === "PATCH") return json(res, 200, await sources.patch(id, await body(req)));
       await sources.remove(id);
+    } else if (method === "GET" && path === "/api/ext-plugins") {
+      return json(res, 200, ext?.list() ?? []);
+    } else if (ext && method === "POST" && path === "/api/ext-plugins/install") {
+      return json(res, 201, await ext.install(await body(req)));
+    } else if (ext && method === "POST" && /^\/api\/ext-plugins\/[^/]+\/(approve|reject|rollback|disable|enable)$/.test(path)) {
+      const [, , , id, action] = path.split("/");
+      await ext.action(id!, action!, await body(req, action !== "approve"));
+    } else if (ext && method === "DELETE" && /^\/api\/ext-plugins\/[^/]+$/.test(path)) {
+      await ext.action(path.split("/")[3]!, "delete", {});
     } else if (method === "GET" && path === "/api/plugins") {
       return json(res, 200, plugins?.list() ?? []);
     } else if (method === "GET" && path === "/api/plugins/feishu/guide") {
@@ -302,7 +318,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
 
   const server = createServer((req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof SourceError ? new HttpError(cause.status, cause.message) : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
+      const error = cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message) : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);
       if (res.headersSent) { res.destroy(); return; }
       if (error instanceof HttpError) json(res, error.status, { error: error.message });
@@ -314,6 +330,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     stopHeartbeat();
     stopPlugins?.();
     stopSources?.();
+    stopExt?.();
     unsubscribe?.();
     surface.detach();
     for (const res of clients.keys()) res.end();
