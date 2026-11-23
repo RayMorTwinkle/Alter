@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, FeishuPairing, Funnel, MemoryItem, Snapshot, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, FeishuPairing, Funnel, HeartbeatView, MemoryItem, Snapshot, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -30,6 +30,10 @@ export const api = {
   transcript: (taskId: string) =>
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
   usage: () => request<UsageRow[]>("/api/usage"),
+  heartbeat: () => request<HeartbeatView>("/api/heartbeat"),
+  runHeartbeat: () => request<unknown>("/api/heartbeat/run", { body: {} }),
+  heartbeatFeedback: (id: string, feedback: "useful" | "useless") =>
+    request<void>(`/api/heartbeat/${encodeURIComponent(id)}/feedback`, { body: { feedback } }),
   stats: (range: StatsRange) => request<Stats>(`/api/stats?range=${range}`),
   calendar: () => request<Agenda>("/api/calendar"),
   feishu: () => request<FeishuPairing>("/api/feishu"),
@@ -43,7 +47,7 @@ export const api = {
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -77,6 +81,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "calendar": return dispatch({ type: "agenda", agenda: data });
         case "memory": return dispatch({ type: "memory", memory: data });
         case "notifications": return dispatch({ type: "notifications", notifications: data });
+        case "heartbeat": return dispatch({ type: "heartbeat" });
       }
     });
   }
