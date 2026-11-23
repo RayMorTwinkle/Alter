@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, approvalStats, isApprovalDecision, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
+  FeedbackError, MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
 import { templates, SourceError } from "@alter/plugin-sources";
@@ -80,7 +80,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       console.warn("Web notification receipt failed", error);
     });
   }
+  let latestFeedback: Awaited<ReturnType<AlterApp["feedback"]["view"]>>;
   const surface = await observeSurface(app, ({ event, data }) => {
+    if (event === "feedback") latestFeedback = data;
     if (!clients.size) return;
     const message = frame(event, data);
     for (const res of clients.keys()) write(res, message);
@@ -194,6 +196,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (plugins) write(res, frame("plugins", plugins.list()));
       if (ext) write(res, frame("ext-plugins", ext.list()));
       if (sources) write(res, frame("sources", sources.list()));
+      write(res, frame("feedback", latestFeedback));
       return;
     } else if (method === "POST" && path === "/api/messages") {
       const { text } = await body(req);
@@ -221,7 +224,22 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "POST" && /^\/api\/notifications\/[^/]+$/.test(path)) {
       const patch = await body(req);
       if (!notificationPatch.check(patch) || !Object.keys(patch).length) throw new HttpError(400, "Expected read status or useful/useless feedback");
-      if (!await updateNotification(app.main, path.split("/")[3]!, patch)) throw new HttpError(404, "Unknown notification");
+      if (!await updateNotification(app.main, path.split("/")[3]!, patch, app.now())) throw new HttpError(404, "Unknown notification");
+    } else if (method === "GET" && path === "/api/feedback") {
+      return json(res, 200, await app.feedback.view());
+    } else if (method === "GET" && path === "/api/feedback/export") {
+      res.setHeader("Content-Disposition", 'attachment; filename="alter-weekly-feedback.json"');
+      return json(res, 200, (await app.feedback.stats()).weekly);
+    } else if (method === "GET" && path === "/api/feedback/stats") {
+      return json(res, 200, await app.feedback.stats());
+    } else if (method === "POST" && path === "/api/feedback/more") {
+      return json(res, 200, await app.feedback.more());
+    } else if (method === "POST" && /^\/api\/feedback\/[^/]+\/(answer|skip)$/.test(path)) {
+      const id = path.split("/")[3]!;
+      if (path.endsWith("/skip")) await app.feedback.skip(id);
+      else await app.feedback.answer(id, await body(req));
+    } else if (method === "POST" && /^\/api\/feedback\/changes\/[^/]+\/undo$/.test(path)) {
+      await app.feedback.undo(path.split("/")[4]!);
     } else if (method === "GET" && path === "/api/memory") {
       return json(res, 200, legacyMemory(req) ? app.memory.list() : app.memory.store.view());
     } else if (method === "GET" && path === "/api/memory/changes") {
@@ -334,7 +352,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
 
   const server = createServer((req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message)
+      const error = cause instanceof FeedbackError || cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message)
         : cause instanceof MemoryConflict ? new HttpError(409, cause.message)
         : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);

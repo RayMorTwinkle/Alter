@@ -31,6 +31,10 @@ it("approves the proposed bytes only via authenticated plugin management and pre
   expect(await (await web.read("/api/plugins")).json()).toContainEqual(expect.objectContaining({
     id: "ext-demo", provides: { channels: [], capabilities: ["ext-demo_get"], sources: [] } }));
   expect(web.app.capabilities.toolActions.get("ext-demo_get")?.effect).toBe("read");
+  const feedback = async () => (await web.app.feedback.more()).filter(q => q.multi);
+  expect(await feedback()).toEqual([]);
+  await web.app.borrowSource("example", "ext-demo_get", {}, AbortSignal.timeout(5000));
+  expect((await feedback()).map(q => q.prompt)).toEqual(["用过「Demo」后，你觉得哪里有帮助？"]);
   expect((await web.post(endpoint + "/disable", {})).status).toBe(204);
   expect(web.app.capabilities.toolActions.has("ext-demo_get")).toBe(false);
   expect((await web.post(endpoint + "/enable")).status).toBe(204);

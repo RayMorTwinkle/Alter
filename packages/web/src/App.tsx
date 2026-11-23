@@ -10,6 +10,7 @@ import { NotificationsSheet, TaskSheet } from "./components/Sheets.tsx";
 import { clock } from "./format.ts";
 import { StatsSheet } from "./components/Stats.tsx";
 import { SettingsSheet } from "./components/Settings.tsx";
+import { FeedbackSheet } from "./components/Feedback.tsx";
 import { HeartbeatSheet } from "./components/Heartbeat.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
@@ -55,6 +56,8 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [showHeartbeat, setShowHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const awaiting = state.extPlugins.find(p => p.pending);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const questions = state.feedback?.pending.filter(p => p.status === "pending").length ?? 0;
   const [heartbeat, setHeartbeat] = useState<HeartbeatView | null>(null);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
   const [showNotices, setShowNotices] = useState(false);
@@ -168,6 +171,12 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       </header>
 
       {error && <div className="toast" role="alert" onClick={() => setError("")}>{t.error}：{error}</div>}
+      {!awaiting && questions > 0 && !showFeedback && (
+        <div className="install-banner" role="status">
+          <span>{t.fb.banner(questions)}</span>
+          <button className="text-btn" onClick={() => setShowFeedback(true)}>{t.fb.answer}</button>
+        </div>
+      )}
       {awaiting && !showSettings && (
         <div className="install-banner" role="status">
           <span>{t.ext.pendingBanner(awaiting.pending!.manifest.displayName)}</span>
@@ -202,7 +211,8 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       </nav>
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
-      {showUsage && <StatsSheet onClose={() => setShowUsage(false)} />}
+      {showUsage && <StatsSheet onClose={() => setShowUsage(false)} onOpenFeedback={() => { setShowUsage(false); setShowFeedback(true); }} />}
+      {showFeedback && <FeedbackSheet view={state.feedback} onClose={() => setShowFeedback(false)} />}
       {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} onToggleLocale={onToggleLocale} extPlugins={state.extPlugins} />}
       {showHeartbeat && <HeartbeatSheet view={heartbeat} onClose={() => setShowHeartbeat(false)} onChange={() => setHeartbeatTick(n => n + 1)} />}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}

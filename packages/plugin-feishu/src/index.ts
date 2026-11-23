@@ -86,7 +86,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
       const chatId = store.value.owner?.chatId;
       if (!ready || !chatId) return;
       for (const item of [...notifications].reverse()) {
-        if (item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
+        if (item.source === "feedback" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
         queued.add(item.id);
         outbox = outbox.then(async () => {
           // Reserve before sending: a crash after Feishu accepts the message must never replay it.
@@ -106,6 +106,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
     let observation: Awaited<ReturnType<typeof observeSurface>> | undefined;
     const observe = () => observeSurface(app, (event, source) => {
       if (event.event === "notifications") { notifications = event.data; pushNotifications(); }
+      if (event.event === "feedback") cards.feedback(event.data);
       if (event.event === "pending") cards.update(event.data);
       if (event.event !== "timeline" || event.data.kind !== "assistant" || source !== "feishu") return;
       const chatId = store.value.owner?.chatId;

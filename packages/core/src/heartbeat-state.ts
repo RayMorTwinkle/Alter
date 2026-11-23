@@ -1,3 +1,4 @@
+import { FeedbackOutcomes } from "./feedback-settings.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import { conversationDoc, LiveDoc, ROOT_CONVERSATION_ID, type Cursor, type EntryId, type Tx } from "./runtime.ts";
@@ -55,6 +56,7 @@ export async function restoreActivity(tx: Tx, at: number) {
 }
 
 export async function beginInspection(tx: Tx, state: State, at: number, id: string) {
+  (await tx.doc(FeedbackOutcomes, ROOT_CONVERSATION_ID)).inspections[id] = { at, value: 0 };
   state.lastRunId = id;
   state.lastInspection = at;
   state.inspections++;
@@ -74,7 +76,10 @@ export async function recordAdoption(tx: Tx, inspection: string | number, vote?:
   else sample.implicit = true;
   // Late or corrected feedback changes only this inspection's weighted contribution.
   const weight = alpha * (1 - alpha) ** (state.inspections - sample.index);
-  state.adoptionRate += weight * (adopted(sample) - previous);
+  const value = adopted(sample);
+  state.adoptionRate += weight * (value - previous);
+  const outcome = (await tx.doc(FeedbackOutcomes, ROOT_CONVERSATION_ID)).inspections[String(inspection)];
+  if (outcome) outcome.value = value;
 }
 export async function userActivity(tx: Tx, state: State, at: number) {
   state.userMessages = state.userMessages.filter(t => t > at - 24 * hour);
@@ -88,4 +93,12 @@ export async function activeHeartbeat(tx: Tx) {
   if (run?.first !== undefined && state.firstEntry === run.first && state.lastInspection !== undefined) {
     return { heartbeatAt: state.lastInspection, ...(state.lastRunId && { heartbeatId: state.lastRunId }) };
   }
+}
+
+export async function heartbeatResponse(tx: Tx, id: string) {
+  const sample = await tx.doc(Samples, id, null);
+  return !!sample.implicit || Object.keys(sample.votes).length > 0;
+}
+export async function heartbeatAdopted(tx: Tx, id: string) {
+  return adopted(await tx.doc(Samples, id, null));
 }

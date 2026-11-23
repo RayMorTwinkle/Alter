@@ -1,4 +1,4 @@
-# Web API 契约（v1.19）
+# Web API 契约（v1.20）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -416,3 +416,33 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 `ctx.http.request` 提供宿主侧密钥请求头注入，跨源跳转清除请求头。代发仍限制公开 HTTPS 地址、超时、响应大小和频率，每插件每分钟最多 60 跳。只读调用期间的代发限无请求体的 GET/HEAD，受污点影响时拒绝查询串。宿主记录代发决策。直连请求由插件自行处理。代码哈希不符时隔离该版本。连续调用失败 5 次暂停插件，来源连续 3 次返回无效结构时暂停该来源。
 
 `resources.memoryMB` 约束插件进程的 V8 老生代和 RSS。独立监测线程每 100 ms 采样进程 RSS，超过上限时终止该进程。宿主按 `timeoutMs` 终止超时调用。插件另行启动的外部程序自行管理其资源。
+
+## 反馈闭环（v1.20）
+
+报告和每周回访共享题库。每次出题得到独立的 `id`，两个渠道使用同一个 ID 作答。`candidateId` 标识题库条目，`batch` 标识同组出题。时间戳单位为 Unix 毫秒。
+
+| 方法 | 路径 | 请求与结果 |
+|---|---|---|
+| GET | `/api/feedback` | `FeedbackView` 含待答 `pending`、历史 `history` 和 `changes`。题目含选项、来源、原因、结构化效果、出口、出题时间。历史记录含作答时间、选项、补充文字与 `changeIds`。 |
+| POST | `/api/feedback/:id/answer` | `{"options":["部分对"],"other":"只在周末"}`。成功返回 204。单选最多选一项，多选可选多项。允许其他时可以只提交文字。使用该题实际显示的选项。猜测选“部分对”须写下修正；选“不对”并补充文字会修正条目，只选“不对”会删除。 |
+| POST | `/api/feedback/:id/skip` | `{}`，返回 204。 |
+| POST | `/api/feedback/more` | `{}`，返回 `FeedbackQuestion[]`，最多 5 题。题库冷却时返回空数组。 |
+| POST | `/api/feedback/changes/:id/undo` | `{}`，返回 204。按变更 ID 回退，并在历史记录中追加逆向变更。 |
+| GET | `/api/feedback/stats` | `FeedbackStats`，含全部历史统计、对应指标的变更前后样本及每周产品反馈。 |
+| GET | `/api/feedback/export` | 下载 `alter-weekly-feedback.json`，内容是 `FeedbackWeek[]`，含周汇总和用户针对新功能提交的选项与补充文字。 |
+
+以上接口沿用会话登录和 JSON 写请求。选项非法返回 400，ID 不存在返回 404，题目已失效、另一端已提交不同答案、撤销会覆盖较新改动时返回 409。重交同一答案、重复跳过或重复撤销返回 204。SSE 在首次连接、重连及变更时发送 `feedback`，载荷与 GET 一致。内存库和主事务分别落盘期间可见短暂的 `applying` 状态，启动时继续完成。
+
+`effect.kind` 取 `memory`、`param` 或 `metric`。记忆变更通过 `memoryAction` 区分确认、修正、删除等操作，并引用 `memoryChangeId`，可在记忆历史中查看完整快照。参数变更给出键、前值、后值；分诊和权限说明另有来源或工具 `scope`。撤销记录含 `undoOf`，原记录含 `undoneBy`。部署目录的 `feedback.sqlite` 提供可直接查询的 `feedback_questions`、`feedback_issues`、`feedback_changes` 和 `feedback_param_changes`。这些表从主事务的已提交状态恢复。
+
+两个出口以最近 7 天有用户互动为前提。自动回访从启用满一周起，到期后在本地 08:00–23:00、最近一小时有互动、主会话和收件箱空闲时发送。一次需有 3–5 道可问的题。连续两次整组明确跳过，下一次间隔为 14 天。出题后冷却 7 天，跳过后冷却 14 天，沟通方式题作答后冷却 28 天。手动取题属于用户互动。报告侧通过 `pickQuestions(tx, { outlet: "report", limit: 2 })` 取题，同一事务内登记出口和冷却。报告间隔乘数由 `(await tx.doc(Preferences, ROOT_CONVERSATION_ID)).reportFrequency` 读取，默认 1，取值 0.5、1、2。
+
+出题时用记忆索引和近 7 天使用概况审阅候选题。模型以低思考强度运行，用量归入 `feedback`。已明确的回复长度偏好会跳过。新功能需在 30 天内上线或安装，且近 14 天内至少调用三次或产生过结果。每批最多展示一道新功能题，满意度和主动产出有用率合计最多一道。
+
+改写题的 `optionMap` 将显示选项映射到原选项，参数效果的 `mapping` 直接以显示选项为键。某题映射验证失败时使用该题模板。带补充的猜测修正会合并为短标题和完整正文，模型不可用或输出无效时按用户原话保存，均可撤销。
+
+回答率与跳过率的分母是实际出题次数，含待答和已失效题。按来源和单选、多选分别汇总。猜测确认率为回答“对”的次数除以猜测题的作答次数。“部分对”计入分母。满意度按不满意、一般、满意记为 1–3，有用率按有用、没用记为 1、0。“还没看”和单独填写的其他文字保留在历史中。撤销保留作答事实和原始变更数，已撤销的指标样本退出时间序列。变更前后各取七天，同时返回样本数，缺少样本时均值为 null。每周汇总按配置时区的周一分组。
+
+事件通知可带原始事件类别 `category`。新分诊偏好用来源和类别的 JSON 二元组字符串作键，旧记录沿用来源名。无需主事务时也可通过 `await app.settings.feedback()` 读取回访参数。参数答案与当前值相同且没有新的记忆变更时，`changeIds` 为空。
+
+飞书使用卡片 JSON 2.0 表单。提交按钮通过 `card.action.trigger` 回传整张表单，服务端核对已配对的用户和已发送卡片的消息 ID。[飞书表单容器](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/form-container)

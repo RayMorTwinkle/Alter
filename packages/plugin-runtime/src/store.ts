@@ -8,7 +8,7 @@ import { activatePackage, preparePackage, verify } from "./packages.ts";
 export type Status = "enabled" | "disabled" | "paused" | "quarantined";
 export type Progress = { seen?: string[]; invalid: number; paused: boolean; next: number };
 type Dependencies = Record<string, string>;
-export type Version = { userApproved?: boolean; dependencies?: Dependencies; manifest: Manifest; sha: string; kv: Record<string, unknown>; sources: Record<string, Progress>; status: Status; failures: number };
+export type Version = { installedAt?: number; userApproved?: boolean; dependencies?: Dependencies; manifest: Manifest; sha: string; kv: Record<string, unknown>; sources: Record<string, Progress>; status: Status; failures: number };
 type Proposal = { manifest: Manifest; sha: string; path: string; staged?: string; dependencies?: Dependencies };
 type Entry = { pending?: Proposal; versions: Version[] };
 export function openStore(data: string) {
@@ -75,7 +75,7 @@ export function openStore(data: string) {
       discard(old);
       return view(id).pending!;
     },
-    async approve(id: string, sha: unknown) {
+    async approve(id: string, sha: unknown, at = Date.now()) {
       const proposal = get(id).pending;
       check(proposal && proposal.sha === sha, "Pending hash does not match");
       verify(proposal.path, proposal.sha);
@@ -94,6 +94,7 @@ export function openStore(data: string) {
           const version: Version = known ?? { sha: p.sha, manifest: p.manifest, kv: structuredClone(kv),
             sources: structuredClone(old?.sources ?? {}), status: "enabled", failures: 0 };
           if (!version.userApproved) version.status = "enabled";
+          version.installedAt ??= at;
           version.userApproved = true;
           version.dependencies = p.dependencies ?? {};
           e.versions.push(version);

@@ -1,3 +1,4 @@
+import { FeedbackOutcomes, interacted, triageScope } from "./feedback-settings.ts";
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import { obj, oneOf, str } from "@earendil-works/pi-schema";
 import type { calendarTime } from "./calendar-time.ts";
@@ -6,7 +7,7 @@ import { context, defineTool, reply, conversationDoc, ROOT_CONVERSATION_ID, type
 
 export type Notification = {
   id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
-  title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
+  title: string; body?: string; source: string; category?: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
 export const Notifications = conversationDoc<{ entries: Notification[] }>("notifications", () => ({ entries: [] }));
@@ -114,11 +115,13 @@ export async function addNotification(tx: Tx, item: Notification, day: number) {
   }
 }
 
-export function updateNotification(main: Conversation, id: string, patch: { status?: "read"; feedback?: Notification["feedback"]; pushedAt?: number }) {
+export const notificationClocks = new WeakMap<Conversation, () => number>();
+export function updateNotification(main: Conversation, id: string, patch: { status?: "read"; feedback?: Notification["feedback"]; pushedAt?: number }, at = (notificationClocks.get(main) ?? Date.now)()) {
   return main.commit(async tx => {
     const item = (await tx.doc(Notifications, main.id)).entries.find(item => item.id === id)
       ?? (await tx.doc(DigestDay, main.id)).overflow.find(item => item.id === id);
     if (!item) return false;
+    if (patch.feedback || patch.status) await interacted(tx, at);
     if (patch.status) item.status = patch.status;
     if (patch.pushedAt !== undefined && item.pushedAt === undefined) {
       await recordDeliveries(tx, [item]);
@@ -127,7 +130,12 @@ export function updateNotification(main: Conversation, id: string, patch: { stat
     if (patch.feedback && item.heartbeatAt !== undefined) {
       await recordAdoption(tx, item.heartbeatId ?? item.heartbeatAt, { id, useful: patch.feedback === "useful" });
     }
-    if (patch.feedback) item.feedback = patch.feedback;
+    if (patch.feedback) {
+      item.feedback = patch.feedback;
+      if (item.kind === "event") (await tx.doc(FeedbackOutcomes, main.id)).notifications[id] = {
+        at: item.at, source: triageScope(item.source, item.category), value: Number(patch.feedback === "useful"),
+      };
+    }
     return true;
   }, context);
 }

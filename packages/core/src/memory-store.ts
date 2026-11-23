@@ -33,12 +33,13 @@ export function sentence(value: string, limit: number) {
   const first = value.trim().split(/(?<=[。！？!?])|(?<=\.)\s|[\r\n]/u, 1)[0] || value;
   return [...first.trim()].slice(0, limit).join("");
 }
-function indexLine(e: MemoryEntry) {
+function indexLine(e: MemoryEntry, expandTitles = false) {
   const goal = e.type === "goal" ? "，" + { active: "进行中", pending: "待确认", done: "已完成" }[e.status] : "";
   const deadline = e.dueAt === undefined ? "" : "，期限 " + new Date(e.dueAt).toISOString();
   const title = e.title.trim().replace(/\s+/g, " ");
   const hint = sentence(e.body, 60).replace(/\s+/g, " ");
-  return `[${labels[e.type]}] ${title}${hint.startsWith(title) ? "" : " — " + hint}（#${e.id}${e.guess ? "，猜的" : ""}${goal}${deadline}）`;
+  const summary = hint.startsWith(title) ? (expandTitles ? hint : title) : title + " — " + hint;
+  return `[${labels[e.type]}] ${summary}（#${e.id}${e.guess ? "，猜的" : ""}${goal}${deadline}）`;
 }
 
 export function openMemoryStore(path: string, now: () => number, timeZone: string, initial?: { entries: MemoryEntry[]; sequence: number }) {
@@ -121,7 +122,7 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
   }
   const processed = (batch: string) => !!db.prepare("SELECT 1 FROM changes WHERE batch=?").get(batch);
   function lastBatch() {
-    return db.prepare("SELECT batch FROM changes WHERE batch IS NOT NULL ORDER BY id DESC LIMIT 1").get()?.batch as string | undefined;
+    return db.prepare("SELECT batch FROM changes WHERE kind='consolidate' AND batch IS NOT NULL ORDER BY id DESC LIMIT 1").get()?.batch as string | undefined;
   }
   function apply(actions: Operation[], kind: MemoryChange["kind"] = "write", batch?: string, expected?: number) {
     const operations = transaction(() => {
@@ -208,10 +209,10 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
   function seed() {
     return { entries: entries(), sequence: Number(db.prepare("SELECT seq FROM sqlite_sequence WHERE name='entries'").get()?.seq ?? 0) };
   }
-  function view() {
+  function view({ expandTitles = false } = {}) {
     refresh();
     const active = entries();
-    const index = active.map(indexLine).join("\n");
+    const index = active.map(e => indexLine(e, expandTitles)).join("\n");
     return { index, entries: active, needsConsolidation: [...index].length > 2000 };
   }
   function delta(since: number) {

@@ -1,3 +1,4 @@
+import { interacted, Preferences } from "./feedback-settings.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { calendarTime } from "./calendar-time.ts";
 import type { AlterPlugin } from "./capabilities.ts";
@@ -14,10 +15,10 @@ import type { ProactiveBudget } from "./usage.ts";
 
 type Signals = { adoptionRate: number; dueGoals: number; digestCount: number; userMessages: number };
 const base = 5 * hour;
-export function nextInterval({ adoptionRate, dueGoals, digestCount, userMessages }: Signals) {
+export function nextInterval({ adoptionRate, dueGoals, digestCount, userMessages }: Signals, bias = 1) {
   const demand = 0.2 * Math.min(4, dueGoals) + 0.04 * Math.min(20, digestCount) + 0.06 * Math.min(12, userMessages);
   const factor = 2 ** (6.6 * (0.5 - adoptionRate) - demand);
-  return Math.round(Math.max(2 * hour, Math.min(48 * hour, base * factor)));
+  return Math.round(Math.max(2 * hour, Math.min(48 * hour, base * factor * bias)));
 }
 
 function section(label: string, lines: string[], count = lines.length) {
@@ -96,7 +97,7 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
       tasks.map(([id, t]) => [id, t.brief])])).digest("hex");
     if (!manual) {
       const intervalMs = nextInterval({ adoptionRate: state.adoptionRate, dueGoals: signals.dueGoals,
-        digestCount: signals.backlog, userMessages: signals.userMessages24h });
+        digestCount: signals.backlog, userMessages: signals.userMessages24h }, (await tx.doc(Preferences, ROOT_CONVERSATION_ID)).heartbeatBias);
       state.history = [...state.history.slice(-49), { at, intervalMs }];
       nextAt = allowed(at + intervalMs);
       if (!signals.backlog && state.fingerprint === fingerprint && state.lastInspection !== undefined &&
@@ -131,7 +132,11 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
         config.start + "-" + config.end, reset);
     },
     run: () => main().commit(async tx => (await inspect(tx, now())).run, context),
-    feedback: (id: string, feedback: NonNullable<HeartbeatRun["feedback"]>) => main().commit(tx => rateRun(tx, id, feedback), context),
+    feedback: (id: string, feedback: NonNullable<HeartbeatRun["feedback"]>) => main().commit(async tx => {
+      const result = await rateRun(tx, id, feedback);
+      if (result === "ok") await interacted(tx, now());
+      return result;
+    }, context),
     view: () => main().commit(async tx => {
       const { state, signals } = await inputs(tx, now());
       const item = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item;

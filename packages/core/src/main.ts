@@ -1,3 +1,6 @@
+import { createFeedback } from "./feedback-service.ts";
+import { feedbackCall } from "./feedback-model.ts";
+import { Preferences } from "./feedback-settings.ts";
 import { borrowForSource, SourceBorrow } from "./source-borrow.ts";
 import { obj, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
@@ -18,9 +21,9 @@ import { registerGoalReview } from "./goal-review.ts";
 import { observeHeartbeatRuns } from "./heartbeat-runs.ts";
 import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
-import { addNotification, claim, isClaimed, notifyTool, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
+import { addNotification, claim, isClaimed, notifyTool, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
 import { createProactiveBudget } from "./usage.ts";
-import { gatewayDataDirectories, judgeModels, tagRequest, withUsage } from "./models.ts";
+import { gatewayDataDirectories, auxiliaryModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
 import { consolidationThreshold, startConsolidation } from "./memory-consolidation.ts";
 import { memoryPrompt } from "./memory-prompt.ts";
@@ -56,6 +59,10 @@ export async function openAlter(
   const schedules = createScheduledTasks(() => main, registry, timeZone, now, () => plugins.find(p => p.calendarEvents)?.calendarEvents,
     () => ({ dispatch, budget, harness }));
   const scheduler = createScheduler(() => main, registry, timeZone, now, schedules);
+  const currentModels = () => typeof models === "function" ? models() : models;
+  const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
+  const askFeedback = feedbackCall(() => auxiliaryModels(currentModels(), dir, now, "feedback"), taskModel);
+  const feedback = createFeedback(() => main, () => harness, memory, scheduler, now, timeZone, askFeedback, options.dataDir ?? storageDirectories.get(storage));
   const capabilities = createCapabilityRegistry([...plugins, scheduler], options.demos ?? true);
   const demo = createDemoCapabilities(capabilities.activeDemos);
   const descriptions: Record<string, string> = {
@@ -102,12 +109,13 @@ export async function openAlter(
     },
   })] });
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
-  const currentModels = () => typeof models === "function" ? models() : models;
-  const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
-  const settings = openSettings(options.dataDir ?? storageDirectories.get(storage) ?? dir, proactive.heartbeat);
+  const settings = openSettings(options.dataDir ?? storageDirectories.get(storage) ?? dir, proactive.heartbeat, feedback.settings);
   const defaultMs = validateApprovalTimeout(options.approvalDefaultMs ?? Number(process.env.ALTER_APPROVAL_DEFAULT_MS ?? 60_000), "ALTER_APPROVAL_DEFAULT_MS");
   const broker = createBroker(() => main, capabilities, timeout, defaultMs, () => settings.approvalModel,
-    (statement, call, owner, context) => judge(judgeModels(currentModels(), dir, now, owner), taskModel, statement, call, context));
+    async (statement, call, owner, metadata) => {
+      const preferences = await harness.snapshot(Preferences, main.id, context);
+      return judge(auxiliaryModels(currentModels(), dir, now, "judge", owner), taskModel, statement, call, metadata, preferences?.permissionNotes[call.tool]);
+    });
   const taskExtensions = [extension, TaskTools, broker];
   const dispatch = createDispatcher(taskExtensions, taskModel, clock, (requested = thinking.task ?? "high") => {
     const model = currentModels().getModel(taskModel.provider, taskModel.modelId);
@@ -204,6 +212,7 @@ export async function openAlter(
   const main: Conversation = await harness.root(context, { agent: {
     extensions: [controlPlane, extension, broker], modelTools: controls,
   } });
+  notificationClocks.set(main, now);
   if (options.now) approvalClocks.set(main, options.now);
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases and conversational history.
@@ -233,6 +242,7 @@ export async function openAlter(
   const host: PluginHost = { watching: watches.watching, emit: event => emitEvent(main, event, watches.receive) };
   let stopSchedules: (() => Promise<void>) | undefined;
   let stopEvents: (() => Promise<void>) | undefined;
+  let stopFeedback: (() => Promise<void>) | undefined;
   let stopConsolidation: (() => Promise<void>) | undefined;
   const stops: (() => Promise<void>)[] = [];
   let closing: Promise<void> | undefined;
@@ -240,6 +250,7 @@ export async function openAlter(
     await stopConsolidation?.();
     await stopEvents?.();
     await stopSchedules?.();
+    await stopFeedback?.();
     const results = await Promise.allSettled(stops.reverse().map(async stop => stop()));
     await harness.close(context);
     const errors = results.filter(r => r.status === "rejected").map(r => r.reason);
@@ -247,6 +258,7 @@ export async function openAlter(
   }
   try {
     stops.push(await memory.start());
+    stopFeedback = await feedback.start();
     stops.push(await observeWakes(harness, main, now));
     for (const plugin of plugins) if (plugin !== memory && plugin.start) stops.push(await plugin.start(host));
     stopConsolidation = await startConsolidation(main, harness, memory, meteredModels, taskModel, async (since, until) =>
@@ -285,7 +297,7 @@ export async function openAlter(
     if (!tool) throw new Error("Source borrow requires an enabled capability");
     return borrowForSource(main, harness, [extension, broker], plugin, tool, args, signal, now());
   };
-  return { harness, main, settings, replacePlugin, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat,
+  return { harness, main, settings, feedback, replacePlugin, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat,
     notifications: {
       alert: (source: string, title: string) => main.commit(tx => addNotification(tx, { id: crypto.randomUUID(), at: now(), kind: "notify",
         level: "now", status: "unread", source, title }, time.midnight(now())), context),

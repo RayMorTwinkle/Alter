@@ -1,3 +1,4 @@
+import { interacted } from "./feedback-settings.ts";
 import { submitWake } from "./timeline.ts";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import type { ApprovalCall, ApprovalContext, Judgment } from "./approval-model.ts";
@@ -92,6 +93,7 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
       }
     }
     delete pending[requestId];
+    await interacted(tx, now);
     await onDelivered?.(tx);
     return reply("delivered");
   }, context);

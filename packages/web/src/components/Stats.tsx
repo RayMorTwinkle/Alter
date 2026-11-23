@@ -73,7 +73,7 @@ function usageDetail(usage: StatsUsage) {
   return `${compactNumber(usage.tokens)} · ${usage.calls}×`;
 }
 
-export function StatsSheet({ onClose }: { onClose: () => void }) {
+export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; onOpenFeedback?: () => void }) {
   const all = useT();
   const t = all.stats;
   const [range, setRange] = useState<StatsRange>("7d");
@@ -97,6 +97,7 @@ export function StatsSheet({ onClose }: { onClose: () => void }) {
           </button>
         ))}
       </div>
+      {onOpenFeedback && <button className="fb-entry" onClick={onOpenFeedback}><b>{all.fb.entryTitle}</b><span>{all.fb.entrySub}</span></button>}
       {error && <p className="form-error">{error}</p>}
       {!stats && !error && <p className="empty">{all.loading}</p>}
       {empty && <p className="empty">{t.empty}</p>}

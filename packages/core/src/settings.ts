@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { FeedbackSettings } from "./feedback-settings.ts";
+
 export type ApprovalMode = "shadow" | "auto" | "off";
 export const isApprovalMode = (value: unknown): value is ApprovalMode =>
   value === "shadow" || value === "auto" || value === "off";
@@ -15,7 +17,7 @@ export function isHeartbeatSettings(value: unknown): value is HeartbeatSettings 
     time.test(start) && time.test(end) && start !== end;
 }
 
-export function openSettings(dir: string | undefined, defaults: HeartbeatSettings) {
+export function openSettings(dir: string | undefined, defaults: HeartbeatSettings, feedback: () => Promise<Readonly<FeedbackSettings>>) {
   const path = dir && join(dir, "settings.json");
   let saved: { approvalModel?: unknown; heartbeat?: unknown } = {};
   if (path) {
@@ -28,6 +30,7 @@ export function openSettings(dir: string | undefined, defaults: HeartbeatSetting
   let approvalModel = mode;
   let heartbeat = saved.heartbeat;
   return {
+    feedback,
     get approvalModel() { return approvalModel; },
     get heartbeat() { return heartbeat ?? defaults; },
     set(value: ApprovalMode, window = heartbeat) {

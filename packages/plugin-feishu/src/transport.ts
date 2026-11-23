@@ -6,7 +6,8 @@ export type FeishuMessage = {
   id: string; openId?: string; chatId: string; chatType: string; type: string;
   text?: string; content?: string; at: number;
 };
-type CardAction = { openId?: string; messageId?: string; requestId?: string; decision?: ApprovalDecision };
+type CardAction = { openId?: string; messageId?: string; requestId?: string; decision?: ApprovalDecision;
+  feedbackId?: string; operation?: "answer" | "skip" | "more"; form?: Record<string, unknown> };
 type Toast = { toast: { type: "success" | "error" | "info"; content: string } };
 export type FeishuHandlers = {
   message(message: FeishuMessage): Promise<void>;
@@ -22,7 +23,7 @@ export type FeishuTransport = {
 
 type RawAction = {
   operator?: { open_id?: string }; context?: { open_message_id?: string };
-  action?: { value?: { requestId?: unknown; allow?: unknown; decision?: unknown } };
+  action?: { value?: { requestId?: unknown; allow?: unknown; decision?: unknown; feedbackId?: unknown; operation?: unknown }; form_value?: Record<string, unknown> };
 };
 
 export function dispatcher(handlers: FeishuHandlers) {
@@ -44,6 +45,10 @@ export function dispatcher(handlers: FeishuHandlers) {
     },
     "card.action.trigger": ({ operator, context, action }: RawAction) => {
       const value = action?.value;
+      if (typeof value?.feedbackId === "string" && (value.operation === "answer" || value.operation === "skip" || value.operation === "more")) {
+        return handlers.action({ openId: operator?.open_id, messageId: context?.open_message_id,
+          feedbackId: value.feedbackId, operation: value.operation, form: action?.form_value });
+      }
       return handlers.action({ openId: operator?.open_id, messageId: context?.open_message_id,
         requestId: typeof value?.requestId === "string" ? value.requestId : undefined,
         decision: isApprovalDecision(value?.decision) ? value.decision : value?.decision === undefined && typeof value?.allow === "boolean" ? (value.allow ? "once" : "deny") : undefined });
