@@ -11,7 +11,8 @@ type ActionPolicy = { effect: Effect; guarded?: true; seenArg?: string };
 export type ToolAction = ActionPolicy & { capability: string; action: string };
 export type Capability = {
   id: string;
-  mainLeasable: boolean;
+  /** Legacy manifest field. Enabled plugin actions are leasable (ADR-0012). */
+  mainLeasable?: boolean;
   actions: (ActionPolicy & { name: string })[];
 };
 
@@ -20,8 +21,8 @@ export const demoManifests: Capability[] = [
     { name: "list", effect: "read" }, { name: "create", effect: "write-local" },
     { name: "update", effect: "write-local", guarded: true },
   ] },
-  { id: "notes", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },
-  { id: "outbox", mainLeasable: false, actions: [{ name: "send", effect: "external-send" }] },
+  { id: "notes", mainLeasable: true, actions: [{ name: "read", effect: "read" }] },
+  { id: "outbox", mainLeasable: true, actions: [{ name: "send", effect: "external-send" }] },
 ];
 
 export type ExternalEvent = {

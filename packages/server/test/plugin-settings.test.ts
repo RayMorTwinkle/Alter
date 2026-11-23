@@ -46,6 +46,9 @@ it("serves all installed plugins with partial credentials and changes the live c
   await reopened.login();
   expect((await reopened.state()).leases.map(lease => lease.capability)).toContain("calendar");
   expect(await (await reopened.read("/api/calendar")).json()).toMatchObject({ events: [{ title: "热重载验证" }] });
+  const { leases } = await (await reopened.read("/api/stats?range=all")).json();
+  expect(leases).toMatchObject({ count: 1, byTool: { calendar_create: 1, calendar_list: 1 }, taintedRate: 0,
+    dispatchAfterLeaseRate: 0, items: [{ reason: "book", approved: false, calls: 1, succeeded: 1 }] });
 });
 
 it("serializes reloads, checks and masks saved and environment credentials on every transport", async () => {

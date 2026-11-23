@@ -47,7 +47,7 @@ it("removes only the lease tool and lease instruction when leasing is disabled",
   expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_set", "notify", "feedback_answer", "watch", "watch_list", "watch_cancel",
     "dispatch_task", "task_status", "task_message", "task_stop",
     "memory_read", "memory_search", "memory_write", "memory_delete"]);
-  expect(dispatch.instructions).toBe(lease.instructions!.replace("简短、频繁的日程操作可用 enable_tool 租用 calendar。", ""));
+  expect(dispatch.instructions).toBe(lease.instructions!.replace("一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 写明理由自己租用；可指定 action 单租只读工具。", ""));
 });
 
 it("leases once and renames the same calendar event across three user turns", async () => {

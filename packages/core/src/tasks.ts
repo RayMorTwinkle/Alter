@@ -2,6 +2,7 @@ import { arr, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
 import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
 import { submitWake } from "./timeline.ts";
+import { LeaseHistory, Leases } from "./leases.ts";
 import { Audit, Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
 import {
@@ -262,12 +263,17 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>) {
         const latest = tasks[identity.taskId]!;
         if (latest.status === "running") return reply(`Task ${identity.taskId} is running; use task_message`, true);
         await api.waitForTask(latest.worker, ctx);
-        await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, thinking, continuedFrom: continue_from,
-          context: previous.context, permission: previous.permission }), ctx);
-      } else {
-        if (!context || !permission) return reply("A new task requires context and permission", true);
-        await api.commit(tx => dispatch(tx, api.conversationId, taskId, { brief, context, permission, thinking }), ctx);
+        context = previous.context;
+        permission = previous.permission;
       }
+      if (!context || !permission) return reply("A new task requires context and permission", true);
+      const args = { brief, thinking, context, permission, continuedFrom: continue_from };
+      await api.commit(async tx => {
+        await dispatch(tx, api.conversationId, taskId, args);
+        const leases = await tx.doc(Leases, api.conversationId);
+        const history = await tx.doc(LeaseHistory, api.conversationId);
+        for (const id of Object.values(leases.records ?? {})) history.byId[id]!.dispatched = true;
+      }, ctx);
       return reply(taskId);
     },
   });

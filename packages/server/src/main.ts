@@ -17,7 +17,7 @@ async function start() {
   await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
   const app = await openAlter(
     await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking,
-    { demos: false, deferredLeases: ["calendar"], timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
+    { demos: false, deferredLeases: true, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
   );
   try {
     const plugins = installedPlugins(app, config.dataDir);

@@ -1,4 +1,4 @@
-# Web API 契约（v1.21）
+# Web API 契约（v1.22）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -455,3 +455,14 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 - `heartbeat` SSE 增加 `{ type: "report", report }`，报告设置变化时同步。重连时读取 `GET /api/heartbeat`。唤醒统计增加 `triage` 和 `report-due` 两种来源。分诊的 now 事件由主会话判断，只有主会话调用 notify 才会转告用户。通知的安静时段规则继续生效。报告通知的 source 为 report。分诊事件保留在通知记录中，漏斗的 pushed 仅将有投递凭据的历史 now 事件算作已推送。
 - 报告末尾按题号展示最多两道反馈题，保留出题时的题干和选项。用户可在 Web「回访与反馈」或直接回复作答。主会话用 `feedback_answer({ issueId, options, other? })` 提交，`issueId` 为该次出题的 `id`，选项为显示原文。与 Web 作答共用校验、幂等和偏好变更记录。
 - `ALTER_DIGEST_TIME` 已废弃。目标复查和固定每日摘要停止调度，审批最终过期通过任务报告反馈。历史统计仍可含 goal 角色。
+
+## v1.22 主会话租用统计（#95）
+
+`GET /api/state` 的 `leases[].capability` 在整组租用时为能力名（如 `mail`），单动作租用时为 `能力名/动作名`（如 `mail/read`）。
+
+`GET /api/stats` 新增 `leases`。按成功取得租约的时间筛选，续租另计一次；拒绝、超时和常驻工具不计入。拒绝与超时仍可从审批记录查看。升级前的租用没有历史明细。
+
+- `count` 是租约数。`byTool` 按实际注册的工具名计算被租次数，整组租用时组内每个工具各计一次。`taintedRate` 是取得时带污点的租约比例。
+- `items` 按取得时间倒序，含租约 ID、能力、工具列表、理由、时间、发起回合的 `wakeId`、污点和是否经用户批准（`approved`）。`calls` 是该租约下 Broker 已放行的调用数；`succeeded` 和 `failed` 是已收到结果的成功和失败数。审批挂起、拒绝和恢复重放不增加调用数。单动作与整组租约重叠时，调用归单动作租约。
+- `dispatchAfterLeaseRate` 是有效期内主会话成功执行过 `dispatch_task` 的租约占比，分子按租约去重。并存租约可关联同一派单，指标不判定派单原因。两项比例的分母均为 `count`，零分母返回 `null`。
+- 用 `wakeId` 和 `useWakeIds` 分别关联取得租约及实际使用工具的回合，按去重后的回合 ID 从 `wakes.items[].usage` 取主会话 token。派单次数、任务 token 和结果见 `tasks`。同一回合可能同时租用和派单。

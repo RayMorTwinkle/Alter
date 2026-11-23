@@ -1,5 +1,6 @@
 import { Audit, Requests, Reviews, shadowAgreement, type Review } from "./broker.ts";
 import { calendarTime } from "./calendar-time.ts";
+import { LeaseHistory, leaseStats } from "./leases.ts";
 import { funnel } from "./funnel.ts";
 import { Notifications } from "./notifications.ts";
 import type { AlterApp } from "./observe.ts";
@@ -112,11 +113,11 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
   const days = range === "day" ? 1 : range === "7d" ? 7 : range === "30d" ? 30 : undefined;
   const start = days ? calendarTime(timeZone).midnight(at, 1 - days) : -Infinity;
   const includes = (ms: number) => ms >= start && ms <= at;
-  const [tasks, ledger, audit, requests, wakes, notifications, reviews] = await Promise.all([
+  const [tasks, ledger, audit, requests, wakes, notifications, reviews, leaseHistory] = await Promise.all([
     app.harness.snapshot(Tasks, app.main.id, context), app.harness.snapshot(Ledger, app.main.id, context),
     app.harness.snapshot(Audit, app.main.id, context), app.harness.snapshot(Requests, app.main.id, context),
     app.harness.snapshot(Wakes, app.main.id, context), app.harness.snapshot(Notifications, app.main.id, context),
-    app.harness.snapshot(Reviews, app.main.id, context),
+    app.harness.snapshot(Reviews, app.main.id, context), app.harness.snapshot(LeaseHistory, app.main.id, context),
   ]);
   const dates = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
   let earliest = at;
@@ -241,9 +242,11 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
   }
   const notices = (notifications?.entries ?? []).filter(item => includes(item.at));
   for (const item of notices) earliest = Math.min(earliest, item.at);
+  const leases = leaseStats(leaseHistory?.byId ?? {}, includes);
+  for (const item of leases.items) earliest = Math.min(earliest, item.at);
   const calendarDays = days ?? 1 + (Date.parse(dates.format(at)) - Date.parse(dates.format(earliest))) / 86_400_000;
   const proactive = funnel(notices, timeZone, calendarDays, { at, feishu });
-  return { range, timeZone, at, total, byRole: [...roles].map(([role, usage]) => ({ role, ...usage })),
+  return { range, timeZone, at, total, leases, byRole: [...roles].map(([role, usage]) => ({ role, ...usage })),
     byModel: [...models].map(([model, usage]) => ({ model, ...usage })),
     tasks: { count: taskRows.length, completed, terminal, successRate: terminal ? completed / terminal : null,
       items: taskRows.sort((a, b) => b.createdAt - a.createdAt) },

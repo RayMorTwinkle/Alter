@@ -22,7 +22,7 @@ export function installedPlugins(app: AlterApp, dataDir: string, env = process.e
   return { ...manager, sources, ext,
     list: () => [...manager.list(), ...ext.views()],
     get: (id: string) => id.startsWith("ext-") ? ext.get(id) : manager.get(id),
-    async start() { const result = await manager.start(); await ext.start(); return result; },
+    async start() { const result = await manager.start(); await ext.start(); await app.finishPluginRegistration(); return result; },
     async close() { await ext.close(); await manager.close(); },
   };
 }
