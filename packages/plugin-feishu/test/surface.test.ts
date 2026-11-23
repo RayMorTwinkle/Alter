@@ -286,6 +286,27 @@ it("pushes a triaged external event to the paired owner exactly once", async () 
   expect(next.transport.sendText).not.toHaveBeenCalled();
 });
 
+it("sends one Feishu reply when the user's turn incorporates a fast task report", async () => {
+  let status: ServerResponse | undefined;
+  let worker: ServerResponse | undefined;
+  const f = await setup(({ model, messages }, res) => {
+    const last = messages.at(-1)!;
+    if (model === "offline/task") { worker = res; return; }
+    if (last.content.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "verify", context: "fresh", permission: "restricted" });
+    if (last.role === "tool" && last.content.startsWith("task-")) { status = res; return; }
+    say(res, last.content.includes("verified") ? "已核实" : "缺少报告");
+  });
+  await f.pair();
+  await f.send("work", "delegate");
+  await expect.poll(() => !!worker && !!status).toBe(true);
+  toolCall(worker!, "finish", { summary: "verified", refs: [] });
+  await expect.poll(() => f.feed.snapshot().ledger.length).toBe(1);
+  toolCall(status!, "task_status", {});
+  await f.app.main.waitForIdle(context);
+  expect(f.feed.snapshot().timeline.filter(i => i.kind === "assistant").map(i => i.text)).toEqual(["已核实"]);
+  expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "已核实"]]);
+});
+
 it("delivers explicit notify but keeps a task report after a Feishu user turn on the timeline", async () => {
   let worker: ServerResponse | undefined;
   const f = await setup(({ model, messages }, res) => {

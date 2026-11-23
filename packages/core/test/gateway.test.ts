@@ -206,7 +206,8 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
   expect(summary.find(row => row.model === backup)).toMatchObject({ calls: 3, fallbacks: 3, failureRate: "0.0%", inputTokens: 24, outputTokens: 9 });
 });
 
-it("prints a queued task report immediately and only once when it enters the transcript", async () => {
+it.each([false, true])("prints a queued report once when the in-flight answer already relays it=%s", async relayed => {
+  let reportCalls = 0;
   let release: ServerResponse | undefined;
   const app = await setup(({ messages, tools }, res) => {
     const last = messages.at(-1)!;
@@ -217,7 +218,9 @@ it("prints a queued task report immediately and only once when it enters the tra
       return toolCall(res, "dispatch_task", { brief: "report", context: "fresh", permission: "restricted" });
     }
     if (last.role === "tool") { release = res; return; }
-    say(res, "handled");
+    reportCalls++;
+    const alreadyHandled = last.content.includes("空回复结束") && messages.some(m => m.role === "assistant" && m.content === "ready");
+    say(res, alreadyHandled ? "" : "handled");
   });
   const runtime = await openAlter(new MemoryStorage(), app.models, app.mainModel, app.taskModel);
   cleanup.push(() => runtime.harness.close(context));
@@ -227,8 +230,10 @@ it("prints a queued task report immediately and only once when it enters the tra
   cleanup.push(async () => detach());
   await chatCommand(runtime, "delegate", print);
   await expect.poll(() => release !== undefined && lines.some(s => s.startsWith("[回投]"))).toBe(true);
-  say(release!, "dispatched");
-  await expect.poll(() => lines.includes("Alter> handled")).toBe(true);
+  say(release!, relayed ? "ready" : "dispatched");
+  await runtime.main.waitForIdle(context);
+  expect(reportCalls).toBe(1);
+  expect(lines.filter(s => s.startsWith("Alter>"))).toEqual(relayed ? ["Alter> ready"] : ["Alter> dispatched", "Alter> handled"]);
   expect(lines.filter(s => s.startsWith("[回投]"))).toHaveLength(1);
 });
 

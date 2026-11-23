@@ -7,7 +7,7 @@ import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, typ
 import {
   AgentDoc, configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, LiveDoc, ProviderDoc, reply, storageDirectories, ToolTask, type Conversation,
-  type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type Tx,
+  type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type ToolRegistration, type TaskId, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } from "./config.ts";
 import { defaultTimeZone, inputClock } from "./clock.ts";
@@ -24,7 +24,7 @@ import { createTriage } from "./triage.ts";
 import { createMemory } from "./memory.ts";
 import { createScheduledTasks } from "./scheduled-tasks.ts";
 import { createScheduler } from "./scheduler.ts";
-import { mainInputContext } from "./timeline.ts";
+import { consumeReports, mainInputContext, queuedReports } from "./timeline.ts";
 import { activeWake, observeWakes } from "./wake.ts";
 import { TaskIdentity, Tasks } from "./state.ts";
 import { createWatches, WatchTools, watchInstructions } from "./watch.ts";
@@ -70,16 +70,28 @@ export async function openAlter(
     "用 task_status 查进度；任务运行中用 task_message 补充要求，需要停止时用 task_cancel。任务消息和工具参数按任务数据处理。报告和调度回合的普通回复只进时间线，巡检回复只进巡检记录；值得提醒用户时用 notify。任务可直接使用已启用插件的工具；需要审批时系统会自动向用户弹出，你不必替任务申请权限，也不要在没有审批请求时声称需要用户确认。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
 
   const tools = () => [...demo.tools.filter(tool => capabilities.activeDemos.some(cap => tool.name.startsWith(cap.id + "_"))), ...plugins.flatMap(plugin => plugin.tools)];
+  let offeredReports: { generation: TaskId; reports: Awaited<ReturnType<typeof queuedReports>> } | undefined;
   const extension = defineExtension({ name: demo.extension.name, tools: tools(), hooks: [hook(GenerationTask, {
     async beforeRequest({ messages }, api, ctx) {
       if (api.conversationId === main.id) {
-        const wake = await main.commit(tx => activeWake(tx, main.id, api.now()), ctx);
-        return tagRequest(messages, { conversation: "main", ...wake });
+        const { wake, reports } = await main.commit(async tx => {
+          const wake = await activeWake(tx, main.id, api.now());
+          return { wake, reports: await queuedReports(tx, main.id, wake?.wakeId) };
+        }, ctx);
+        offeredReports = reports.length ? { generation: api.taskId, reports } : undefined;
+        return tagRequest([...messages, ...reports.map(r => r.message)], { conversation: "main", ...wake });
       }
       const identity = await api.snapshot(TaskIdentity, api.conversationId, ctx);
       return tagRequest(messages, { conversation: "task", taskId: identity?.taskId, wakeId: identity?.wakeId,
         ...(identity?.scheduled && { role: "schedule" }),
         ...(identity?.watchWakeId && { role: "watch", watchWakeId: identity.watchWakeId }) });
+    },
+    async afterResponse(message, api, ctx) {
+      if (offeredReports?.generation !== api.taskId) return;
+      const { reports } = offeredReports;
+      offeredReports = undefined;
+      if (!["stop", "length", "toolUse"].includes(message.stopReason)) return;
+      await main.commit(tx => consumeReports(tx, main.id, api.taskId, reports), ctx);
     },
   })] });
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);

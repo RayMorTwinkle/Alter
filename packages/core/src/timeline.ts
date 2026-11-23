@@ -4,7 +4,7 @@ import { Heartbeat, heartbeatKind, userActivity } from "./heartbeat-state.ts";
 import { wakeNotifications } from "./notifications.ts";
 import { Taint } from "./taint.ts";
 import { inputClock } from "./clock.ts";
-import { context, type Conversation, type ConversationHandle, type Tx, type JsonObject, type Cursor, type EntryRecord, type InboxState } from "./runtime.ts";
+import { context, InboxDoc, LiveDoc, type TaskId, type ConversationId, type Conversation, type ConversationHandle, type Tx, type JsonObject, type Cursor, type EntryRecord, type InboxState } from "./runtime.ts";
 
 export type TimelineItem = {
   id: string;
@@ -50,7 +50,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
     }
   }
   await main.submit(tx, { type: "input", requestId: input.id, content, whenBusy: "followUp",
-    entry: { kind: input.kind, data: input.data } });
+    onAbort: input.kind === "alter.task-report" ? "keep" : undefined, entry: { kind: input.kind, data: input.data } });
 }
 
 export async function submitMessage(main: Conversation, text: string, source = "web", requestId?: string) {
@@ -66,6 +66,37 @@ type InputEntry = Pick<EntryRecord, "kind" | "data">;
 function entryData(entry?: InputEntry) {
   const data = entry?.data;
   return data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
+}
+
+export function isInlineTaskReport(entry: InputEntry) {
+  return entry.kind === "alter.task-report" && entryData(entry)?.inline === true;
+}
+
+export async function queuedReports(tx: Tx, id: ConversationId, wakeId?: string) {
+  if (!wakeId) return [];
+  const inbox = await tx.doc(InboxDoc, id);
+  return inbox.items.flatMap(item => {
+    if (item.mode === "write" || item.entry?.kind !== "alter.task-report" || typeof item.content !== "string") return [];
+    const data = entryData(item.entry);
+    if (data?.wakeId !== wakeId || typeof data.at !== "number") return [];
+    return [{ id: item.id, message: { role: "user" as const, content: "本轮补充报告。\n" + item.content, timestamp: data.at } }];
+  });
+}
+
+// Place only reports included in this successful request. The run settles them with its original input.
+export async function consumeReports(tx: Tx, id: ConversationId, generation: TaskId, reports: Awaited<ReturnType<typeof queuedReports>>) {
+  const run = (await tx.doc(LiveDoc, id)).run;
+  if (run?.taskId !== generation) return;
+  const inbox = await tx.doc(InboxDoc, id);
+  for (const report of reports) {
+    const index = inbox.items.findIndex(item => item.id === report.id);
+    const item = inbox.items[index];
+    if (!item || item.mode === "write" || !item.entry) continue;
+    const entry = await tx.appendEntry(id, { kind: item.entry.kind, data: { ...entryData(item.entry), inline: true }, model: [report.message] });
+    tx.placeSubmission(item.id, entry.id);
+    run.inputs.push(item.id);
+    inbox.items.splice(index, 1);
+  }
 }
 
 function surfaceText(entry: InputEntry | undefined, fallback: string) {
@@ -115,9 +146,11 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
     const at = msg.timestamp;
     if (msg.role === "user") {
       const item = inputItem(entry, contentText(msg.content), id, at);
-      turn.source = item.source;
-      turn.heartbeat = entry.kind === heartbeatKind;
-      if (!turn.heartbeat) items.push(item);
+      if (!isInlineTaskReport(entry)) {
+        turn.source = item.source;
+        turn.heartbeat = entry.kind === heartbeatKind;
+      }
+      if (entry.kind !== heartbeatKind) items.push(item);
     }
     if (msg.role !== "assistant") continue;
     const text = contentText(msg.content);

@@ -3,6 +3,7 @@ import { defineDocFamily } from "@earendil-works/pi-durable";
 import { recordAdoption } from "./heartbeat-state.ts";
 import { NotifyReceipt } from "./notifications.ts";
 import { context, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Cursor, type Harness, type Tx } from "./runtime.ts";
+import { isInlineTaskReport } from "./timeline.ts";
 import { Schedules } from "./scheduler.ts";
 
 export type HeartbeatReason = "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
@@ -75,7 +76,7 @@ async function finish(tx: Tx, id: string, at: number) {
         minEntryId: submission.entry, maxEntryId: submission.answer }, 100, cursor);
       for (const entry of page.items) {
         for (const msg of entry.model ?? []) {
-          if (msg.role === "user" && entry.id !== submission.entry) break entries;
+          if (msg.role === "user" && entry.id !== submission.entry && !isInlineTaskReport(entry)) break entries;
           if (msg.role === "assistant") {
             run.tokens += msg.usage.totalTokens;
             run.finalReply = contentText(msg.content);
