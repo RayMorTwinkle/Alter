@@ -4,9 +4,10 @@ import { recordAdoption } from "./heartbeat-state.ts";
 import { NotifyReceipt } from "./notifications.ts";
 import { context, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Cursor, type Harness, type Tx } from "./runtime.ts";
 import { isInlineTaskReport } from "./timeline.ts";
+import { Reports, type ReportView } from "./report-state.ts";
 import { Schedules } from "./scheduler.ts";
 
-export type HeartbeatReason = "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
+export type HeartbeatReason = "inactive" | "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
 export type HeartbeatRun = {
   id: string; at: number; finishedAt: number | null; status: "ran" | "skipped" | "deferred"; skipReason: HeartbeatReason | null;
   counts: { goals: number; memories: number; chat: number; agenda: number; tasks: number; digests: number };
@@ -14,7 +15,7 @@ export type HeartbeatRun = {
   notified: boolean; finalReply: string; tokens: number; feedback: "useful" | "useless" | null;
 };
 type RunEvent = { type: "start" | "end"; id: string } | { type: "feedback"; id: string; feedback: "useful" | "useless" };
-export type HeartbeatEvent = RunEvent | { type: "schedule"; nextAt: number | null };
+export type HeartbeatEvent = RunEvent | { type: "schedule"; nextAt: number | null } | { type: "report"; report: ReportView };
 const Runs = defineDocFamily<{ run?: HeartbeatRun }, null>({ kind: "alter.heartbeat-run", version: 1,
   family: true, scope: "session", initial: () => ({}), checkpointWhen: () => false });
 const Index = conversationDoc<{ recent: string[]; pending: string[]; event?: RunEvent }>("heartbeat-runs",
@@ -53,7 +54,7 @@ export async function rateRun(tx: Tx, id: string, feedback: NonNullable<Heartbea
 }
 
 function actionId(tool: string, result: string) {
-  if (!["dispatch_task", "watch", "watch_create", "notify", "schedule_task", "schedule_create", "schedule_cancel"].includes(tool)) return;
+  if (!["dispatch_task", "watch", "watch_create", "notify", "schedule_create", "schedule_set", "task_stop"].includes(tool)) return;
   if (/^[\w.-]+$/.test(result)) return result;
   if (result.startsWith("{")) {
     try {
@@ -137,5 +138,15 @@ export async function subscribeHeartbeat(harness: Harness, listener: (event: Hea
   }, context);
   const initial = schedules?.value.byId["adaptive-heartbeat"]?.item;
   previous = initial?.status === "scheduled" ? initial.at : null;
-  return () => { runs?.detach(); schedules?.detach(); };
+  let lastReport: string | undefined;
+  const reports = await harness.observeDoc(Reports, ROOT_CONVERSATION_ID, {
+    advance(call) {
+      if (call.kind !== "value" || !call.value.view) return;
+      const value = JSON.stringify(call.value.view);
+      if (value !== lastReport) listener({ type: "report", report: call.value.view });
+      lastReport = value;
+    }, end() {},
+  }, context);
+  lastReport = JSON.stringify(reports?.value.view);
+  return () => { runs?.detach(); schedules?.detach(); reports?.detach(); };
 }

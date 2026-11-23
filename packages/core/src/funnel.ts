@@ -26,7 +26,7 @@ export function funnel(notifications: readonly Notification[], timeZone: string,
     if (item.kind === "reminder") { day.reminders++; continue; }
     day.triggered++;
     if (!item.filtered) day.passed++;
-    if (item.level === "now" && (!feishu || item.pushedAt !== undefined)) day.pushed++;
+    if (item.level === "now" && (item.pushedAt !== undefined || (!feishu && item.kind !== "event"))) day.pushed++;
     if (item.status === "read") day.read++;
     if (item.feedback === "useful") { day.useful++; useful++; }
     if (item.feedback === "useless") { day.useless++; useless++; }

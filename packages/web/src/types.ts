@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.20).
+// Mirrors docs/architecture/web-api.md (v1.21).
 
 export type TimelineItem = {
   id: string;
@@ -57,7 +57,8 @@ export type ScheduleTrigger =
   | { kind: "event"; eventId: string; offsetMinutes: number; anchor: "start" | "end" };
 
 export type ScheduledTask = {
-  id: string; brief: string; trigger: ScheduleTrigger; action: "task" | "wake";
+  // v1.13 snapshots only have action. v1.21 returns both fields.
+  id: string; brief: string; trigger: ScheduleTrigger; type?: "reminder" | "task" | "wake"; action: "reminder" | "task" | "wake";
   continue_from?: string; thinking?: "low" | "medium" | "high" | "max";
   createdAt: number; nextAt: number | null; paused: boolean;
   lastRun?: { dueAt: number; at: number; missed: boolean; skipped?: string; taskId?: string };
@@ -200,7 +201,7 @@ export type Stats = {
 };
 export type HeartbeatStats = { lastInspection?: number; adoptionRate: number; history: { at: number; intervalMs: number }[] };
 
-export type HeartbeatReason = "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
+export type HeartbeatReason = "inactive" | "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
 export type HeartbeatRun = {
   id: string; at: number; finishedAt: number | null; status: "ran" | "skipped" | "deferred"; skipReason: HeartbeatReason | null;
   counts: { goals: number; memories: number; chat: number; agenda: number; tasks: number; digests: number };
@@ -208,8 +209,10 @@ export type HeartbeatRun = {
   notified: boolean; finalReply: string; tokens: number; feedback: "useful" | "useless" | null;
 };
 type HeartbeatRunEvent = { type: "start" | "end"; id: string } | { type: "feedback"; id: string; feedback: "useful" | "useless" };
-export type HeartbeatEvent = HeartbeatRunEvent | { type: "schedule"; nextAt: number | null };
+export type HeartbeatEvent = HeartbeatRunEvent | { type: "schedule"; nextAt: number | null } | { type: "report"; report: ReportView };
+export type ReportView = { intervalDays: number; activeDays: number; time: string; nextAt: number | null; paused: boolean };
 export type HeartbeatView = {
+  report: ReportView;
   enabled: boolean; nextAt: number | null; intervalMs: number; adoption: number;
   signals: { dueGoals: number; backlog: number; userMessages24h: number };
   runs: HeartbeatRun[];

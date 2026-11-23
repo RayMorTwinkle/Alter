@@ -164,7 +164,7 @@ function setupApproval() {
       return toolCall(res, "outbox_send", { message: "x".repeat(700) });
     }
     const cancel = /\ncancel (task-\d+)$/.exec(messages.at(-1)?.content ?? "");
-    if (cancel) return toolCall(res, "task_cancel", { taskId: cancel[1] });
+    if (cancel) return toolCall(res, "task_stop", { taskId: cancel[1] });
     if (messages.at(-1)?.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task",
       { brief: "send", context: "fresh", permission: "auto" });
     say(res, "ack");
@@ -270,17 +270,19 @@ it("delivers only unread now notifications to the paired owner and remembers IDs
   expect(f.gateway.requests).toHaveLength(0);
 });
 
-it("pushes a triaged external event to the paired owner exactly once", async () => {
-  const f = await setup((_, res) => say(res, JSON.stringify({ level: "now", reason: "会议即将开始" })));
+it("pushes only the main session's explicit notify for an urgent external event", async () => {
+  const f = await setup(({ model, messages }, res) => {
+    if (model === "offline/task") return say(res, JSON.stringify({ level: "now", reason: "会议即将开始" }));
+    if (messages.at(-1)?.role === "user") return toolCall(res, "notify", { level: "now", title: "开会", body: "请看日程" });
+    return say(res, "处理完毕");
+  });
   await f.pair();
   await f.send("meeting", "会议改到十点", { chatType: "group" });
-  await expect.poll(() => f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "会议改到十点\n会议即将开始"]]);
+  await expect.poll(() => f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "开会\n请看日程"]]);
   await expect.poll(() => f.feed.snapshot().notifications).toMatchObject([
-    { kind: "event", source: "feishu", ref: "meeting", level: "now", pushedAt: f.clock.now },
+    { kind: "notify", pushedAt: f.clock.now }, { kind: "event", ref: "meeting", level: "now" },
   ]);
-  expect(f.feed.snapshot().timeline).toEqual([]);
-  expect(f.gateway.requests).toMatchObject([{ model: "offline/task" }]);
-  expect(f.gateway.requests[0]!.tools ?? []).toEqual([]);
+  expect(f.feed.snapshot().notifications[1]?.pushedAt).toBeUndefined();
   await f.close();
   const next = await f.reopen();
   expect(next.transport.sendText).not.toHaveBeenCalled();

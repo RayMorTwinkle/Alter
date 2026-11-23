@@ -1,3 +1,4 @@
+import { interacted } from "./feedback-settings.ts";
 import { randomUUID } from "node:crypto";
 import { contentText } from "@earendil-works/pi-ai";
 import { Heartbeat, heartbeatKind, userActivity } from "./heartbeat-state.ts";
@@ -22,6 +23,7 @@ export type TranscriptItem =
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
 const inputKind = "alter.user-input";
+const userSources = new Set(["web", "feishu", "cli"]);
 
 const defaultClock = inputClock();
 // Keep the public submitMessage(main, text) API while each open host supplies the model input prefix.
@@ -45,6 +47,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   const state = await tx.doc(Heartbeat, main.id);
   state.lastActivity = input.at;
   if (input.user) {
+    await interacted(tx, input.at);
     await userActivity(tx, state, input.at);
     if (typeof input.data.text === "string") {
       await recordUserMessage(tx, { id: input.id, at: input.at, text: input.data.text });
@@ -59,7 +62,7 @@ export async function submitMessage(main: Conversation, text: string, source = "
   const id = requestId ?? randomUUID();
   const { at, prefix } = (mainInputContext.get(main) ?? defaultClock)();
   await main.commit(tx => submitWake(tx, main, { id, at, kind: inputKind, content: prefix + "\n" + text,
-    user: ["web", "feishu", "cli"].includes(source), data: { id, at, text, source } }), context);
+    user: userSources.has(source), data: { id, at, text, source } }), context);
   return id;
 }
 
@@ -68,6 +71,17 @@ type InputEntry = Pick<EntryRecord, "kind" | "data">;
 function entryData(entry?: InputEntry) {
   const data = entry?.data;
   return data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
+}
+
+export async function hasUserInput(tx: Tx, id: ConversationId) {
+  const run = (await tx.doc(LiveDoc, id)).run;
+  for (const input of run?.inputs ?? []) {
+    const placed = (await tx.submission(input))?.entry;
+    const entry = placed === undefined ? undefined : await tx.entry(placed);
+    const source = entryData(entry)?.source;
+    if (entry?.kind === inputKind && typeof source === "string" && userSources.has(source)) return true;
+  }
+  return false;
 }
 
 export function isInlineTaskReport(entry: InputEntry) {
@@ -108,6 +122,10 @@ function surfaceText(entry: InputEntry | undefined, fallback: string) {
 
 function inputItem(entry: InputEntry | undefined, text: string, id: string, at: number): TimelineItem {
   const data = entryData(entry);
+  if (entry?.kind === "alter.triage" || entry?.kind === "alter.report-due") {
+    return { kind: "notice", id: String(data?.id ?? id), at: typeof data?.at === "number" ? data.at : at,
+      source: entry.kind.slice(6), text: String(data?.text ?? "") };
+  }
   if (entry?.kind === "alter.schedule" && typeof data?.scheduleId === "string" && typeof data.dueAt === "number") {
     return { kind: "notice", source: "schedule", text: surfaceText(entry, text),
       id: `schedule-${data.scheduleId}-${data.dueAt}`, at: typeof data.at === "number" ? data.at : at };

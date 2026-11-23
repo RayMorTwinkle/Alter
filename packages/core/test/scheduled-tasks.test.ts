@@ -7,6 +7,8 @@ import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earend
 import { afterEach, expect, it, vi } from "vitest";
 import { createCalendarPlugin } from "../../plugin-calendar/src/index.ts";
 import { answerUserPermission, Requests } from "../src/broker.ts";
+import { ScheduledTasks } from "../src/scheduled-tasks.ts";
+import { Notifications } from "../src/notifications.ts";
 import { openAlter } from "../src/main.ts";
 import { observeSurface } from "../src/observe.ts";
 import { context, openNodeSqliteStorage, type ToolRegistration } from "../src/runtime.ts";
@@ -46,7 +48,7 @@ async function setup() {
 
 it("calculates local, weekly, interval and signed event times and follows live calendar edits outside the agenda", async () => {
   const { app, advance, event, calendar, faux } = await setup();
-  const create = (trigger: Parameters<typeof app.schedules.create>[0]["trigger"]) => app.schedules.create({ brief: "安排", action: "wake", trigger });
+  const create = (trigger: Parameters<typeof app.schedules.create>[0]["trigger"]) => app.schedules.create({ brief: "安排", type: "wake", trigger });
   const next = async (id: string) => (await app.schedules.list()).find(item => item.id === id)?.nextAt;
   expect(await next(await create({ kind: "at", at: "2026-11-28T00:03" }))).toBe(initial + 5 * minute);
   expect(await next(await create({ kind: "every", minutes: 7 }))).toBe(initial + 7 * minute);
@@ -83,7 +85,7 @@ it("calculates local, weekly, interval and signed event times and follows live c
 
 it("persists pause, resumes at the next interval and coalesces downtime to one attributed wake", async () => {
   const f = await setup();
-  const id = await f.app.schedules.create({ brief: "继续检查", action: "wake", thinking: "low", trigger: { kind: "every", minutes: 5 } });
+  const id = await f.app.schedules.create({ brief: "继续检查", type: "wake", thinking: "low", trigger: { kind: "every", minutes: 5 } });
   await f.app.schedules.pause(id, true);
   await f.app.close();
   f.clock.at += 21 * minute;
@@ -123,7 +125,7 @@ it("dispatches ordinary tasks, charges their usage and continues the settled con
     return finish();
   }, say("已完成")]);
   async function run(brief: string, at: number, continue_from?: string) {
-    const id = await f.app.schedules.create({ brief, action: "task", thinking: "low", ...(continue_from && { continue_from }),
+    const id = await f.app.schedules.create({ brief, type: "task", thinking: "low", ...(continue_from && { continue_from }),
       trigger: { kind: "at", at: new Date(at).toISOString() } });
     f.advance(at);
     const result = () => f.app.harness.snapshot(Tasks, f.app.main.id, context);
@@ -149,7 +151,7 @@ it("skips both actions when today's shared budget is exhausted, including after 
   f.faux.setResponses([({ messages }) => { input = contentText(messages.at(-1)!.content); return say("收到"); }]);
   await f.app.notifications.delivered([{ id: "delivery", title: "交付通知", source: "mail", kind: "event",
     at: initial, level: "now", status: "unread" }]);
-  await f.app.schedules.create({ brief: "预算", action: "wake", trigger: { kind: "every", minutes: 5 } });
+  await f.app.schedules.create({ brief: "预算", type: "wake", trigger: { kind: "every", minutes: 5 } });
   f.advance(initial + 5 * minute);
   await expect.poll(async () => (await readUsage(f.dir)).length).toBe(1);
   await f.app.close();
@@ -161,7 +163,7 @@ it("skips both actions when today's shared budget is exhausted, including after 
     expect(wake?.text).toBe("[主会话自己的定时安排]\n预算");
   } finally { surface.detach(); }
   expect(await g.app.heartbeat.run()).toMatchObject({ status: "skipped", skipReason: "budget" });
-  await g.app.schedules.create({ brief: "预算", action: "task", trigger: { kind: "at", at: new Date(initial + 10 * minute).toISOString() } });
+  await g.app.schedules.create({ brief: "预算", type: "task", trigger: { kind: "at", at: new Date(initial + 10 * minute).toISOString() } });
   g.advance(initial + 10 * minute);
   await expect.poll(async () => (await g.app.schedules.list()).map(item => item.lastRun?.skipped)).toEqual([budgetExhausted, budgetExhausted]);
   expect(f.faux.state.callCount).toBe(1);
@@ -173,7 +175,7 @@ it("requires ordinary user approval for a scheduled send and skips a continuatio
   f.app.settings.set("off");
   const action = (name: string, args: Parameters<typeof fauxToolCall>[1]) => say(fauxToolCall(name, args), { stopReason: "toolUse" });
   f.faux.setResponses([action("outbox_send", { message: "定时问候" }), action("finish", { summary: "已发送", refs: [] }), say("完成")]);
-  const schedule = await f.app.schedules.create({ brief: "发送问候", action: "task", trigger: { kind: "at", at: new Date(initial).toISOString() } });
+  const schedule = await f.app.schedules.create({ brief: "发送问候", type: "task", trigger: { kind: "at", at: new Date(initial).toISOString() } });
   f.advance(initial);
   const pending = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {})[0];
   await expect.poll(pending).toMatchObject({ audience: "user", tool: "outbox_send" });
@@ -181,7 +183,7 @@ it("requires ordinary user approval for a scheduled send and skips a continuatio
   expect(f.app.demo.outbox).toEqual([]);
   const taskId = (await f.app.schedules.list()).find(item => item.id === schedule)!.lastRun!.taskId!;
   expect(request.taskId).toBe(taskId);
-  const continuation = await f.app.schedules.create({ brief: "接续", action: "task", continue_from: taskId,
+  const continuation = await f.app.schedules.create({ brief: "接续", type: "task", continue_from: taskId,
     trigger: { kind: "at", at: new Date(initial).toISOString() } });
   await expect.poll(async () => (await f.app.schedules.list()).find(item => item.id === continuation)?.lastRun?.skipped).toBe("接续任务仍在运行");
   expect((await answerUserPermission(f.app.main, { requestId: request.id, decision: "once" })).isError).toBe(false);
@@ -196,7 +198,7 @@ it("keeps an independent dispatch out of the active heartbeat's task and adoptio
   const waiting = new Promise<void>(resolve => { finishHeartbeat = resolve; });
   f.faux.setResponses([async () => { await waiting; return say("巡检完成"); },
     say(fauxToolCall("finish", { summary: "定时工作完成", refs: [] }), { stopReason: "toolUse" }), say("已记录")]);
-  const id = await f.app.schedules.create({ brief: "独立定时工作", action: "task",
+  const id = await f.app.schedules.create({ brief: "独立定时工作", type: "task",
     trigger: { kind: "at", at: new Date(initial + minute).toISOString() } });
   f.app.harness.resume();
   try {
@@ -212,4 +214,37 @@ it("keeps an independent dispatch out of the active heartbeat's task and adoptio
   } finally { finishHeartbeat(); }
   await expect.poll(async () => (await readUsage(f.dir)).map(row => row.role)).toEqual(["heartbeat", "schedule", "main"]);
   expect((await f.app.heartbeat.view()).adoption).toBeCloseTo(0.35);
+});
+
+it("migrates action-only rows and edits paused reminders without spending model budget", async () => {
+  vi.stubEnv("ALTER_PROACTIVE_DAILY_TOKENS", "0");
+  const f = await setup();
+  const trigger = { kind: "at" as const, at: new Date(initial + minute).toISOString() };
+  const legacy = await f.app.schedules.create({ type: "wake", brief: "旧安排", trigger });
+  await f.app.schedules.set({ id: legacy, status: "paused" });
+  await f.app.main.commit(async tx => {
+    const row = (await tx.doc(ScheduledTasks, f.app.main.id)).byId[legacy]!;
+    Reflect.deleteProperty(row.item, "type");
+  }, context);
+  const id = await f.app.schedules.create({ type: "reminder", brief: "原内容", trigger });
+  await f.app.schedules.set({ id, status: "paused", brief: "带文件", thinking: "medium",
+    trigger: { kind: "at", at: new Date(initial + 2 * minute).toISOString() } });
+  await f.app.close();
+  const g = await f.open();
+  expect(await g.app.schedules.list()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: legacy, type: "wake", paused: true, nextAt: initial + minute }),
+    expect.objectContaining({ id, type: "reminder", brief: "带文件", thinking: "medium", paused: true, nextAt: initial + 2 * minute }),
+  ]));
+  const notices = async () => (await g.app.harness.snapshot(Notifications, g.app.main.id, context))?.entries ?? [];
+  g.advance(initial + 2 * minute);
+  await expect.poll(() => g.app.harness.wake().active).toBe(false);
+  expect(await notices()).toEqual([]);
+  await g.app.schedules.set({ id, status: "active" });
+  await expect.poll(notices).toMatchObject([{ kind: "reminder", level: "digest", body: "带文件" }]);
+  await g.app.schedules.set({ id, trigger: { kind: "at", at: new Date(initial + 9 * 60 * minute).toISOString() } });
+  g.advance(initial + 9 * 60 * minute);
+  await expect.poll(notices).toMatchObject([{ kind: "reminder", level: "now" }, { level: "digest" }]);
+  expect(await g.app.schedules.set({ id, status: "deleted" })).toBe(true);
+  expect(await g.app.schedules.list()).toMatchObject([{ id: legacy }]);
+  expect(f.faux.state.callCount).toBe(0);
 });

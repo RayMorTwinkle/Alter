@@ -44,8 +44,8 @@ it("removes only the lease tool and lease instruction when leasing is disabled",
   }
   const lease = await agent(true);
   const dispatch = await agent(false);
-  expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_cancel", "schedule_task", "schedule_pause", "notify", "watch", "watch_list", "watch_cancel",
-    "dispatch_task", "task_status", "task_message", "task_cancel",
+  expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_set", "notify", "feedback_answer", "watch", "watch_list", "watch_cancel",
+    "dispatch_task", "task_status", "task_message", "task_stop",
     "memory_read", "memory_search", "memory_write", "memory_delete"]);
   expect(dispatch.instructions).toBe(lease.instructions!.replace("简短、频繁的日程操作可用 enable_tool 租用 calendar。", ""));
 });

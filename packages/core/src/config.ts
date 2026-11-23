@@ -32,10 +32,8 @@ export function dataDirectory(env = process.env) {
 export function proactiveConfig(env = process.env) {
   const budget = Number(env.ALTER_PROACTIVE_DAILY_TOKENS ?? 200_000);
   if (!Number.isSafeInteger(budget) || budget < 0) throw new Error("ALTER_PROACTIVE_DAILY_TOKENS must be a nonnegative integer");
-  const digestTime = env.ALTER_DIGEST_TIME?.trim() || "21:00";
-  const goalReviewTime = env.ALTER_GOAL_REVIEW_TIME?.trim() || "09:00";
-  dailyMinutes(digestTime);
-  dailyMinutes(goalReviewTime);
+  const reportTime = env.ALTER_REPORT_TIME?.trim() || "21:00";
+  dailyMinutes(reportTime);
   const mute = (env.ALTER_MUTE ?? "").toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
   const hours = (env.ALTER_HEARTBEAT_HOURS ?? "08:00-23:00").trim().split("-").map(value => {
     const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(value.trim());
@@ -46,7 +44,7 @@ export function proactiveConfig(env = process.env) {
   });
   if (hours.length !== 2 || hours[0] === hours[1]) throw new Error("Expected distinct ALTER_HEARTBEAT_HOURS start and end");
   const heartbeat = { enabled: env.ALTER_HEARTBEAT?.trim().toLowerCase() !== "off", start: hours[0]!, end: hours[1]! };
-  return { budget, digestTime, goalReviewTime, mute, heartbeat };
+  return { budget, reportTime, mute, heartbeat };
 }
 
 export function gatewayConfig(env = process.env) {

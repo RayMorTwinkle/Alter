@@ -40,7 +40,7 @@ function Schedules({ items, events, onPause, onDelete }: {
             <div className="row-main">
               <div className="row-title">{item.brief}</div>
               <div className="row-meta">
-                <span className="chip">{item.action === "task" ? t.task : t.wake}</span>
+                <span className="chip">{t.types[item.type ?? item.action]}</span>
                 <span>{trigger(item)}</span>
                 {item.paused ? <span>{t.paused}</span> : item.nextAt !== null && <span>{t.next(clock(item.nextAt))}</span>}
                 {item.continue_from && <span>{t.continues(item.continue_from)}</span>}

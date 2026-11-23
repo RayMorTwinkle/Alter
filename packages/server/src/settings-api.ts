@@ -30,7 +30,7 @@ export function settingsWriter(app: AlterApp) {
       const mode = app.settings.approvalModel;
       app.settings.set(isApprovalMode(patch.approvalModel) ? patch.approvalModel : mode, "heartbeat" in patch ? heartbeat : undefined);
       if ("heartbeat" in patch) {
-        try { await app.heartbeat.start(app.now(), true); }
+        try { await app.heartbeat.start(app.now(), true); await app.reports.sync(); }
         catch (error) { app.settings.set(mode, prev); throw error; }
       }
     });

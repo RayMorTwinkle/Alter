@@ -5,6 +5,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { obj } from "@earendil-works/pi-schema";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { interacted } from "../src/feedback-settings.ts";
 import { afterEach, expect, it, vi } from "vitest";
 import { answerUserPermission, Requests } from "../src/broker.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
@@ -38,7 +39,7 @@ async function setup(plugins: AlterPlugin[] = []) {
     clean.push(app.close);
     const notice = (id: string, level: "digest" | "now" = "digest", title = id) => app.main.commit(tx =>
       addNotification(tx, { id, title, source: "mail", kind: "event", status: "unread", level, at: clock.now,
-        body: "notification body" }, start - 8 * hour), context);
+        body: "notification body" }), context);
     const due = async () => (await app.scheduler.list()).find(item => item.kind === "heartbeat")?.at;
     async function advance(at: number) {
       clock.now = at;
@@ -299,6 +300,7 @@ it("retains only the latest 50 interval decisions across a restart", async () =>
   const times: number[] = [];
   for (let i = 0; i < 52; i++) {
     const due = (await f.due())!;
+    await f.app.main.commit(tx => interacted(tx, f.clock.now), context);
     times.push(due);
     await f.advance(due);
   }
@@ -385,7 +387,7 @@ it("records effective quiet-hour notification levels and the ID of a created sch
   const f = await setup();
   f.clock.now = start + 15 * hour;
   f.provider.setResponses([call("notify", { level: "now", title: "活动", body: "已开始报名" }),
-    call("schedule_create", { text: "查看活动", at: "2026-12-02T12:00Z" }), say("已安排")]);
+    call("schedule_create", { type: "reminder", brief: "查看活动", trigger: { kind: "at", at: "2026-12-02T12:00Z" } }), say("已安排")]);
   const run = await f.app.heartbeat.run();
   f.app.harness.resume();
   const approval = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {})[0];
@@ -395,7 +397,7 @@ it("records effective quiet-hour notification levels and the ID of a created sch
   const record = (await f.app.heartbeat.view()).runs.find(row => row.id === run.id)!;
   expect(record.notified).toBe(true);
   const notice = (await f.app.harness.snapshot(Notifications, f.app.main.id, context))!.entries.find(row => row.kind === "notify")!;
-  const schedule = (await f.app.scheduler.list()).find(item => item.text === "查看活动")!;
+  const schedule = (await f.app.schedules.list()).find(item => item.brief === "查看活动")!;
   expect(record.actions).toEqual([{ tool: "notify", id: notice.id, level: "digest" }, { tool: "schedule_create", id: schedule.id }]);
 });
 

@@ -86,11 +86,10 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
       const chatId = store.value.owner?.chatId;
       if (!ready || !chatId) return;
       for (const item of [...notifications].reverse()) {
-        if (item.source === "feedback" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
+        if (item.source === "feedback" || item.kind === "event" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
         queued.add(item.id);
         outbox = outbox.then(async () => {
           // Reserve before sending: a crash after Feishu accepts the message must never replay it.
-          if (item.kind === "event" && item.ref !== undefined && await app.notifications.isClaimed(item.ref)) return;
           if (!store.claimNotification(item.id)) return;
           await transport.sendText(chatId, [item.title, item.body].filter(Boolean).join("\n"));
           if (!await updateNotification(app.main, item.id, { pushedAt: now() })) {

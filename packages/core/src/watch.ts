@@ -225,7 +225,7 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
       const until = typeof args.until === "number" ? at + Math.round(args.until * minute) : time.parse(args.until).ms;
       if (!Number.isSafeInteger(until) || until <= at) throw new Error("until 必须是未来的 ISO 时间或正分钟数");
       const owner = await tx.createTask(worker, id, { ownership: { kind: "conversation" }, background: true });
-      await dispatch(tx, root, id, { brief: args.brief, context: "fresh", permission: "auto", thinking: args.thinking ?? "low" }, undefined,
+      await dispatch(tx, root, id, { brief: args.brief, context: "fresh", permission: "auto", thinking: args.thinking ?? "low" },
         { worker: owner, tools: WatchTools, instructions: watchInstructions, settings: { where: args.where, until, keywords: args.keywords ?? [], wakes: [] } });
       const buffer = await tx.doc(BufferDoc, tasks[id]!.conversationId);
       buffer.poller = await tx.createTask(poller, id, { ownership: { kind: "conversation" }, background: true });

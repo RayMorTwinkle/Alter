@@ -4,7 +4,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerUserPermission, approvalStats, isApprovalDecision, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
+  answerUserPermission, approvalStats, isApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
   FeedbackError, MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
@@ -72,7 +72,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
   let displayed = new Set<string>();
   let deliveries = Promise.resolve();
   function webDelivery(items: Notification[]) {
-    const unread = items.filter(item => item.level === "now" && item.status === "unread" && item.pushedAt === undefined);
+    const unread = items.filter(item => item.kind !== "event" && item.level === "now" && item.status === "unread" && item.pushedAt === undefined);
     const fresh = unread.filter(item => !displayed.has(item.id));
     displayed = new Set(unread.map(item => item.id));
     if (fresh.length) deliveries = app.notifications.delivered(fresh.reverse()).catch(error => {
@@ -168,6 +168,11 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     if (!login && !logout && !(token && sessions.has(token))) throw new HttpError(401, "Login required");
     if (method !== "GET" && method !== "HEAD" && req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw new HttpError(415, "Content-Type must be application/json");
+    }
+    const activity = () => app.main.commit(tx => interacted(tx, app.now()), context);
+    async function mutation(status: number, value: unknown) {
+      await activity();
+      return json(res, status, value);
     }
     if (login) {
       const { password } = await body(req);
@@ -289,6 +294,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "GET" && path === "/api/heartbeat") {
       return json(res, 200, await app.heartbeat.view());
     } else if (method === "POST" && path === "/api/heartbeat/run") {
+      await activity();
       const run = await app.heartbeat.run();
       if (run.skipReason === "busy") return json(res, 409, { error: "Main conversation is busy", id: run.id });
       return json(res, run.status === "ran" ? 202 : 200, run);
@@ -307,17 +313,17 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "GET" && path === "/api/sources") {
       return json(res, 200, sources?.list() ?? []);
     } else if (sources && method === "POST" && path === "/api/sources/preview") {
-      return json(res, 200, await sources.preview(await body(req)));
+      return mutation(200, await sources.preview(await body(req)));
     } else if (sources && method === "POST" && path === "/api/sources") {
-      return json(res, 201, await sources.create(await body(req)));
+      return mutation(201, await sources.create(await body(req)));
     } else if (sources && (method === "PATCH" || method === "DELETE") && /^\/api\/sources\/[^/]+$/.test(path)) {
       const id = path.split("/")[3]!;
-      if (method === "PATCH") return json(res, 200, await sources.patch(id, await body(req)));
+      if (method === "PATCH") return mutation(200, await sources.patch(id, await body(req)));
       await sources.remove(id);
     } else if (method === "GET" && path === "/api/ext-plugins") {
       return json(res, 200, ext?.list() ?? []);
     } else if (ext && method === "POST" && path === "/api/ext-plugins/install") {
-      return json(res, 201, await ext.install(await body(req)));
+      return mutation(201, await ext.install(await body(req)));
     } else if (ext && method === "POST" && /^\/api\/ext-plugins\/[^/]+\/(approve|reject|rollback|disable|enable)$/.test(path)) {
       const [, , , id, action] = path.split("/");
       await ext.action(id!, action!, await body(req, action !== "approve"));
@@ -328,13 +334,14 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "GET" && path === "/api/plugins/feishu/guide") {
       return json(res, 200, feishuGuide(redirectUri(req, plugins)));
     } else if (plugins && method === "PATCH" && /^\/api\/plugins\/[^/]+$/.test(path)) {
-      return json(res, 200, await plugins.get(path.split("/")[3]!).patch(await body(req)));
+      return mutation(200, await plugins.get(path.split("/")[3]!).patch(await body(req)));
     } else if (plugins && method === "POST" && /^\/api\/plugins\/[^/]+\/check$/.test(path)) {
-      return json(res, 200, await plugins.get(path.split("/")[3]!).check());
+      return mutation(200, await plugins.get(path.split("/")[3]!).check());
     } else if ((method === "GET" || method === "PATCH") && path === "/api/settings") {
       if (method === "PATCH") {
         const patch = await body(req);
         await saveSettings(patch);
+        await activity();
       }
       return json(res, 200, { approvalModel: app.settings.approvalModel, heartbeat: app.settings.heartbeat });
     } else if (method === "GET" && path === "/api/stats") {
@@ -347,6 +354,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");
+    if (!logout) await activity();
     res.writeHead(204).end();
   }
 

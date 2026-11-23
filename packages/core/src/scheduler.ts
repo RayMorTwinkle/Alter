@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { bool, obj, opt, str } from "@earendil-works/pi-schema";
+import { bool } from "@earendil-works/pi-schema";
 import { calendarTime, dailyMinutes } from "./calendar-time.ts";
 import type { Capability } from "./capabilities.ts";
-import { addNotification, digestDay, Notifications } from "./notifications.ts";
+import { addNotification } from "./notifications.ts";
 import {
-  context, conversationDoc, createRegistry, defineExtension, defineSignal, defineTask, defineTool, reply,
+  context, conversationDoc, createRegistry, defineExtension, defineSignal, defineTask,
   ROOT_CONVERSATION_ID, type Conversation, type TaskId, type ToolRegistration, type Tx,
 } from "./runtime.ts";
 
@@ -15,19 +15,21 @@ export type ScheduleItem = {
 // Handlers commit their durable effects through tx, together with the occurrence checkpoint.
 type NextOccurrence = { nextAt: number };
 type Handler = (item: Readonly<ScheduleItem>, tx: Tx, firedAt: number) => void | NextOccurrence | Promise<void | NextOccurrence>;
-export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId; window?: string }> }>("schedules", () => ({ byId: {} }));
+export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId; window?: string }>; retiring?: Record<string, TaskId[]> }>("schedules", () => ({ byId: {} }));
 const Cancel = defineSignal({ name: "alter.schedule-cancel", version: 1, schema: bool() });
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
 export function createScheduler(main: () => Conversation, registry: ReturnType<typeof createRegistry>, timeZone: string, now: () => number,
-  scheduled?: { list(): Promise<unknown[]>; cancel(id: string): Promise<boolean>; tools: ToolRegistration[]; actions: Capability["actions"] }) {
+  scheduled: { importReminder(tx: Tx, item: ScheduleItem): Promise<void>; tools: ToolRegistration[]; actions: Capability["actions"] }) {
   const time = calendarTime(timeZone);
   function taskFor(kind: string, handler: Handler) {
     return defineTask<string, { phase: "tick" }, null>({
       name: `alter.schedule.${kind}`, version: 1, initial: () => ({ phase: "tick" }),
       phases: {
         tick: ({ input: id }, runtime, ctx) => runtime.commit(async tx => {
-          const { item, worker } = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id]!;
+          const row = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id];
+          if (!row) return complete;
+          const { item, worker } = row;
           if (worker !== runtime.taskId || item.status !== "scheduled") return complete;
           const firedAt = runtime.now();
           if (item.at <= firedAt) {
@@ -47,7 +49,7 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
       },
       abort: ({ input: id }, runtime, ctx) => runtime.commit(async tx => {
         const entry = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id]!;
-        if (entry.worker === runtime.taskId) entry.item.status = "cancelled";
+        if (entry?.worker === runtime.taskId) entry.item.status = "cancelled";
         return { status: "terminal", outcome: { status: "aborted" } };
       }, ctx),
     });
@@ -62,24 +64,7 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
 
   register("reminder", async (item, tx, firedAt) => {
     await addNotification(tx, { id: `${item.id}-${item.at}`, at: firedAt, kind: "reminder", level: time.quietHours(firedAt) ? "digest" : "now",
-      title: "提醒", body: item.text, source: "schedule", status: "unread" }, time.midnight(firedAt));
-  });
-
-  register("digest", async (item, tx, firedAt) => {
-    const { entries } = await tx.doc(Notifications, ROOT_CONVERSATION_ID);
-    const midnight = time.midnight(firedAt);
-    if (item.repeat && time.nextDaily(midnight - 1, item.repeat.daily) > firedAt) return;
-    const state = await digestDay(tx, midnight);
-    if (state.sent) return;
-    const items = [...state.overflow, ...[...entries].reverse()]
-      .filter(n => n.level === "digest" && n.status === "unread" && n.at >= midnight && n.at <= firedAt);
-    if (!items.length) return;
-    state.sent = true;
-    state.overflow = [];
-    await addNotification(tx, {
-      id: `${item.id}-${item.at}`, at: firedAt, kind: "digest", level: "now", source: "schedule", status: "unread",
-      title: `今日摘要（${items.length} 条）`, body: items.map(n => `• [${n.source}] ${[n.title, n.body].filter(Boolean).join(" — ")}`).join("\n"),
-    }, midnight);
+      title: "提醒", body: item.text, source: "schedule", status: "unread" });
   });
 
   type Input = { kind: string; text: string; at: string; daily?: string };
@@ -98,19 +83,38 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
       return id;
     }, context);
   }
-  async function ensureDaily(kind: string, text: string, daily: string) {
-    const exists = await main().commit(async tx => {
-      const { byId } = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
-      const managed = byId[`daily-${kind}`];
-      if (managed?.item.status === "scheduled" && managed.item.repeat?.daily !== daily) {
-        await tx.signal(managed.worker, Cancel, String(managed.item.at), true);
-        managed.item.at = time.nextDaily(now(), daily);
-        managed.item.repeat = { daily };
+  async function migrate() {
+    const legacy = await main().commit(async tx => {
+      const doc = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
+      const rows = Object.values(doc.byId).filter(({ item }) => ["digest", "goal-review", "reminder"].includes(item.kind));
+      for (const [kind, ids] of Object.entries(doc.retiring ?? {})) {
+        const live = [];
+        for (const id of ids) if ((await tx.task(id))?.state.status !== "terminal") live.push(id);
+        if (live.length) doc.retiring![kind] = live;
+        else delete doc.retiring![kind];
       }
-      return Object.values(byId).some(({ item }) => item.kind === kind);
+      return { rows: rows.map(({ item }) => ({ id: item.id, kind: item.kind })),
+        kinds: [...new Set([...Object.keys(doc.retiring ?? {}), ...rows.map(({ item }) => item.kind)])] };
     }, context);
-    if (exists) return;
-    await create({ kind, text, daily, at: new Date(time.nextDaily(now(), daily)).toISOString() }, `daily-${kind}`);
+    for (const kind of legacy.kinds) if (!tasks.has(kind)) {
+      // A legacy sleeper may still be settling after a migration and restart.
+      const worker = taskFor(kind, () => {});
+      registry.install(defineExtension({ name: worker.definition.name, tasks: [worker] }));
+    }
+    for (const item of legacy.rows) {
+      await main().commit(async tx => {
+        const doc = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
+        const row = doc.byId[item.id];
+        if (!row) return;
+        if (row.item.status === "scheduled") await tx.signal(row.worker, Cancel, String(row.item.at), true);
+        if (item.kind === "reminder") await scheduled.importReminder(tx, row.item);
+        else {
+          doc.retiring ??= {};
+          doc.retiring[item.kind] = [...(doc.retiring[item.kind] ?? []), row.worker];
+        }
+        delete doc.byId[item.id];
+      }, context);
+    }
   }
   async function ensureAdaptive(kind: string, text: string, first: number | undefined, window = "", reset = false) {
     const id = `adaptive-${kind}`;
@@ -149,19 +153,6 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     }, context);
   }
 
-  const capability: Capability = { id: "schedule", mainLeasable: false, actions: [
-    { name: "create", effect: "write-local", guarded: true }, { name: "list", effect: "write-local" },
-    { name: "cancel", effect: "write-local", guarded: true }, ...(scheduled?.actions ?? []),
-  ] };
-  const tools = [
-    defineTool({ name: "schedule_create", description: "Set a reminder. at is the first ISO date-time (local unless qualified). daily repeats at local HH:mm.",
-      parameters: obj({ text: str({ pattern: "\\S" }), at: str(), daily: opt(str()) }), replay: "safe",
-      execute: async (args, api) => reply(await create({ ...args, kind: "reminder" }, `schedule-${api.taskId}`)) }),
-    defineTool({ name: "schedule_list", description: "List reminders and scheduled tasks with IDs and next times.",
-      parameters: obj({}), replay: "safe", execute: async () => reply(JSON.stringify([...await list(), ...(await scheduled?.list() ?? [])])) }),
-    defineTool({ name: "schedule_cancel", description: "Cancel a scheduled task or reminder by ID.", parameters: obj({ id: str() }), replay: "safe",
-      execute: async ({ id }) => await scheduled?.cancel(id) || await cancel(id) ? reply(id) : reply("Unknown or finished schedule", true) }),
-    ...(scheduled?.tools ?? []),
-  ];
-  return { register, ensureDaily, ensureAdaptive, create: (input: Input) => create(input), list, cancel, capability, tools };
+  const capability: Capability = { id: "schedule", mainLeasable: false, actions: scheduled.actions };
+  return { register, migrate, ensureAdaptive, create: (input: Input) => create(input), list, cancel, capability, tools: scheduled.tools };
 }
