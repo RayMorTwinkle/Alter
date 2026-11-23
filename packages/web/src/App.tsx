@@ -111,7 +111,9 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const panels = {
     tasks: <TasksPanel tasks={state.tasks} leases={state.leases} onOpen={setOpenTask} />,
     approvals: <ApprovalsPanel pending={state.pending} onAnswer={onAnswer} />,
-    agenda: state.agenda && <AgendaPanel agenda={state.agenda} />,
+    agenda: state.agenda && <AgendaPanel agenda={state.agenda} schedules={state.schedules ?? []}
+      onPause={(id, paused) => void guard(() => api.pauseSchedule(id, paused)).catch(() => {})}
+      onDelete={id => void guard(() => api.deleteSchedule(id)).catch(() => {})} />,
     memory: <MemoryPanel items={state.memory}
       onUpdate={(id, patch) => guard(() => api.updateMemory(id, patch))} onDelete={id => guard(() => api.deleteMemory(id))} />,
     ledger: <LedgerPanel ledger={state.ledger} onOpen={setOpenTask} />,

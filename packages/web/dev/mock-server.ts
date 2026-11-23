@@ -56,6 +56,12 @@ const clients = new Set<ServerResponse>();
 const pending = () => tasks.flatMap(task => task.pending);
 const snapshot = (): Snapshot => ({
   timeline: timeline.slice(-200), tasks, pending: pending(), ledger,
+  schedules: [
+    { id: "scheduled-29", brief: "整理當天日程：彙總今日事項的時間、地點與注意事項並通知用戶", trigger: { kind: "daily", time: "08:00", weekdays: [1, 2, 3, 4, 5] }, action: "task", createdAt: now - 3_600_000, nextAt: now + 20 * 3_600_000, paused: false },
+    { id: "scheduled-35", brief: "提醒用戶早點休息", trigger: { kind: "daily", time: "22:30" }, action: "wake", createdAt: now - 3_600_000, nextAt: now + 12 * 3_600_000, paused: false },
+    { id: "scheduled-41", brief: "會前把資料整理成一頁", trigger: { kind: "event", eventId: "e1", offsetMinutes: -30, anchor: "start" }, action: "task", continue_from: "task-14", createdAt: now - 3_600_000, nextAt: now + 26 * 3_600_000, paused: false },
+    { id: "scheduled-44", brief: "看看 GitHub 上新的 issue", trigger: { kind: "every", minutes: 120 }, action: "task", createdAt: now - 3_600_000, nextAt: null, paused: true },
+  ],
   notifications, leases: [{ capability: "calendar", idleTurns: 3, window: 30 }], busy,
 });
 
@@ -241,6 +247,7 @@ createServer(async (req, res) => {
     return json(res, 204);
   }
   if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000, account: { connected: false } });
+  if (path.startsWith("/api/schedules/")) return json(res, 204);
   if (path === "/api/heartbeat") {
     const h = 3_600_000;
     const counts = (d: number) => ({ goals: 2, memories: 6, chat: 4, agenda: 1, tasks: 0, digests: d });

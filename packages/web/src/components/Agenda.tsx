@@ -1,7 +1,8 @@
-import { MapPin } from "@phosphor-icons/react";
+import { MapPin, Pause, Play, Trash } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useT } from "../i18n.tsx";
-import type { Agenda, AgendaEvent } from "../types.ts";
+import { clock } from "../format.ts";
+import type { Agenda, AgendaEvent, ScheduledTask } from "../types.ts";
 
 // Group by the calendar's own time zone, which is what the agent used when it read "tomorrow".
 function formatters(timeZone: string, lang: string) {
@@ -11,7 +12,58 @@ function formatters(timeZone: string, lang: string) {
   return { key: (ms: number) => key.format(ms), day: (ms: number) => day.format(ms), time: (ms: number) => time.format(ms) };
 }
 
-export function AgendaPanel({ agenda }: { agenda: Agenda }) {
+function Schedules({ items, events, onPause, onDelete }: {
+  items: ScheduledTask[]; events: AgendaEvent[];
+  onPause: (id: string, paused: boolean) => void; onDelete: (id: string) => void;
+}) {
+  const t = useT().schedules;
+  function trigger(item: ScheduledTask) {
+    const tr = item.trigger;
+    if (tr.kind === "at") return t.once(clock(Date.parse(tr.at)));
+    if (tr.kind === "every") return t.every(tr.minutes);
+    if (tr.kind === "daily") {
+      const days = tr.weekdays ?? [];
+      if (!days.length || days.length === 7) return t.daily(tr.time);
+      if (days.length === 5 && [1, 2, 3, 4, 5].every(d => days.includes(d))) return t.workdays(tr.time);
+      return t.weekly([...days].sort().map(d => t.weekdays[d]).join("、"), tr.time);
+    }
+    const title = events.find(e => e.id === tr.eventId)?.title ?? tr.eventId;
+    return t.event(title, tr.anchor, tr.offsetMinutes);
+  }
+  const ordered = [...items].sort((a, b) => Number(a.paused) - Number(b.paused) || (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity));
+  return (
+    <section className="agenda-day schedules">
+      <h3><strong>{t.title}</strong></h3>
+      <ul className="rows">
+        {ordered.map(item => (
+          <li key={item.id} className={`schedule-item ${item.paused ? "paused" : ""}`}>
+            <div className="row-main">
+              <div className="row-title">{item.brief}</div>
+              <div className="row-meta">
+                <span className="chip">{item.action === "task" ? t.task : t.wake}</span>
+                <span>{trigger(item)}</span>
+                {item.paused ? <span>{t.paused}</span> : item.nextAt !== null && <span>{t.next(clock(item.nextAt))}</span>}
+                {item.continue_from && <span>{t.continues(item.continue_from)}</span>}
+                {item.lastRun?.missed && <span>{t.missed}</span>}
+              </div>
+            </div>
+            <div className="schedule-actions">
+              <button className="icon-btn ghost" title={item.paused ? t.resume : t.pause} aria-label={item.paused ? t.resume : t.pause}
+                onClick={() => onPause(item.id, !item.paused)}>{item.paused ? <Play /> : <Pause />}</button>
+              <button className="icon-btn ghost" title={t.remove} aria-label={t.remove}
+                onClick={() => { if (confirm(t.confirmRemove)) onDelete(item.id); }}><Trash /></button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+export function AgendaPanel({ agenda, schedules, onPause, onDelete }: {
+  agenda: Agenda; schedules: ScheduledTask[];
+  onPause: (id: string, paused: boolean) => void; onDelete: (id: string) => void;
+}) {
   const t = useT();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -35,6 +87,7 @@ export function AgendaPanel({ agenda }: { agenda: Agenda }) {
 
   return (
     <div className="panel-body">
+      {schedules.length > 0 && <Schedules items={schedules} events={agenda.events} onPause={onPause} onDelete={onDelete} />}
       {groups.length === 0 && <p className="empty">{t.emptyAgenda}</p>}
       {groups.map(([key, { at, events }]) => (
         <section key={key} className="agenda-day">

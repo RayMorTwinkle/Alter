@@ -151,6 +151,27 @@ const hant = {
     thought: "它的想法",
     feedback: { useful: "有用", useless: "沒用" },
   },
+  schedules: {
+    title: "定時任務",
+    task: "派任務",
+    wake: "叫醒 Alter",
+    once: (at: string) => `${at} 一次`,
+    every: (m: number) => m % 60 === 0 ? `每 ${m / 60} 小時` : `每 ${m} 分鐘`,
+    daily: (time: string) => `每天 ${time}`,
+    workdays: (time: string) => `工作日 ${time}`,
+    weekly: (days: string, time: string) => `每週${days} ${time}`,
+    weekdays: ["日", "一", "二", "三", "四", "五", "六"],
+    event: (title: string, anchor: "start" | "end", offset: number) =>
+      `「${title}」${anchor === "start" ? "開始" : "結束"}${offset === 0 ? "時" : offset < 0 ? `前 ${-offset} 分鐘` : `後 ${offset} 分鐘`}`,
+    next: (at: string) => `下次 ${at}`,
+    paused: "已暫停",
+    continues: (id: string) => `接續 ${id}`,
+    missed: "上次錯過，已補跑",
+    pause: "暫停",
+    resume: "恢復",
+    remove: "刪除",
+    confirmRemove: "刪除這個定時任務？",
+  },
 };
 
 export type Strings = typeof hant;
@@ -296,6 +317,27 @@ const hans: Strings = {
     noAction: "什么都没做",
     thought: "它的想法",
     feedback: { useful: "有用", useless: "没用" },
+  },
+  schedules: {
+    title: "定时任务",
+    task: "派任务",
+    wake: "叫醒 Alter",
+    once: (at: string) => `${at} 一次`,
+    every: (m: number) => m % 60 === 0 ? `每 ${m / 60} 小时` : `每 ${m} 分钟`,
+    daily: (time: string) => `每天 ${time}`,
+    workdays: (time: string) => `工作日 ${time}`,
+    weekly: (days: string, time: string) => `每周${days} ${time}`,
+    weekdays: ["日", "一", "二", "三", "四", "五", "六"],
+    event: (title: string, anchor: "start" | "end", offset: number) =>
+      `「${title}」${anchor === "start" ? "开始" : "结束"}${offset === 0 ? "时" : offset < 0 ? `前 ${-offset} 分钟` : `后 ${offset} 分钟`}`,
+    next: (at: string) => `下次 ${at}`,
+    paused: "已暂停",
+    continues: (id: string) => `接续 ${id}`,
+    missed: "上次错过，已补跑",
+    pause: "暂停",
+    resume: "恢复",
+    remove: "删除",
+    confirmRemove: "删除这个定时任务？",
   },
 };
 
