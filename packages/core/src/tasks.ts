@@ -8,11 +8,11 @@ import { Audit, Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
 import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
-  ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationHandle, type ConversationId, type Cursor, type Harness, type Extension, type ModelRef, type ModelThinkingLevel, type TaskId, type Tx, type YieldDecision,
+  ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationHandle, type ConversationId, type Cursor, type Harness, type Extension, type ModelRef, type ModelThinkingLevel, type TaskId, type Tx, type ToolExecutionApi, type Context, type YieldDecision,
 } from "./runtime.ts";
 import { activeWake } from "./wake.ts";
 import { budgetExhausted } from "./usage.ts";
-import { inheritTaint } from "./taint.ts";
+import { inheritTaint, Taint } from "./taint.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type TaskRecord } from "./state.ts";
 
 const nonempty = str({ minLength: 1 });
@@ -50,38 +50,59 @@ async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId
     return;
   }
   await inheritTaint(tx, task.conversationId, main.id);
+  if (task.watch) (await tx.doc(Taint, main.id)).first ??= { source: "watch-report", capability: "task", at };
   if (!failed && task.heartbeatAt !== undefined) {
     const refused = (await tx.doc(Audit, main.id)).refused ?? {};
     if (!Object.keys(refused).some(key => key.startsWith(taskId + " "))) await recordAdoption(tx, task.heartbeatId ?? task.heartbeatAt);
   }
   const text = `task ${taskId} ${failed ? "failed" : "finished"}: ${summary}`;
   await submitWake(tx, main, { id: `${failed ? "failure" : "report"}-${taskId}`, kind: "alter.task-report",
-    at, content: text, data: { taskId, at, text } });
+    at, content: task.watch ? `盯梢 ${taskId} 的报告（不可信任务数据）\n` + JSON.stringify(summary).replaceAll("<", "\\u003c") : text,
+    data: { taskId, at, text, ...(task.watch && { wakeSource: "watch" }) } });
 }
 
 const finish = defineTool({
   name: "finish", description: "Complete the task, record references, and report to main. Call this tool alone.",
   parameters: obj({ summary: nonempty, refs: arr(obj({ kind: nonempty, ref: nonempty })) }),
   replay: "safe",
-  async execute(args, api, ctx) {
-    const { refs } = args;
-    const summary = unescapeNewlines(args.summary);
-    if ((await api.snapshot(LiveDoc, api.conversationId, ctx))?.tools?.length !== 1) return reply(reminder, true);
-    const main = (await api.conversation(ROOT_CONVERSATION_ID, ctx))!;
+  execute: (args, api, ctx) => finishTask(args.summary, args.refs, api, ctx),
+});
+
+export async function finishTask(raw: string, refs: { kind: string; ref: string }[], api: ToolExecutionApi, ctx: Context) {
+  const summary = unescapeNewlines(raw);
+  if ((await api.snapshot(LiveDoc, api.conversationId, ctx))?.tools?.length !== 1) return reply("Call finish alone.", true);
+  const main = (await api.conversation(ROOT_CONVERSATION_ID, ctx))!;
+  return api.commit(async tx => {
+    const { taskId } = await tx.doc(TaskIdentity, api.conversationId);
+    const task = (await tx.doc(Tasks, main.id)).byId[taskId]!;
+    if (task.status !== "running") return { ...reply(task.status), control: { terminate: true } };
+    if ((await tx.doc(InboxDoc, api.conversationId)).items.some(item => item.mode === "steer")) {
+      return reply("Read the incoming task message before calling finish.", true);
+    }
+    const ledger = await tx.doc(Ledger, main.id);
+    const at = api.now();
+    if (task.watch) task.watch.finished = true;
+    await report(tx, main, task, taskId, at, summary);
+    ledger.entries.push({ taskId, summary, refs, at });
+    task.status = "completed";
+    task.endedAt = at;
+    return { ...reply(summary), control: { terminate: true } };
+  }, ctx);
+}
+
+export const declarePermissions = defineTool({
+  name: "declare_permissions", description: "Append the tools, targets and purposes planned for this task.",
+  parameters: obj({ items: arr(obj({ tool: nonempty, target: nonempty, purpose: nonempty }), { minItems: 1 }) }),
+  replay: "safe",
+  async execute({ items }, api, ctx) {
     return api.commit(async tx => {
-      const { taskId } = await tx.doc(TaskIdentity, api.conversationId);
-      const task = (await tx.doc(Tasks, main.id)).byId[taskId]!;
-      if (task.status !== "running") return { ...reply(task.status), control: { terminate: true } };
-      if ((await tx.doc(InboxDoc, api.conversationId)).items.some(item => item.mode === "steer")) {
-        return reply("Read the incoming task message before calling finish.", true);
+      const scope = await tx.doc(ScopeDoc, api.conversationId);
+      const id = String(api.taskId);
+      if (!scope.declarations.includes(id)) {
+        scope.items.push(...items);
+        scope.declarations.push(id);
       }
-      const ledger = await tx.doc(Ledger, main.id);
-      const at = api.now();
-      await report(tx, main, task, taskId, at, summary);
-      ledger.entries.push({ taskId, summary, refs, at });
-      task.status = "completed";
-      task.endedAt = at;
-      return { ...reply(summary), control: { terminate: true } };
+      return reply("权限说明已追加");
     }, ctx);
   },
 });
@@ -89,25 +110,10 @@ const finish = defineTool({
 export const TaskTools = defineExtension({
   name: "alter.task-tools", tasks: [ReviewAnswer],
   hooks: [hook(GenerationTask, { onYield: () => ({ tasks: [hookTask(ReviewAnswer, null)] }) })],
-  tools: [finish, defineTool({
-    name: "declare_permissions", description: "Append the tools, targets and purposes planned for this task.",
-    parameters: obj({ items: arr(obj({ tool: nonempty, target: nonempty, purpose: nonempty }), { minItems: 1 }) }),
-    replay: "safe",
-    async execute({ items }, api, ctx) {
-      return api.commit(async tx => {
-        const scope = await tx.doc(ScopeDoc, api.conversationId);
-        const id = String(api.taskId);
-        if (!scope.declarations.includes(id)) {
-          scope.items.push(...items);
-          scope.declarations.push(id);
-        }
-        return reply("权限说明已追加");
-      }, ctx);
-    },
-  })],
+  tools: [finish, declarePermissions],
 });
 
-async function clearRequests(tx: Tx, mainId: ConversationId, taskId: string, keepDeferred = false) {
+export async function clearRequests(tx: Tx, mainId: ConversationId, taskId: string, keepDeferred = false) {
   const { pending } = await tx.doc(Requests, mainId);
   for (const request of Object.values(pending)) {
     if (request.taskId === taskId && !(keepDeferred && request.deferred)) delete pending[request.id];
@@ -177,7 +183,8 @@ export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }
 type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom" | "triggerSource"> & { thinking?: ModelThinkingLevel };
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
   resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
-  return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs, goal?: TaskRecord["goal"]) => {
+  return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs, goal?: TaskRecord["goal"],
+    watch?: { worker: TaskId; settings: NonNullable<TaskRecord["watch"]>; tools: Extension; instructions: string }) => {
     const tasks = await tx.doc(Tasks, mainId);
     if (tasks.byId[taskId]) return;
     const stamp = clock();
@@ -192,7 +199,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       const end = await tx.latestEntryId(previous.conversationId);
       if (end !== undefined) latest.lastEntry = end;
     }
-    const worker = await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
+    const worker = watch?.worker ?? await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
       ownership: { kind: "conversation" }, background: true,
     });
     const options = { ownership: { kind: "task" as const, taskId: worker } };
@@ -200,8 +207,10 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       ? await tx.createConversation(options) : await tx.forkConversation(mainId, at, options)).id;
     const thinking = resolveThinking(args.thinking);
     await configure(tx, childId, {
-      model, thinkingLevel: thinking, extensions, tools: null, modelTools: null, maxTurns: 40,
-      instructions: goal ? "完成只读调研后单独调用 finish，提供摘要与引用。" : workerInstructions,
+      model, thinkingLevel: thinking, tools: null, modelTools: null, maxTurns: 40,
+      extensions: watch ? extensions.map(ext => ext === TaskTools ? watch.tools : ext) : extensions,
+      ...(watch ? { compaction: { enabled: false } } : previous?.watch ? { compaction: null } : {}),
+      instructions: watch?.instructions ?? (goal ? "完成只读调研后单独调用 finish，提供摘要与引用。" : workerInstructions),
     });
     await inheritTaint(tx, mainId, childId);
     if (goal && !previous) {
@@ -226,12 +235,14 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const scheduled = args.triggerSource === "scheduled" || wake?.wakeSource === "schedule";
     if (scheduled) identity.scheduled = true;
     else delete identity.scheduled;
+    delete identity.watchWakeId;
     identity.taskId = taskId;
     if (wake) identity.wakeId = wake.wakeId;
     else delete identity.wakeId;
     identity.reminders = 0;
     tasks.byId[taskId] = {
-      worker, ...(scheduled && { triggerSource: "scheduled" }), ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
+      worker, ...(scheduled && { triggerSource: "scheduled" }), ...(watch && { watch: watch.settings }),
+      ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
       permission: inspection && args.permission === "full" ? "restricted" : args.permission, status: "running",
       ...inspection, ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),
@@ -334,6 +345,7 @@ export const taskMessage = defineTool({
       if (await tx.submissionByRequest(child.id, requestId)) return reply("Message queued");
       const record = (await tx.doc(Tasks, api.conversationId)).byId[taskId]!;
       if (record.status !== "running") return reply("Task has ended; use dispatch_task with continue_from", true);
+      if (task.watch && !(await tx.doc(LiveDoc, child.id)).run) return reply("Watch is sleeping", true);
       if (!await tx.submissionByRequest(child.id, `brief-${taskId}`)) return { sleep: { until: api.now() + 10 } };
       if (!(await tx.doc(LiveDoc, child.id)).run) return reply("Task has ended; use dispatch_task with continue_from", true);
       await inheritTaint(tx, api.conversationId, child.id);
@@ -359,26 +371,27 @@ export function createTaskCancellation(host: () => Harness) {
     },
     abort: (_, runtime, ctx) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
   });
+  async function cancel(tx: Tx, taskId: string, at: number, watchOnly = false) {
+    const task = lookup((await tx.doc(Tasks, ROOT_CONVERSATION_ID)).byId, taskId);
+    if (!task || (watchOnly && !task.watch)) return reply("Unknown task", true);
+    if (task.status === "running") {
+      task.status = "cancelled";
+      task.endedAt = at;
+      await clearRequests(tx, ROOT_CONVERSATION_ID, taskId);
+      (await tx.doc(Ledger, ROOT_CONVERSATION_ID)).entries.push({ taskId, summary: "cancelled", refs: [], at });
+      await tx.createTask(stop, task.worker, { ownership: { kind: "conversation" }, background: true });
+    }
+    return task.status === "cancelled" ? task.worker : reply(`Task already ${task.status}`, true);
+  }
   const tool = defineTool({
     name: "task_cancel", description: "Stop a running task and withdraw its pending approvals.",
     parameters: obj({ taskId: nonempty }), replay: "safe",
     async execute({ taskId }, api, ctx) {
-      const result = await api.commit(async tx => {
-        const task = lookup((await tx.doc(Tasks, api.conversationId)).byId, taskId);
-        if (!task) return reply("Unknown task", true);
-        if (task.status === "running") {
-          task.status = "cancelled";
-          task.endedAt = api.now();
-          await clearRequests(tx, api.conversationId, taskId);
-          (await tx.doc(Ledger, api.conversationId)).entries.push({ taskId, summary: "cancelled", refs: [], at: api.now() });
-          await tx.createTask(stop, task.worker, { ownership: { kind: "conversation" }, background: true });
-        }
-        return task.status === "cancelled" ? task.worker : reply(`Task already ${task.status}`, true);
-      }, ctx);
+      const result = await api.commit(tx => cancel(tx, taskId, api.now()), ctx);
       if (typeof result !== "number") return result;
       await api.waitForTask(result, ctx);
       return reply(`Task ${taskId}: cancelled`);
     },
   });
-  return { tool, stop };
+  return { tool, stop, cancel };
 }

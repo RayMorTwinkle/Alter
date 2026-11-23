@@ -212,6 +212,12 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         throw new HttpError(400, "days must be an integer between 1 and 366");
       }
       return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!options.feishu }));
+    } else if (method === "GET" && path === "/api/watches") {
+      return json(res, 200, await app.watches.list());
+    } else if (method === "DELETE" && /^\/api\/watches\/[^/]+$/.test(path)) {
+      const id = path.split("/")[3]!;
+      if (!surface.snapshot().watches.some(w => w.id === id)) throw new HttpError(404, "Unknown watch");
+      if (!await app.watches.cancel(id)) throw new HttpError(409, "Watch has ended");
     } else if (method === "GET" && path === "/api/heartbeat") {
       return json(res, 200, await app.heartbeat.view());
     } else if (method === "POST" && path === "/api/heartbeat/run") {

@@ -1,4 +1,4 @@
-# Web API 契约（v1.13）
+# Web API 契约（v1.14）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -105,6 +105,12 @@ type FeishuPairing = ({ paired: true } | { paired: false; code: string; expiresA
 type AgendaEvent = { id: string; title: string; start: number; end: number; allDay: boolean; location?: string; notes?: string };
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
 
+type Watch = {
+  id: string; brief: string; where: { channel: "feishu" | "mail"; chatId?: string; contact?: string };
+  createdAt: number; until: number; keywords: string[]; thinking: NonNullable<Task["thinking"]>;
+  status: "running" | "completed" | "cancelled" | "failed"; wakes: number; pollError?: string;
+};
+
 type Notification = {
   id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing"; status: "unread" | "read";
@@ -153,7 +159,9 @@ type TranscriptItem =
 
 | 方法 | 路径 | 返回 |
 |---|---|---|
-| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], schedules: ScheduledTask[], notifications: Notification[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
+| `GET` | `/api/watches` | `Watch[]`（v1.14） |
+| `DELETE` | `/api/watches/:id` | 取消盯梢（v1.14） |
+| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], schedules: ScheduledTask[], notifications: Notification[], watches: Watch[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
 | `POST` | `/api/messages` | 请求 `{ text }` → `202 { id }`；主会话忙时排队，不报错 |
 | `POST` | `/api/permissions/:id` | 请求 `{ decision: "once" &#124; "statement" &#124; "task-full" &#124; "deny", note?: string }` → `204`。已处理、已到期或对主会话租约选择任务级授权返回 `409`。旧客户端可用布尔字段 `allow` 提交单次批准或拒绝 |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
@@ -207,12 +215,12 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 
 | 字段 | 统计口径 |
 |---|---|
-| `total`、`byRole[]`、`byModel[]`、`daily[].usage` | 按调用开始时间累加模型尝试。角色为可扩展字符串，如 `main`、`task`、`triage`、`goal`、`judge`、`watch`、`heartbeat` |
+| `total`、`byRole[]`、`byModel[]`、`daily[].usage` | 按调用开始时间累加模型尝试。角色为可扩展字符串，如 `main`、`task`、`triage`、`goal`、`judge`、`watch`、`schedule`、`heartbeat` |
 | `tasks` | 按创建时间筛选任务，明细含截至采样时的用量、模型、思考强度、轮数、工具名与次数、耗时、审计条目、结果摘要、`continuedFrom` 和发起派单的 `wakeId`。成功率为完成数除以已结束数，失败和取消均计入分母，分母为零返回 `null` |
-| `wakes` | 按实际开始的主会话回合筛选。来源示例为 `user-web`、`user-feishu`、`user-cli`、`report`、`approval`、`schedule`。同一次唤醒内的工具循环和回退共用 ID。多条输入同时启动一个回合时取第一条来源。用量只合计该主会话回合；派单数由任务创建记录关联。单纯投递通知不产生唤醒 |
+| `wakes` | 按实际开始的主会话回合筛选。来源示例为 `user-web`、`user-feishu`、`user-cli`、`report`、`approval`、`schedule`、`watch`。同一次唤醒内的工具循环和回退共用 ID。多条输入同时启动一个回合时取第一条来源。用量只合计该主会话回合；派单数由任务创建记录关联。单纯投递通知不产生唤醒 |
 | `approvals` | `decisions` 按窗口内的 Audit 时间分别计数，`park` 表示曾等待审批，`allow` 和 `deny` 包含自动策略决定。`pending` 为采样时待处理的请求。四种用户决定、模型判断、按说明处理和最终过期分别计数，详见下文 |
 | `latency` | `firstToken` 与 `total` 各返回 `samples / p50Ms / p95Ms`。用毫秒最近秩计算，只纳入相应延迟已上报的尝试，无样本时分位数为 `null` |
-| `funnel`、`watchWakeAccuracy` | 漏斗复用 `/api/funnel` 的通知保留与投递规则。当前缺少盯梢唤醒反馈，准确率为 `null` |
+| `funnel`、`watchWakeAccuracy` | 漏斗复用 `/api/funnel` 的通知保留与投递规则。准确率为所选时段内调用 finish 的盯梢批次 / 唤醒批次，含到期收尾。无唤醒时为 `null` |
 | `topTasks`、`daily` | 费用可确定的任务按美元降序取前十，金额相同按任务 ID 排序。日序列还给出当日创建的任务数、其中已完成数、当日唤醒数 |
 
 **审批统计。** `userDecisions` 分别统计 `once / statement / task-full / deny`；`judgments` 统计审批模型的 `inScope / outOfScope`。每个请求的判断和用户决定都到齐时进入 `shadow`，采用与 v1.10 的 `/api/approvals/stats` 相同的四个字段和比较规则。`shadowAgreementRate` 为 `shadow.agreementRate` 的便捷字段。按各事件的实际时间归入窗口，配对取两者中较晚的时间。v1.10 留存的无时间戳事件仅计入 `all`。
@@ -255,6 +263,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 
 | event | data | 说明 |
 |---|---|---|
+| `watches` | `Watch[]` | 盯梢记录变化（v1.14） |
 | `snapshot` | 同 `/api/state` | 首次连接与重连时 |
 | `timeline` | `TimelineItem` | 新条目（含用户自己发的消息回显） |
 | `delta` | `{ id: string; text: string }` | 主会话正在生成的回答，`text` 为**累计全文**，结束时由同 `id` 的 `timeline` 条目取代 |
@@ -296,3 +305,15 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | `tokens, feedback` | 本轮主会话对话中模型报告的 token 总数（含缓存），以及对本轮的直接反馈 `useful / useless / null` |
 
 主会话自行决定是否告知用户、派任务、开盯梢、另寻线索或什么都不做。`notify` 写入来源为 `alter` 的通知，遵循立即投递与安静时段规则。报告、调度的普通回复进 Web 时间线，飞书用户消息照常回到原渠道。巡检及其派单的请求按 `role: "heartbeat"` 计入每日主动预算，主会话的唤醒来源为 `heartbeat`。
+
+## 盯梢（v1.14）
+
+`GET /api/watches` 返回全部盯梢记录的数组。`GET /api/state` 和 SSE 首帧包含同一形状的 `watches` 字段。记录变化时 SSE 发送 `watches` 事件，数据为完整数组。
+
+每条记录包含 `id`（也是 taskId）、`brief`、`where`、`keywords`、`thinking`、`createdAt` 和 `until`（Unix 毫秒）、`wakes`（任务唤醒批数）、`status`（running / completed / cancelled / failed）。上次拉取失败时附带 `pollError`，成功后清除。
+
+`DELETE /api/watches/:id` 与 `task_cancel` 共用取消流程。请求使用 JSON Content-Type。取消和重复取消返回 204，未知 ID 返回 404，其他已结束的任务返回 409。
+
+主会话以 `watch({ brief, where: { channel, chatId?, contact? }, until, keywords?, thinking? })` 创建。渠道为 feishu 或 mail。飞书联系人建议使用发送者 open_id，邮件使用发件地址。`until` 接受未来 ISO 时间（无偏移时按用户时区）或从现在起的分钟数。默认 low。观察时段含起点、不含终点。关键词忽略大小写，任意一个子串命中即可。
+
+飞书长连接和收件箱新邮件可直接触发，用户身份飞书历史和 IMAP 收件箱每 60 秒补拉。创建时检查渠道授权。首次命中开启固定合并窗，`ALTER_WATCH_BATCH_MS` 默认为 30000。到期收尾包含尚未交付的批次。重启时已到期的记录直接收尾。主动预算用完时暂存待处理批次，到期仍无余额则失败并记账。统计按 `watch` 记录任务用量，每日主动预算计入实际 token 和每个唤醒批次一次。报告唤醒主会话时 `wakeSource` 为 `watch`。

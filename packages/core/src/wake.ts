@@ -21,7 +21,7 @@ async function recordWake(tx: Tx, id: ConversationId, run: NonNullable<LiveState
   let wakeSource = "unknown";
   if (entry?.kind === "alter.user-input" && typeof meta?.source === "string") {
     wakeSource = ["web", "feishu", "cli"].includes(meta.source) ? "user-" + meta.source : meta.source;
-  } else if (entry?.kind === "alter.task-report") wakeSource = "report";
+  } else if (entry?.kind === "alter.task-report") wakeSource = meta?.wakeSource === "watch" ? "watch" : "report";
   else if (entry?.kind === "alter.heartbeat") wakeSource = "heartbeat";
   else if (entry?.kind === "alter.schedule" && !/^expired-permission-/.test(submission?.requestId ?? "")) wakeSource = "schedule";
   else if (/^(expired-)?permission-/.test(submission?.requestId ?? "")) wakeSource = "approval";

@@ -19,11 +19,37 @@ export function createFeishuConnector(options: { config: FeishuUserConfig; dataD
     const result = token ? reply(externalText(await fetchRows(token))) : reply(disconnected, true);
     return { ...result, details: { untrusted: true, source: "feishu" } };
   }
+  async function userToken() {
+    const token = await account.accessToken();
+    if (!token) throw new Error(disconnected);
+    return token;
+  }
   const plugin: AlterPlugin = {
     capability: { id: "feishu", mainLeasable: false, actions: [
       { name: "chats", effect: "read" }, { name: "messages", effect: "read" }, { name: "send", effect: "external-send" },
     ] },
     start: account.watch,
+    watchSource: {
+      async authorize({ chatId }) {
+        const token = await userToken();
+        if (chatId) await api.messages(token, chatId, 1);
+        else {
+          const checked = new Set<string>();
+          for (const chat of await api.chats(token)) {
+            if (!chat.chat_id || checked.has(chat.type)) continue;
+            await api.messages(token, chat.chat_id, 1);
+            checked.add(chat.type);
+          }
+        }
+      },
+      async poll({ chatId }, since, until) {
+        const token = await userToken();
+        const ids = chatId ? [chatId] : (await api.chats(token)).flatMap(chat => chat.chat_id ? [chat.chat_id] : []);
+        const events = [];
+        for (const id of ids) events.push(...await api.watchMessages(token, id, since, until));
+        return events;
+      },
+    },
     tools: [
       defineTool({ name: "feishu_chats", description: "List the user's Feishu chats with names, IDs and types.",
         parameters: obj({}), replay: "safe", execute: () => read(token => api.chats(token)) }),

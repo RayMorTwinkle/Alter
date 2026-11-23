@@ -1,5 +1,8 @@
 import { conversationDoc, type ConversationId, type EntryId, type ModelThinkingLevel, type TaskId } from "./runtime.ts";
 
+import type { WatchWhere } from "./capabilities.ts";
+
+export type WatchSettings = { where: WatchWhere; until: number; keywords: string[]; wakes: number[]; finished?: true; pollError?: string };
 export type Permission = "restricted" | "auto" | "full";
 export type TaskRecord = {
   conversationId: ConversationId;
@@ -18,12 +21,13 @@ export type TaskRecord = {
   failure?: string;
   triggerSource?: "scheduled";
   proactive?: true;
+  watch?: WatchSettings;
   heartbeatAt?: number; heartbeatId?: string;
   goal?: { text: string; timeZone: string };
 };
 
 export const Tasks = conversationDoc<{ byId: Record<string, TaskRecord> }>("tasks", () => ({ byId: {} }));
-export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number; wakeId?: string; scheduled?: true }>(
+export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number; wakeId?: string; scheduled?: true; watchWakeId?: string }>(
   "task-identity", () => ({ taskId: "", reminders: 0 }),
 );
 export type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };

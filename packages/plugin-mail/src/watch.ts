@@ -1,8 +1,48 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { PluginHost } from "@alter/core";
-import { imapConnection, uids, type MailClients } from "./client.ts";
+import type { ExternalEvent, PluginHost, WatchSource } from "@alter/core";
+import { imapConnection, uids, withImap, type MailClients } from "./client.ts";
 import type { MailConfig } from "./config.ts";
-import { summary } from "./read.ts";
+import type { FetchMessageObject } from "imapflow";
+import { read, summary } from "./read.ts";
+
+function receivedAt(row: FetchMessageObject) {
+  if (!row.internalDate) return;
+  const ms = new Date(row.internalDate).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function mailEvent(row: FetchMessageObject, validity: bigint, at: number): ExternalEvent {
+  const { from, subject } = summary(row);
+  const sender = row.envelope?.from?.[0];
+  return { source: "mail", kind: "new-message", summary: `${from} — ${subject}`, ref: `INBOX/${validity}/${row.uid}`,
+    at, untrusted: true,
+    ...(sender?.address && { contact: sender.address }), ...(sender?.name && { contactName: sender.name }) };
+}
+
+export function mailWatchSource(config: MailConfig, clients: MailClients): WatchSource {
+  return {
+    async authorize() {
+      try { await withImap(config, clients, client => client.mailboxOpen("INBOX", { readOnly: true })); }
+      catch { throw new Error("无法读取收件箱，请检查 IMAP 连接和授权"); }
+    },
+    poll: ({ contact }, since, until) => withImap(config, clients, async client => {
+      const box = await client.mailboxOpen("INBOX", { readOnly: true });
+      const ids = await uids(client, { since: new Date(since - 86_400_000) });
+      const events: ExternalEvent[] = [];
+      for (let i = 0; i < ids.length; i += 100) {
+        for (const row of await client.fetchAll(ids.slice(i, i + 100), { envelope: true, internalDate: true }, { uid: true })) {
+          const at = receivedAt(row);
+          if (at === undefined) throw new Error("IMAP 未返回收件时间");
+          const event = mailEvent(row, box.uidValidity, at);
+          if (event.at < since || event.at >= until || (contact && ![event.contact, event.contactName].some(v => v?.toLowerCase() === contact.toLowerCase()))) continue;
+          event.text = event.summary + "\n" + (await read(client, row.uid)).text;
+          events.push(event);
+        }
+      }
+      return events;
+    }),
+  };
+}
 
 // Servers without IDLE (163) get a search every pollMs instead of push wake-ups.
 export async function watchInbox(config: MailConfig, clients: MailClients, host: PluginHost, pollMs = 60_000) {
@@ -44,12 +84,15 @@ export async function watchInbox(config: MailConfig, clients: MailClients, host:
           const next = cursor.next;
           const ids = (await uids(client, { uid: `${next}:*` })).filter(uid => uid >= next);
           for (let offset = 0; offset < ids.length; offset += 50) {
-            const rows = await client.fetchAll(ids.slice(offset, offset + 50), { envelope: true }, { uid: true });
+            const rows = await client.fetchAll(ids.slice(offset, offset + 50), { envelope: true, internalDate: true }, { uid: true });
             for (const row of rows.sort((a, b) => a.uid - b.uid)) {
               if (signal.aborted) return;
-              const { from, subject } = summary(row);
-              await host.emit({ source: "mail", kind: "new-message", summary: `${from} — ${subject}`,
-                ref: `INBOX/${cursor.validity}/${row.uid}`, at: Date.now(), untrusted: true });
+              const event = mailEvent(row, cursor.validity, receivedAt(row) ?? Date.now());
+              if (await host.watching?.(event)) {
+                try { event.text = event.summary + "\n" + (await read(client, row.uid)).text; }
+                catch { console.warn("Alter mail watch could not read body for", event.ref); }
+              }
+              await host.emit(event);
               cursor.next = row.uid + 1;
             }
           }

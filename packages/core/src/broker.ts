@@ -153,7 +153,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
       async beforeTool(call, api, ctx) {
         const main = getMain();
         const isMain = api.conversationId === main.id;
-        const control = call.name === "finish" || call.name === "declare_permissions";
+        const control = call.name === "finish" || call.name === "sleep" || call.name === "declare_permissions";
         const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write-local" }
           : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write-local" }
           : registry.toolActions.get(call.name);

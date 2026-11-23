@@ -1,7 +1,7 @@
 export { approvalStats, choices, isApprovalDecision, type ApprovalDecision, answerUserPermission, Audit, Requests, type PermissionState } from "./broker.ts";
 export {
   createCapabilityRegistry, demoManifests as manifests, toolActions,
-  type AlterPlugin, type Capability, type CapabilityRegistry, type Effect, type ExternalEvent, type PluginHost,
+  type AlterPlugin, type Capability, type CapabilityRegistry, type Effect, type ExternalEvent, type WatchWhere, type WatchSource, type PluginHost,
 } from "./capabilities.ts";
 export { dataDirectory, gatewayConfig, loadRepoEnv, proactiveConfig } from "./config.ts";
 export { Events, Leases, openAlter } from "./main.ts";

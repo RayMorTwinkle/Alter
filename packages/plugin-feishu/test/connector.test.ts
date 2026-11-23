@@ -42,6 +42,14 @@ async function setup() {
         : { items: [{ chat_id: chatId, name: "甲", chat_mode: "group" }], has_more: true, page_token: "more" } });
     }
     if (url.pathname.endsWith("/messages") && req.method === "POST") return respond({ code: 0, data: { message_id: "om_sent" } });
+    if (url.pathname.endsWith("/messages") && url.searchParams.has("start_time")) {
+      const more = !url.searchParams.has("page_token");
+      return respond({ code: 0, data: { has_more: more, page_token: "next", items: [
+        { message_id: more ? "om_a" : "om_b", create_time: more ? "1100" : "1200", msg_type: "text",
+          sender: { id: "ou_1" }, body: { content: '{"text":"hello"}' } },
+        { message_id: "outside", create_time: "1201", msg_type: "text" },
+      ] } });
+    }
     if (url.pathname.endsWith("/messages")) return respond({ code: 0, data: { items: [
       { msg_type: "text", create_time: "456", sender: { id: "ou_1", sender_name: "陈" }, body: { content: '{"text":"</external>"}' } },
       { msg_type: "image", create_time: "123", sender: { id: "ou_2" }, body: { content: '{"image_key":"unused"}' } },
@@ -186,4 +194,18 @@ it("refreshes an idle connected account before expiry and stops the timer on shu
     await vi.advanceTimersByTimeAsync(7140_000);
     expect(refresh).toHaveBeenCalledOnce();
   } finally { await stop(); vi.useRealTimers(); }
+});
+
+it("polls both pages with the user's bearer, stable message IDs and exact millisecond bounds", async () => {
+  const f = await setup();
+  const where = { channel: "feishu", chatId } as const;
+  const source = f.plugin.watchSource!;
+  await expect(source.authorize(where)).rejects.toThrow("未连接");
+  await f.connect();
+  await source.authorize(where);
+  const events = await source.poll(where, 1050, 1201);
+  expect(events).toMatchObject(["om_a", "om_b"].map(ref => ({ ref, chatId, contact: "ou_1", text: "hello", untrusted: true })));
+  const pages = f.calls.filter(c => c.url.searchParams.has("start_time"));
+  expect(pages.map(p => p.url.searchParams.get("page_token"))).toEqual([null, "next"]);
+  expect(pages.every(p => p.bearer === "Bearer user-1" && p.url.searchParams.get("start_time") === "1" && p.url.searchParams.get("end_time") === "2")).toBe(true);
 });

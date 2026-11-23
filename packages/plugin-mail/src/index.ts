@@ -3,7 +3,7 @@ import { append, compose, defaultClients, folderPath, withImap, type MailClients
 import type { MailConfig } from "./config.ts";
 import { external, read, search } from "./read.ts";
 import { send, toolAttempt } from "./send.ts";
-import { watchInbox } from "./watch.ts";
+import { mailWatchSource, watchInbox } from "./watch.ts";
 
 export { mailConfigFromEnv, type MailConfig } from "./config.ts";
 export type { MailClients, MailConnection } from "./client.ts";
@@ -43,6 +43,7 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
           reply(await send(config, clients, client, args, await toolAttempt(config, args.to, api, ctx)))),
       }),
     ],
+    watchSource: mailWatchSource(config, clients),
     start: host => watchInbox(config, clients, host),
   };
 }
