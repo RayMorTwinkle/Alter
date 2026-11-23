@@ -236,6 +236,8 @@ it("resumes statement authorizations from SQLite without asking again for an in-
   await f.start();
   await f.decide((await f.park()).id, "statement");
   const held = await f.park("fixture_delete");
+  // An unfinished background review replays on reopen. Wait for its judgment to commit.
+  await expect.poll(() => approvalStats(f.app.main)).toMatchObject({ compared: 1 });
   await f.close();
   const g = await f.reopen();
   g.app.harness.resume();
