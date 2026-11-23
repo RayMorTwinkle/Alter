@@ -177,6 +177,12 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
   if (entry.kind === "alter.schedule-notice" && typeof data?.text === "string" && typeof data.at === "number") {
     return [{ kind: "notice", id: `entry-${entry.id}`, text: data.text, at: data.at }];
   }
+  if (entry.kind === "pi.compaction") {
+    // Show the summary as a fold in the chat, not as a message the user never sent.
+    const msg = entry.model?.[0];
+    const summary = msg ? /<summary>\s*([\s\S]*?)\s*<\/summary>/.exec(contentText(msg.content))?.[1] : undefined;
+    return msg && summary ? [{ kind: "notice", source: "compaction", id: `entry-${entry.id}`, text: summary, at: msg.timestamp }] : [];
+  }
   const items: TimelineItem[] = [];
   for (const [index, msg] of (entry.model ?? []).entries()) {
     const id = `entry-${entry.id}-${index}`;

@@ -4,6 +4,10 @@ import { join } from "node:path";
 
 import type { FeedbackSettings } from "./feedback-settings.ts";
 
+export const defaultCompactAtTokens = 400_000;
+export const isCompactAtTokens = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
 export type ApprovalMode = "on" | "off";
 export const isApprovalMode = (value: unknown): value is ApprovalMode =>
   value === "on" || value === "off";
@@ -19,7 +23,7 @@ export function isHeartbeatSettings(value: unknown): value is HeartbeatSettings 
 
 export function openSettings(dir: string | undefined, defaults: HeartbeatSettings, feedback: () => Promise<Readonly<FeedbackSettings>>) {
   const path = dir && join(dir, "settings.json");
-  let saved: { approvalModel?: unknown; heartbeat?: unknown } = {};
+  let saved: { approvalModel?: unknown; heartbeat?: unknown; compactAtTokens?: unknown } = {};
   if (path) {
     try { saved = JSON.parse(readFileSync(path, "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -28,22 +32,26 @@ export function openSettings(dir: string | undefined, defaults: HeartbeatSetting
   const mode = stored === "shadow" || stored === "auto" ? "on" : stored;
   if (!isApprovalMode(mode)) throw new Error("approvalModel must be on or off");
   if (saved.heartbeat !== undefined && !isHeartbeatSettings(saved.heartbeat)) throw new Error("Invalid saved heartbeat settings");
+  if (saved.compactAtTokens !== undefined && !isCompactAtTokens(saved.compactAtTokens)) throw new Error("Invalid saved compactAtTokens");
+  let compactAtTokens = saved.compactAtTokens ?? defaultCompactAtTokens;
   let approvalModel = mode;
   let heartbeat = saved.heartbeat;
   const settings = {
     feedback,
     get approvalModel() { return approvalModel; },
     get heartbeat() { return heartbeat ?? defaults; },
-    set(value: ApprovalMode, window = heartbeat) {
+    get compactAtTokens() { return compactAtTokens; },
+    set(value: ApprovalMode, window = heartbeat, threshold = compactAtTokens) {
       if (path) {
         const temp = path + "." + randomUUID();
         try {
-          writeFileSync(temp, JSON.stringify({ approvalModel: value, heartbeat: window }), { flag: "wx", mode: 0o600 });
+          writeFileSync(temp, JSON.stringify({ approvalModel: value, heartbeat: window, compactAtTokens: threshold }), { flag: "wx", mode: 0o600 });
           renameSync(temp, path);
         } finally { rmSync(temp, { force: true }); }
       }
       approvalModel = value;
       heartbeat = window;
+      compactAtTokens = threshold;
     },
   };
   if (saved.approvalModel !== undefined && saved.approvalModel !== mode) settings.set(mode);

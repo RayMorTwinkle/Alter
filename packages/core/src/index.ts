@@ -23,7 +23,8 @@ export { Notifications, updateNotification, type Notification } from "./notifica
 export type { ScheduleItem } from "./scheduler.ts";
 export { calendarTime } from "./calendar-time.ts";
 export { judge, type ApprovalCall, type ApprovalContext, type Judgment } from "./approval-model.ts";
-export { isApprovalMode, type ApprovalMode } from "./settings.ts";
+export { validModelOverrides } from "./model-capabilities.ts";
+export { isCompactAtTokens, isApprovalMode, type ApprovalMode } from "./settings.ts";
 export { stats, type StatsRange } from "./stats.ts";
 export { subscribeHeartbeat, type HeartbeatEvent, type HeartbeatRun } from "./heartbeat-runs.ts";
 export type { PluginCheck, PluginDescription, PluginField, PluginStatus, PluginView } from "./plugin-settings.ts";

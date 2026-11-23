@@ -250,7 +250,9 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             delete pending[id];
             return block(`The user already declined ${call.name} in this task. Do not retry it; finish and report that the user declined.`);
           }
-          const needsApproval = effect !== "read" && !control && !(isMain && call.name === "notify") &&
+          // The main session's own notes, schedules and notifications are bookkeeping, not actions on the outside world.
+          const internal = control || (isMain && !leasedCall && (call.name === "notify" || capability === "memory" || capability === "schedule"));
+          const needsApproval = effect !== "read" && !internal &&
             !(effect === "irreversible" && task?.permission === "full");
           if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
           const scope = await tx.doc(ScopeDoc, api.conversationId);

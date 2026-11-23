@@ -94,6 +94,12 @@ function Item({ item, pending, onAnswer, onOpenTask }: {
       );
     }
     case "notice":
+      if (item.source === "compaction") return (
+        <details className="compacted">
+          <summary>{t.compacted} <time>{clock(item.at)}</time></summary>
+          <Markdown text={item.text} />
+        </details>
+      );
       return <p className="notice">{item.text} <time>{clock(item.at)}</time></p>;
   }
 }

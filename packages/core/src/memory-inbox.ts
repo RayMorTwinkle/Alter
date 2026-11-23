@@ -1,4 +1,4 @@
-import { conversationDoc, ROOT_CONVERSATION_ID, type Cursor, type Tx } from "./runtime.ts";
+import { conversationDoc, ROOT_CONVERSATION_ID, type Cursor, type EntryRecord, type Tx } from "./runtime.ts";
 import type { ExternalEvent } from "./capabilities.ts";
 
 export type OwnMessage = { id: string; text: string; at: number };
@@ -23,6 +23,14 @@ export async function recordOwnEvent(tx: Tx, event: ExternalEvent) {
   state.lastUserAt = Math.max(state.lastUserAt ?? 0, event.at);
 }
 
+export function ownUserMessage(entry: EntryRecord): OwnMessage | undefined {
+  const d = entry.data;
+  if (entry.kind !== "alter.user-input" || !d || typeof d !== "object" || Array.isArray(d)) return;
+  if (typeof d.source !== "string" || !["web", "cli", "feishu"].includes(d.source) ||
+    typeof d.id !== "string" || typeof d.text !== "string" || typeof d.at !== "number") return;
+  return { id: d.id, at: d.at, text: d.text };
+}
+
 export async function restoreMemoryInbox(tx: Tx) {
   const state = await tx.doc(MemoryInbox, ROOT_CONVERSATION_ID);
   if (state.initialized) return;
@@ -32,11 +40,8 @@ export async function restoreMemoryInbox(tx: Tx) {
   do {
     const page = await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID, order: "ascending" }, 200, cursor);
     for (const entry of page.items) {
-      const d = entry.data;
-      if (entry.kind !== "alter.user-input" || !d || typeof d !== "object" || Array.isArray(d)) continue;
-      if (typeof d.source !== "string" || !["web", "cli", "feishu"].includes(d.source) ||
-        typeof d.id !== "string" || typeof d.text !== "string" || typeof d.at !== "number" || pending.has(d.id)) continue;
-      prior.push({ id: d.id, at: d.at, text: d.text });
+      const message = ownUserMessage(entry);
+      if (message && !pending.has(message.id)) prior.push(message);
     }
     cursor = page.next;
   } while (cursor);

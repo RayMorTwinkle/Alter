@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -53,6 +53,9 @@ export const api = {
   extPluginAction: (id: string, action: "approve" | "reject" | "rollback" | "disable" | "enable", body: Record<string, string> = {}) =>
     request<void>(`/api/ext-plugins/${encodeURIComponent(id)}/${action}`, { body }),
   deleteExtPlugin: (id: string) => request<void>(`/api/ext-plugins/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  models: () => request<ModelCapabilities[]>("/api/models"),
+  updateModel: (id: string, overrides: ModelOverrides) =>
+    request<ModelCapabilities>("/api/models/" + encodeURIComponent(id), { method: "PUT", body: overrides }),
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: patch }),
   approvalStats: () => request<ApprovalStats>("/api/approvals/stats"),

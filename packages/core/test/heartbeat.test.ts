@@ -390,10 +390,8 @@ it("records effective quiet-hour notification levels and the ID of a created sch
     call("schedule_create", { type: "reminder", brief: "查看活动", trigger: { kind: "at", at: "2026-12-02T12:00Z" } }), say("已安排")]);
   const run = await f.app.heartbeat.run();
   f.app.harness.resume();
-  const approval = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {})[0];
-  await expect.poll(approval).toMatchObject({ tool: "schedule_create" });
-  await answerUserPermission(f.app.main, { requestId: (await approval())!.id, decision: "once" });
   await expect.poll(async () => (await f.app.heartbeat.view()).runs.find(row => row.id === run.id)?.finalReply).toBe("已安排");
+  expect(Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {})).toEqual([]);
   const record = (await f.app.heartbeat.view()).runs.find(row => row.id === run.id)!;
   expect(record.notified).toBe(true);
   const notice = (await f.app.harness.snapshot(Notifications, f.app.main.id, context))!.entries.find(row => row.kind === "notify")!;

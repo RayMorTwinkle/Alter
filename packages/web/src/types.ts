@@ -12,8 +12,16 @@ export type TimelineItem = {
 
 export type ApprovalDecision = "once" | "task-full" | "deny";
 export type HeartbeatSettings = { enabled: boolean; start: string; end: string };
-export type Settings = { approvalModel: "on" | "off"; heartbeat: HeartbeatSettings };
-export type SettingsPatch = { approvalModel?: Settings["approvalModel"]; heartbeat?: Partial<HeartbeatSettings> };
+export type ModelOverrides = {
+  contextWindow?: number; maxTokens?: number; input?: ("text" | "image")[]; reasoning?: boolean;
+  thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
+};
+export type ModelCapabilities = Omit<Required<ModelOverrides>, "thinkingLevelMap"> & {
+  id: string; thinkingLevelMap: NonNullable<ModelOverrides["thinkingLevelMap"]> | null;
+  sources: Record<keyof ModelOverrides, "catalog" | "manual" | "default">;
+};
+export type Settings = { compactAtTokens: number; approvalModel: "on" | "off"; heartbeat: HeartbeatSettings };
+export type SettingsPatch = { compactAtTokens?: number; approvalModel?: Settings["approvalModel"]; heartbeat?: Partial<HeartbeatSettings> };
 export type ApprovalStats = { modelAllowed: number; askedUser: number; userApproved: number; userDenied: number };
 export type PermissionItem = { tool: string; target: string; purpose: string; isNew: boolean };
 

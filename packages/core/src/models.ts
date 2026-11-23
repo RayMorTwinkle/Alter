@@ -4,13 +4,14 @@ import type { Api, AssistantMessage, AssistantMessageEvent, Message, Model, Prov
 import { withClientIdentity } from "@earendil-works/pi-ai/utils/identity";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import { clampThinkingLevel, createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
+import { clampThinkingLevel, getSupportedThinkingLevels, createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
+import { gatewayCompat, openModelCapabilities } from "./model-capabilities.ts";
 import type { gatewayConfig } from "./config.ts";
 import { appendUsage, budgetExhausted, splitUsage, type ProactiveBudget, type UsageLine } from "./usage.ts";
 
 type Config = ReturnType<typeof gatewayConfig>;
 type Conversation = "main" | "task";
-export const gatewayDataDirectories = new WeakMap<Models, string>();
+export const gatewayCapabilities = new WeakMap<Models, ReturnType<typeof openModelCapabilities>>();
 const completions = openAICompletionsApi();
 
 // The gateway reports each fallback attempt. Other providers expose one terminal usage record.
@@ -95,7 +96,7 @@ export function auxiliaryModels(models: Models, dir: string | undefined, now: ()
   return {
     getModel: (provider, id) => models.getModel(provider, id),
     async completeSimple(model, context, options) {
-      if (gatewayDataDirectories.has(models)) {
+      if (gatewayCapabilities.has(models)) {
         return attemptContext.run({ now, record: line => appendUsage(dir, { ...line, ...owner }) },
           () => models.completeSimple(model, context, options));
       }
@@ -129,7 +130,7 @@ function errorKind(status: number | undefined, networkError: boolean, message = 
 
 const retryable = new Set(["timeout", "auth", "rate_limit", "server", "network"]);
 
-function chainStreams(config: Config, conversation: Conversation): ProviderStreams {
+function chainStreams(config: Config, conversation: Conversation, catalog: Map<string, Model<"openai-completions">>, uncapped: Set<string>): ProviderStreams {
   async function* attempts(
     send: ProviderStreams["stream"], route: Model<Api>, ctx: TranscriptContext, options: SimpleStreamOptions = {},
   ) {
@@ -140,7 +141,7 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
     const chain = triage || role === "feedback" ? candidates.slice(0, 1) : candidates;
     for (const [index, id] of chain.entries()) {
       options.signal?.throwIfAborted();
-      const model = { ...route, id, name: id };
+      const model = { ...catalog.get(id)!, input: catalog.get(route.id)!.input };
       const at = new Date(accounting?.now() ?? Date.now()).toISOString();
       const started = performance.now();
       const elapsed = () => Math.round(performance.now() - started);
@@ -154,6 +155,14 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
       try {
         const stream = send(model, ctx, {
           ...options, signal, maxRetries: 0,
+          // streamSimple synthesizes a cap even when none was requested. Let the gateway
+          // allocate the thinking + answer budget unless the caller or user set a limit.
+          onPayload: async (payload, target) => {
+            if (uncapped.has(id) && options.maxTokens === undefined && payload && typeof payload === "object" && "max_tokens" in payload) {
+              delete payload.max_tokens;
+            }
+            return options.onPayload?.(payload, target);
+          },
           fetch: async (input, init) => {
             try {
               const response = await (options.fetch ?? fetch)(input, init);
@@ -220,17 +229,35 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
 export async function createGatewayModels(config: Config) {
   await mkdir(config.dataDir, { recursive: true });
   const models = createModels();
-  gatewayDataDirectories.set(models, config.dataDir);
+  const capabilities = openModelCapabilities(config.dataDir, [...config.main, ...config.task], () => {
+    register("main");
+    register("task");
+  });
+  gatewayCapabilities.set(models, capabilities);
   function register(conversation: Conversation) {
     const provider = `alter-${conversation}`;
-    const catalog = Array.from(new Set(["chain", ...config[conversation]]), (id): Model<"openai-completions"> => ({
-      id, name: id, provider, api: "openai-completions", baseUrl: config.baseUrl,
-      input: ["text", "image"], reasoning: true, contextWindow: 65536, maxTokens: 4096,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: true, maxTokensField: "max_tokens" },
-    }));
+    const catalog = new Map<string, Model<"openai-completions">>();
+    const uncapped = new Set<string>();
+    for (const id of new Set(config[conversation])) {
+      const { sources, thinkingLevelMap, ...caps } = capabilities.get(id);
+      catalog.set(id, { ...caps, name: id, provider, api: "openai-completions", baseUrl: config.baseUrl,
+        thinkingLevelMap: thinkingLevelMap ?? undefined, compat: gatewayCompat(id),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+      if (caps.reasoning && sources.maxTokens !== "manual") uncapped.add(id);
+    }
+    const choices = [...catalog.values()];
+    const first = choices[0]!;
+    const commonLevels = getSupportedThinkingLevels(first).filter(level => choices.every(m => getSupportedThinkingLevels(m).includes(level)));
+    const chain: Model<"openai-completions"> = { ...first, id: "chain", name: "chain",
+      input: first.input.filter(input => choices.every(m => m.input.includes(input))),
+      contextWindow: Math.min(...choices.map(m => m.contextWindow)), maxTokens: Math.min(...choices.map(m => m.maxTokens)),
+      reasoning: commonLevels.some(level => level !== "off"),
+      thinkingLevelMap: Object.fromEntries((["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)
+        .map(level => [level, commonLevels.includes(level) ? level : null])),
+    };
+    catalog.set("chain", chain);
     models.setProvider(createProvider({
-      id: provider, baseUrl: config.baseUrl, models: catalog, api: chainStreams(config, conversation),
+      id: provider, baseUrl: config.baseUrl, models: [chain, ...choices], api: chainStreams(config, conversation, catalog, uncapped),
       auth: { apiKey: { name: "Alter gateway", resolve: async () => ({ auth: { apiKey: config.apiKey } }) } },
     }));
     return { provider, modelId: "chain" };

@@ -121,7 +121,7 @@ it("applies a partial heartbeat patch immediately and restores the window and de
   await web.close();
   const reopened = await web.reopen();
   await reopened.login();
-  expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "on", heartbeat: { enabled: true, start: "21:00", end: "02:00" } });
+  expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "on", compactAtTokens: 400_000, heartbeat: { enabled: true, start: "21:00", end: "02:00" } });
   expect(await (await reopened.read("/api/heartbeat")).json()).toMatchObject({ nextAt: nextAt - 3_600_000 });
 });
 
