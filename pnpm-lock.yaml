@@ -98,6 +98,12 @@ importers:
         specifier: 8.0.2
         version: 8.0.2
 
+  packages/plugin-sources:
+    dependencies:
+      '@alter/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/server:
     dependencies:
       '@alter/core':
@@ -115,6 +121,9 @@ importers:
       '@alter/plugin-mail':
         specifier: workspace:*
         version: link:../plugin-mail
+      '@alter/plugin-sources':
+        specifier: workspace:*
+        version: link:../plugin-sources
 
   packages/web:
     dependencies:

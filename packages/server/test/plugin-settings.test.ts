@@ -24,7 +24,7 @@ it("serves all installed plugins with partial credentials and changes the live c
   await web.login();
   const views = await (await web.read("/api/plugins")).json();
   expect(views.map((view: PluginView) => [view.id, view.status.state])).toEqual([
-    ["calendar", "ok"], ["feishu", "needs-config"], ["mail", "needs-config"], ["browser", "off"]]);
+    ["calendar", "ok"], ["feishu", "needs-config"], ["mail", "needs-config"], ["browser", "off"], ["sources", "ok"]]);
   expect((await web.post("/api/plugins/unknown/check")).status).toBe(404);
   const guide = await (await web.read("/api/plugins/feishu/guide")).json();
   expect(guide.redirectUri).toBe(web.base + "/api/feishu/oauth/callback");

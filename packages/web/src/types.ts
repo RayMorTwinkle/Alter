@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.15).
+// Mirrors docs/architecture/web-api.md (v1.16).
 
 export type TimelineItem = {
   id: string;
@@ -213,3 +213,22 @@ export type PluginView = PluginDescription & {
 };
 export type PluginPatch = { enabled?: boolean; settings?: Record<string, string | boolean | null> };
 export type FeishuGuide = { permissionsJson: string; redirectUri: string; eventsMode: "long-connection"; steps: string[] };
+
+export type SourceItem = {
+  id: string; title: string; url: string; body?: string; publishedAt?: string; repo?: string; type?: string;
+};
+type SecretSet = { set: boolean };
+type SourceSpec<T> = { template: "rss"; params: { url: string } } | { template: "github"; params: { token: T } } |
+  { template: "json"; params: { url: string; itemsPath?: string; idField: string; titleField: string; urlField: string;
+    bodyField?: string; headers?: Record<string, T>; secrets?: Record<string, T> } };
+export type SourceCreate = SourceSpec<string> & { name: string; enabled?: boolean; intervalMinutes?: number };
+export type SourcePreview = SourceSpec<string> & Partial<Pick<SourceCreate, "name" | "enabled" | "intervalMinutes">>;
+export type SourcePatch = Partial<Pick<SourceCreate, "name" | "enabled" | "intervalMinutes">> & { params?: Partial<SourceCreate["params"]> };
+export type SourceView = SourceSpec<SecretSet> & {
+  id: string; name: string; enabled: boolean; intervalMinutes: number;
+  status: { lastPollAt: number; nextPollAt: number | null; todayCount: number; error: string | null };
+};
+export type SourceTemplate = { template: SourceCreate["template"]; name: string; fields: PluginField[] };
+export type SourcePreviewResult = { samples: SourceItem[] };
+export type SourceCreateResult = SourcePreviewResult & { source: SourceView };
+export type SourcesEvent = { event: "sources"; data: SourceView[] };

@@ -2,7 +2,8 @@ import { CaretDown, Check, Copy, X as Cross } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
-import type { ApprovalStats, FeishuGuide, PluginField, PluginView, Settings } from "../types.ts";
+import { clock } from "../format.ts";
+import type { ApprovalStats, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
 
 type Draft = Record<string, string | boolean>;
@@ -147,6 +148,141 @@ function PluginCard({ plugin, onChanged }: { plugin: PluginView; onChanged: (vie
   );
 }
 
+const objectFields = new Set(["headers", "secrets"]);
+
+function SourceForm({ templates, onCreated, onCancel }: {
+  templates: SourceTemplate[]; onCreated: (source: SourceView, samples: SourceItem[]) => void; onCancel: () => void;
+}) {
+  const t = useT().sources;
+  const [template, setTemplate] = useState<SourceTemplate>(templates[0]!);
+  const [name, setName] = useState("");
+  const [interval, setInterval] = useState("30");
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [samples, setSamples] = useState<SourceItem[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function spec(): SourceCreate {
+    const params: Record<string, unknown> = {};
+    for (const field of template.fields) {
+      const raw = (values[field.key] ?? "").trim();
+      if (!raw) continue;
+      if (objectFields.has(field.key)) {
+        try { params[field.key] = JSON.parse(raw); } catch { throw new Error(t.badJson(field.label)); }
+      } else params[field.key] = raw;
+    }
+    return { template: template.template, params, name: name.trim() || template.name, intervalMinutes: Number(interval) || 30 } as SourceCreate;
+  }
+  async function run(save: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      if (save) {
+        const result = await api.createSource(spec());
+        onCreated(result.source, result.samples);
+      } else setSamples((await api.previewSource(spec())).samples);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="source-form">
+      <div className="seg" role="radiogroup">
+        {templates.map(item => (
+          <button key={item.template} role="radio" aria-checked={item.template === template.template}
+            className={item.template === template.template ? "active" : ""}
+            onClick={() => { setTemplate(item); setValues({}); setSamples(null); }}>{item.name}</button>
+        ))}
+      </div>
+      <label className="field"><span>{t.name}</span><input type="text" value={name} placeholder={template.name} onChange={e => setName(e.target.value)} /></label>
+      {template.fields.map(field => (
+        <label key={field.key} className="field">
+          <span>{field.label}{field.required && <em> *</em>}</span>
+          {objectFields.has(field.key)
+            ? <textarea rows={2} value={values[field.key] ?? ""} placeholder='{"Authorization": "Bearer ${secret:api}"}' onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))} />
+            : <input type={field.type === "secret" ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""}
+                onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))} />}
+          {field.help && <small>{field.help}</small>}
+        </label>
+      ))}
+      <label className="field"><span>{t.interval}</span>
+        <select value={interval} onChange={e => setInterval(e.target.value)}>
+          {["5", "15", "30", "60", "180", "720"].map(m => <option key={m} value={m}>{t.every(Number(m))}</option>)}
+        </select>
+      </label>
+      {samples && (
+        <div className="source-samples">
+          <span>{samples.length ? t.samples : t.noSamples}</span>
+          <ul>{samples.map(item => <li key={item.id}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></li>)}</ul>
+        </div>
+      )}
+      {error && <p className="form-error">{error}</p>}
+      <div className="form-actions">
+        <button className="btn" disabled={busy} onClick={() => void run(false)}>{t.preview}</button>
+        <button className="btn primary" disabled={busy} onClick={() => void run(true)}>{t.add}</button>
+        <button className="text-btn" onClick={onCancel}>{t.cancel}</button>
+      </div>
+    </div>
+  );
+}
+
+function Sources() {
+  const t = useT().sources;
+  const [sources, setSources] = useState<SourceView[] | null>(null);
+  const [templates, setTemplates] = useState<SourceTemplate[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    api.sources().then(setSources, () => setSources(null));
+    api.sourceTemplates().then(setTemplates, () => {});
+  }, []);
+  if (!sources) return null;
+  const replace = (view: SourceView) => setSources(list => list?.map(s => s.id === view.id ? view : s) ?? null);
+  return (
+    <section className="settings-block">
+      <h3>{t.title}</h3>
+      <p className="settings-hint">{t.hint}</p>
+      {sources.map(source => (
+        <article key={source.id} className={`plugin-card source ${source.enabled ? "" : "off"}`}>
+          <header>
+            <div className="plugin-head static">
+              <b>{source.name}</b>
+              <span className={`plugin-state ${source.status.error ? "error" : source.enabled ? "ok" : "off"}`}>
+                {source.status.error ? t.failing : source.enabled ? templates.find(x => x.template === source.template)?.name ?? source.template : t.off}
+              </span>
+            </div>
+            <label className="switch" title={source.enabled ? t.disable : t.enable}>
+              <input type="checkbox" checked={source.enabled}
+                onChange={e => void api.updateSource(source.id, { enabled: e.target.checked }).then(replace, () => {})} />
+              <span aria-hidden />
+            </label>
+          </header>
+          <div className="plugin-provides">
+            <span><i>{t.interval}</i> {t.every(source.intervalMinutes)}</span>
+            <span><i>{t.today}</i> {source.status.todayCount}</span>
+            {source.status.lastPollAt > 0 && <span><i>{t.last}</i> {clock(source.status.lastPollAt)}</span>}
+            <button className="text-btn danger" onClick={() => {
+              if (confirm(t.confirmRemove(source.name))) void api.deleteSource(source.id).then(() => setSources(l => l?.filter(s => s.id !== source.id) ?? null), () => {});
+            }}>{t.remove}</button>
+          </div>
+          {source.status.error && <p className="plugin-detail">{source.status.error}</p>}
+        </article>
+      ))}
+      {sources.length === 0 && !adding && <p className="empty">{t.empty}</p>}
+      {notice && <p className="settings-hint">{notice}</p>}
+      {adding && templates.length > 0
+        ? <SourceForm templates={templates} onCancel={() => setAdding(false)} onCreated={(source, samples) => {
+            setSources(list => [...(list ?? []), source]);
+            setAdding(false);
+            setNotice(t.created(source.name, samples.length));
+          }} />
+        : <button className="btn" onClick={() => { setAdding(true); setNotice(""); }}>{t.addSource}</button>}
+    </section>
+  );
+}
+
 export function SettingsSheet({ onClose, onToggleLocale }: { onClose: () => void; onToggleLocale: () => void }) {
   const all = useT();
   const t = all.settings;
@@ -175,6 +311,8 @@ export function SettingsSheet({ onClose, onToggleLocale }: { onClose: () => void
         {!plugins && !error && <p className="empty">{all.loading}</p>}
         {plugins?.map(plugin => <PluginCard key={plugin.id} plugin={plugin} onChanged={replace} />)}
       </section>
+
+      <Sources />
 
       {settings && <>
         <section className="settings-block">

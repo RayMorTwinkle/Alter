@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, ApprovalStats, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryItem, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, ApprovalStats, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryItem, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -37,6 +37,12 @@ export const api = {
   updatePlugin: (id: string, patch: PluginPatch) => request<PluginView>(`/api/plugins/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   checkPlugin: (id: string) => request<PluginView>(`/api/plugins/${encodeURIComponent(id)}/check`, { body: {} }),
   feishuGuide: () => request<FeishuGuide>("/api/plugins/feishu/guide"),
+  sources: () => request<SourceView[]>("/api/sources"),
+  sourceTemplates: () => request<SourceTemplate[]>("/api/sources/templates"),
+  previewSource: (spec: SourcePreview) => request<SourcePreviewResult>("/api/sources/preview", { body: spec }),
+  createSource: (spec: SourceCreate) => request<SourceCreateResult>("/api/sources", { body: spec }),
+  updateSource: (id: string, patch: SourcePatch) => request<SourceView>(`/api/sources/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
+  deleteSource: (id: string) => request<void>(`/api/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: patch }),
   approvalStats: () => request<ApprovalStats>("/api/approvals/stats"),

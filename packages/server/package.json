@@ -13,6 +13,7 @@
     "@alter/plugin-browser": "workspace:*",
     "@alter/plugin-feishu": "workspace:*",
     "@alter/plugin-mail": "workspace:*",
-    "@alter/plugin-calendar": "workspace:*"
+    "@alter/plugin-calendar": "workspace:*",
+    "@alter/plugin-sources": "workspace:*"
   }
 }
