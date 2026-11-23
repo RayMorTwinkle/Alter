@@ -38,3 +38,15 @@ describe("renderInline", () => {
     expect(isValidElement(links[0]) && (links[0].props as { href: string }).href).toBe("https://example.com/x");
   });
 });
+
+describe("tables", () => {
+  it("parses a GFM table with alignment and keeps surrounding paragraphs", () => {
+    const blocks = parseBlocks("三个定时：\n| ID | 时间 |\n|---|--:|\n| scheduled-75 | 9:00 |\n| scheduled-78 |\n之后");
+    expect(blocks.map(b => b.type)).toEqual(["p", "table", "p"]);
+    expect(blocks[1]).toEqual({ type: "table", head: ["ID", "时间"], align: [undefined, "right"], rows: [["scheduled-75", "9:00"], ["scheduled-78"]] });
+  });
+
+  it("leaves a lone pipe line as text", () => {
+    expect(parseBlocks("a | b")).toEqual([{ type: "p", text: "a | b" }]);
+  });
+});

@@ -7,7 +7,11 @@ export type Block =
   | { type: "h"; level: number; text: string }
   | { type: "quote"; text: string }
   | { type: "code"; text: string }
-  | { type: "list"; ordered: boolean; items: string[]; start?: number };
+  | { type: "list"; ordered: boolean; items: string[]; start?: number }
+  | { type: "table"; head: string[]; align: ("left" | "center" | "right" | undefined)[]; rows: string[][] };
+
+const cells = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+const isRule = (line: string) => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(line);
 
 export function parseBlocks(source: string): Block[] {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
@@ -34,6 +38,14 @@ export function parseBlocks(source: string): Block[] {
       blocks.push({ type: "quote", text: body.join("\n") });
       continue;
     }
+    if (line.includes("|") && i + 1 < lines.length && isRule(lines[i + 1]!)) {
+      const head = cells(line);
+      const align = cells(lines[i + 1]!).map(c => c.startsWith(":") && c.endsWith(":") ? "center" as const : c.endsWith(":") ? "right" as const : c.startsWith(":") ? "left" as const : undefined);
+      const rows: string[][] = [];
+      for (i += 2; i < lines.length && lines[i]!.includes("|") && lines[i]!.trim(); i++) rows.push(cells(lines[i]!));
+      blocks.push({ type: "table", head, align, rows });
+      continue;
+    }
     const listItem = /^\s*(?:([-*])|(\d+)[.)])\s+(.*)$/;
     const first = listItem.exec(line);
     if (first) {
@@ -49,7 +61,8 @@ export function parseBlocks(source: string): Block[] {
       continue;
     }
     const body: string[] = [];
-    for (; i < lines.length && lines[i]!.trim() && !/^(```|#{1,4}\s|>|\s*([-*]|\d+[.)])\s)/.test(lines[i]!); i++) body.push(lines[i]!);
+    for (; i < lines.length && lines[i]!.trim() && !/^(```|#{1,4}\s|>|\s*([-*]|\d+[.)])\s)/.test(lines[i]!)
+      && !(lines[i]!.includes("|") && i + 1 < lines.length && isRule(lines[i + 1]!)); i++) body.push(lines[i]!);
     blocks.push({ type: "p", text: body.join("\n") });
   }
   return blocks;
@@ -88,6 +101,16 @@ export function Markdown({ text }: { text: string }) {
           case "h": return <p key={index} className={`md-h md-h${block.level}`}>{renderInline(block.text)}</p>;
           case "quote": return <blockquote key={index}>{renderInline(block.text)}</blockquote>;
           case "code": return <pre key={index}><code>{block.text}</code></pre>;
+          case "table": return (
+            <div key={index} className="md-table">
+              <table>
+                <thead><tr>{block.head.map((c, n) => <th key={n} style={{ textAlign: block.align[n] }}>{renderInline(c)}</th>)}</tr></thead>
+                <tbody>{block.rows.map((row, r) => (
+                  <tr key={r}>{block.head.map((_, n) => <td key={n} style={{ textAlign: block.align[n] }}>{renderInline(row[n] ?? "")}</td>)}</tr>
+                ))}</tbody>
+              </table>
+            </div>
+          );
           case "list": {
             const items = block.items.map((item, n) => <li key={n}>{renderInline(item)}</li>);
             return block.ordered ? <ol key={index} start={block.start}>{items}</ol> : <ul key={index}>{items}</ul>;
