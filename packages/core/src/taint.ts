@@ -56,3 +56,9 @@ export async function inheritTaint(tx: Tx, from: ConversationId, to: Conversatio
 export function isUntrusted(details: unknown) {
   return typeof details === "object" && details !== null && "untrusted" in details && details.untrusted === true;
 }
+
+export async function markPluginTaint(api: ToolExecutionApi, ctx: Context, capability: string, name: string) {
+  await api.commit(async tx => {
+    recordUntrusted(await tx.doc(Taint,api.conversationId),{capability,source:name,at:api.now()},[]);
+  },ctx);
+}

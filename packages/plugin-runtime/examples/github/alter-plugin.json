@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "github",
+  "version": "1.0.0",
+  "displayName": "GitHub 通知",
+  "description": "轮询GitHub 通知",
+  "tools": [],
+  "sources": [
+    {
+      "name": "github",
+      "minIntervalSeconds": 300
+    }
+  ],
+  "network": [
+    {
+      "host": "api.github.com",
+      "methods": [
+        "GET"
+      ],
+      "pathPrefixes": [
+        "/notifications"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "name": "token",
+      "purpose": "读取 GitHub 通知"
+    }
+  ],
+  "borrows": [],
+  "resources": {
+    "memoryMB": 128,
+    "timeoutMs": 20000,
+    "storageKB": 64
+  }
+}

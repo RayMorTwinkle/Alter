@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.16).
+// Mirrors docs/architecture/web-api.md (v1.17).
 
 export type TimelineItem = {
   id: string;
@@ -141,6 +141,7 @@ export type StatsUsage = {
 };
 
 export type StatsAudit = {
+  borrower?: string;
   taskId: string; tool: string; capability: string; action: string;
   effect: "read" | "write-local" | "external-send" | "irreversible" | "unknown";
   decision: "park" | "allow" | "deny"; at: number; tainted?: true;
@@ -232,3 +233,26 @@ export type SourceTemplate = { template: SourceCreate["template"]; name: string;
 export type SourcePreviewResult = { samples: SourceItem[] };
 export type SourceCreateResult = SourcePreviewResult & { source: SourceView };
 export type SourcesEvent = { event: "sources"; data: SourceView[] };
+
+export type ExtPluginEffect = "read" | "write-local" | "external-send" | "irreversible";
+export type ExtPluginSchema = {
+  type: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
+  description?: string; properties?: Record<string, ExtPluginSchema>; required?: string[]; additionalProperties?: boolean;
+  items?: ExtPluginSchema; enum?: (string | number | boolean | null)[];
+};
+export type ExtPluginManifest = {
+  schemaVersion: 1; id: string; version: string; displayName: string; description: string;
+  tools: { name: string; description: string; effect: ExtPluginEffect; inputSchema: ExtPluginSchema; outputSchema?: ExtPluginSchema }[];
+  sources: { name: string; minIntervalSeconds: number }[];
+  network: { host: string; methods: string[]; pathPrefixes: string[] }[];
+  secrets: { name: string; purpose: string }[]; borrows: string[];
+  resources: { memoryMB: number; timeoutMs: number; storageKB: number };
+};
+
+export type ExtPluginProposal = { manifest: ExtPluginManifest; sha: string; directory: string; permissions: string[]; removed: string[]; expanded: string[]; summary: string };
+export type ExtPluginView = {
+  id: string; status: "pending" | "enabled" | "disabled" | "paused" | "quarantined"; active: string | null;
+  manifest: ExtPluginManifest; failures: number; sources: { name: string; paused: boolean; invalid: number; next: number }[];
+  versions: { sha: string; version: string }[]; pending: ExtPluginProposal | null;
+};
+export type ExtPluginsEvent = { event: "ext-plugins"; data: ExtPluginView[] };

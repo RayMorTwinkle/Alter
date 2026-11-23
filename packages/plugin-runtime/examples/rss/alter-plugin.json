@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "rss",
+  "version": "1.0.0",
+  "displayName": "RSS 与 Atom",
+  "description": "轮询RSS 与 Atom",
+  "tools": [],
+  "sources": [
+    {
+      "name": "rss",
+      "minIntervalSeconds": 300
+    }
+  ],
+  "network": [
+    {
+      "host": "hnrss.org",
+      "methods": [
+        "GET"
+      ],
+      "pathPrefixes": [
+        "/frontpage"
+      ]
+    }
+  ],
+  "secrets": [],
+  "borrows": [],
+  "resources": {
+    "memoryMB": 128,
+    "timeoutMs": 20000,
+    "storageKB": 64
+  }
+}
