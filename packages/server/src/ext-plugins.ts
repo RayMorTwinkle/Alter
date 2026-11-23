@@ -24,7 +24,11 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
         return typeof v === "string" && v ? [[name, v]] : [];
       }));
     },
-    emit: app.events.emit, changed,
+    async emit(event) {
+      await app.events.emit(event);
+      const producer = /^feed:([^/]+)\//.exec(event.ref);
+      if (producer) await app.feedback.featureResult(capability(producer[1]!), app.now());
+    }, changed,
     borrowSource(id, name, args, signal) {
       check(app.capabilities.toolActions.get(name)?.effect === "read", "Sources can only borrow enabled read tools");
       return app.borrowSource(id, name, args as Parameters<typeof app.borrowSource>[2], signal);
@@ -51,6 +55,7 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
                 return nested.structuredOutput ?? null;
               },
             });
+            if (result != null && result !== "" && !(Array.isArray(result) && !result.length)) await app.feedback.featureResult(capability(id), app.now());
             return { ...reply(JSON.stringify(result)), details: { untrusted: true } };
           } catch (e) { return reply(e instanceof Error ? e.message : "Plugin failed", true); }
         },
@@ -62,7 +67,9 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
       await app.replacePlugin(capability(id)); registered.delete(id);
     }
     for (const [id, sha] of enabled) if (registered.get(id) !== sha) {
-      await app.replacePlugin(capability(id), plugin(store.active(id)!)); registered.set(id, sha);
+      const version = store.active(id)!;
+      if (version.installedAt !== undefined) await app.feedback.feature(capability(id), version.manifest.displayName, version.installedAt);
+      await app.replacePlugin(capability(id), plugin(version)); registered.set(id, sha);
     }
   }
   function view(id: string): PluginView {
@@ -112,7 +119,9 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
       return ordered(async () => {
         check(!closed, "Server shutting down");
         fields(input, action === "approve" || action === "rollback" ? "sha" : "");
-        if (action === "approve") await store.approve(id, input.sha);
+        if (action === "approve") {
+          await store.approve(id, input.sha, app.now());
+        }
         else if (action === "reject") store.reject(id);
         else if (action === "rollback") store.rollback(id, input.sha);
         else if (action === "enable" || action === "disable") toggle(id, action === "enable");

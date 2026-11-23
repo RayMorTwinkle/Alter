@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.19).
+// Mirrors docs/architecture/web-api.md (v1.20).
 
 export type TimelineItem = {
   id: string;
@@ -64,6 +64,7 @@ export type ScheduledTask = {
 };
 
 export type Notification = {
+  category?: string; // v1.20 external event kind.
   id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
@@ -271,3 +272,31 @@ export type ExtPluginView = {
   versions: { sha: string; version: string }[]; pending: ExtPluginProposal | null;
 };
 export type ExtPluginsEvent = { event: "ext-plugins"; data: ExtPluginView[] };
+
+// 反馈闭环（v1.20）
+export type FeedbackQuestion = { id: string; prompt: string; options: string[]; allowOther: boolean; multi: boolean; why: string };
+export type FeedbackSource = "guess" | "mismatch" | "silent-proactive" | "feature" | "style";
+export type FeedbackEffect = { kind: "memory"; entryId: string } | { kind: "metric"; name: string } |
+  { kind: "param"; key: "heartbeatBias" | "triagePreference" | "reportFrequency" | "replyLength" | "permissionNotes";
+    mapping: Record<string, string | number>; scope?: string };
+export type FeedbackAnswer = { options: string[]; other?: string };
+export type IssuedFeedback = FeedbackQuestion & {
+  candidateId: string; source: FeedbackSource; effect: FeedbackEffect; outlet: "report" | "checkin"; batch: string;
+  askedAt: number; status: "pending" | "applying" | "answered" | "skipped" | "expired"; at?: number;
+  optionMap?: Record<string, string>; answer?: FeedbackAnswer; moreUsed?: true; changeIds: string[];
+};
+export type FeedbackValue = string | number | string[] | null;
+export type FeedbackChange = { id: string; issueId: string; at: number; kind: "memory" | "param" | "metric" | "undo"; key: string;
+  before: FeedbackValue; after: FeedbackValue; memoryChangeId?: string; memoryAction?: "confirm" | "correct" | "delete" | "add" | "modify" | "restore"; undoneBy?: string; undoOf?: string };
+export type FeedbackView = { pending: IssuedFeedback[]; history: IssuedFeedback[]; changes: FeedbackChange[] };
+export type FeedbackEvent = { event: "feedback"; data: FeedbackView };
+export type FeedbackCounts = { asked: number; answered: number; skipped: number; answerRate: number | null; skipRate: number | null };
+export type FeedbackWeek = FeedbackCounts & { week: string; changes: number; satisfaction: number | null; usefulness: number | null;
+  productFeedback: { feature: string; answer: string[] }[] };
+export type FeedbackStats = FeedbackCounts & {
+  bySource: Record<FeedbackSource, FeedbackCounts>; byType: Record<"multi" | "single", FeedbackCounts>;
+  guesses: { answered: number; confirmed: number; confirmationRate: number | null }; changeCount: number;
+  satisfaction: { at: number; value: number }[]; usefulness: { at: number; value: number }[];
+  impacts: { changeId: string; metric: string; before: number | null; after: number | null; beforeSamples: number; afterSamples: number }[];
+  weekly: FeedbackWeek[];
+};

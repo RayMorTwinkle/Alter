@@ -7,7 +7,7 @@ import { dataDirectory, loadRepoEnv } from "./config.ts";
 
 export type UsageLine = {
   at: string;
-  conversation?: "main" | "task" | "triage" | "judge";
+  conversation?: "main" | "task" | "triage" | "judge" | "feedback";
   role?: string;
   thinking?: string;
   taskId?: string;
@@ -158,12 +158,12 @@ export function createProactiveBudget(time: ReturnType<typeof calendarTime>, lim
 
 export function usageTotals(lines: UsageLine[]) {
   const empty = () => ({ input: 0, output: 0, tokens: 0, calls: 0, aborted: 0 });
-  const totals = { main: empty(), task: empty(), triage: empty(), watch: empty(), heartbeat: empty(), judge: empty(), total: empty() };
+  const totals = { main: empty(), task: empty(), triage: empty(), watch: empty(), heartbeat: empty(), judge: empty(), feedback: empty(), total: empty() };
   for (const line of lines) {
     if (line.statsOnly) continue;
     const role = line.conversation ?? usageRole(line);
     const groups = [totals.total];
-    if (role === "task" || role === "main" || role === "triage" || role === "judge") groups.push(totals[role]);
+    if (role === "task" || role === "main" || role === "triage" || role === "judge" || role === "feedback") groups.push(totals[role]);
     else if (role === "goal") groups.push(totals.task);
     if (usageRole(line) === "watch") groups.push(totals.watch);
     if (usageRole(line) === "heartbeat") groups.push(totals.heartbeat);

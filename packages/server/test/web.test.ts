@@ -569,3 +569,20 @@ it("lists, streams and cancels a watch under the same task ID", async () => {
   expect((await cancel("missing")).status).toBe(404);
   expect((await web.state()).tasks).toMatchObject([{ taskId: id, failure: "cancelled" }]);
 });
+
+it("serves feedback history, SSE changes, stats and undo through authenticated routes", async () => {
+  const web = await setup();
+  expect((await web.read("/api/feedback")).status).toBe(401);
+  await web.login();
+  const feed = await stream(web.read);
+  const questions = await (await web.post("/api/feedback/more", {})).json() as { id: string; options: string[] }[];
+  const q = questions.find(q => q.options.includes("满意"))!;
+  await feed.seen(e => e.event === "feedback" && e.data.pending.some(i => i.id === q.id));
+  expect((await web.post("/api/feedback/" + q.id + "/answer", { options: ["非法"] })).status).toBe(400);
+  expect((await web.post("/api/feedback/" + q.id + "/answer", { options: ["满意"] })).status).toBe(204);
+  expect((await web.post("/api/feedback/" + q.id + "/skip", {})).status).toBe(409);
+  const view = await (await web.read("/api/feedback")).json();
+  expect(view.history).toMatchObject([{ id: q.id, status: "answered" }]);
+  expect((await web.post("/api/feedback/changes/" + view.history[0].changeIds[0] + "/undo", {})).status).toBe(204);
+  expect(await (await web.read("/api/feedback/stats")).json()).toMatchObject({ answered: 1, changeCount: 1, satisfaction: [] });
+});

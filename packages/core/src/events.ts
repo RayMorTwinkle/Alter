@@ -1,3 +1,4 @@
+import { Preferences, triageScope } from "./feedback-settings.ts";
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import type { calendarTime } from "./calendar-time.ts";
 import type { ExternalEvent } from "./capabilities.ts";
@@ -46,7 +47,7 @@ export async function startEventBus(harness: Harness, main: Conversation, time: 
     }
     const level = decision.level === "now" && time.quietHours(at) ? "digest" : decision.level;
     await addNotification(tx, { id: `event-${progress.cursor}`, title: event.summary, body: decision.reason, at, level,
-      kind: "event", ref: event.ref, source: event.source, status: "unread", ...(decision.filtered && { filtered: decision.filtered }) }, time.midnight(at));
+      kind: "event", ref: event.ref, source: event.source, category: event.kind, status: "unread", ...(decision.filtered && { filtered: decision.filtered }) }, time.midnight(at));
     delete progress.overflow[progress.cursor];
     progress.cursor++;
     delete progress.inFlight;
@@ -62,6 +63,12 @@ export async function startEventBus(harness: Harness, main: Conversation, time: 
       let decision: Decision | undefined;
       if (progress.inFlight) decision = { level: "digest", reason: "上次分诊中断，已归入摘要" };
       else decision = prefilter(event, seen.seen, mute);
+      if (!decision) {
+        const prefs = (await tx.doc(Preferences, main.id)).triagePreference;
+        const category = triageScope(event.source, event.kind);
+        const scope = Object.hasOwn(prefs, category) ? category : event.source;
+        if (Object.hasOwn(prefs, scope)) decision = { level: prefs[scope]!, reason: "来自回访的来源偏好" };
+      }
       seen.seen = true;
       if (decision) { await finish(tx, progress, event, decision); return; }
       // Reserve before leaving the transaction. Recovery cannot repeat an ambiguous provider call.

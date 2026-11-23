@@ -357,3 +357,41 @@ it("keeps an actionable heartbeat reply local after a Feishu turn and records it
   expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到"]);
   expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
 });
+
+it("accepts owner feedback forms once, syncs Web skips and serves more questions", async () => {
+  const f = await setup();
+  await f.pair();
+  await f.app.feedback.feature("ext-brief", "活动速览");
+  await f.app.feedback.featureResult("ext-brief", f.clock.now);
+  const questions = await f.app.feedback.more();
+  const q = questions.find(q => q.multi)!;
+  await expect.poll(() => f.transport.sendCard.mock.calls.length).toBe(questions.length);
+  function messageFor(id: string) {
+    const call = f.transport.sendCard.mock.calls.find(([, card]) => JSON.stringify(card).includes(id))!;
+    return "om_" + call[2];
+  }
+  const card = f.transport.sendCard.mock.calls.find(([, card]) => JSON.stringify(card).includes(q.id))![1];
+  expect(card).toMatchObject({ schema: "2.0", body: { elements: expect.arrayContaining([
+    expect.objectContaining({ tag: "form", elements: expect.arrayContaining([
+      expect.objectContaining({ tag: "multi_select_static", name: "options" }),
+      expect.objectContaining({ form_action_type: "submit", behaviors: [{ type: "callback", value: { feedbackId: q.id, operation: "answer" } }] }),
+    ]) }),
+  ]) } });
+  const sdk = dispatcher(f.handlers);
+  async function click(openId: string, id: string, operation: string, form?: object) {
+    return sdk.invoke({ schema: "2.0", header: { event_type: "card.action.trigger" }, event: {
+      operator: { open_id: openId }, context: { open_message_id: messageFor(id) },
+      action: { value: { feedbackId: id, operation }, form_value: form },
+    } }, { needCheck: false });
+  }
+  const form = { options: q.options.slice(0, 2), other: "希望继续保留" };
+  expect(await click("other", q.id, "answer", form)).toMatchObject({ toast: { type: "error" } });
+  expect(await click("owner", q.id, "answer", form)).toMatchObject({ toast: { type: "success" } });
+  expect((await f.app.feedback.view()).history.find(i => i.id === q.id)?.answer).toEqual(form);
+  const web = questions.find(i => i.id !== q.id)!;
+  await f.app.feedback.skip(web.id);
+  await expect.poll(() => f.transport.updateCard.mock.calls.some(([id, card]) => id === messageFor(web.id) && JSON.stringify(card).includes("已跳过"))).toBe(true);
+  expect(await click("owner", web.id, "answer", { options: web.options[0] })).toMatchObject({ toast: { type: "info" } });
+  expect(await click("owner", q.id, "more")).toMatchObject({ toast: { type: "success" } });
+  expect((await f.app.feedback.view()).history.find(i => i.id === q.id)?.moreUsed).toBe(true);
+});

@@ -1,3 +1,5 @@
+export { FeedbackError, pickQuestions, type FeedbackQuestion, type Issued as IssuedFeedback } from "./feedback.ts";
+export { Preferences, type FeedbackSettings } from "./feedback-settings.ts";
 export { approvalStats, choices, isApprovalDecision, type ApprovalDecision, answerUserPermission, Audit, Requests, type PermissionState } from "./broker.ts";
 export {
   createCapabilityRegistry, permitsBorrow, demoManifests as manifests, toolActions,

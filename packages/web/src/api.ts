@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -43,6 +43,12 @@ export const api = {
   createSource: (spec: SourceCreate) => request<SourceCreateResult>("/api/sources", { body: spec }),
   updateSource: (id: string, patch: SourcePatch) => request<SourceView>(`/api/sources/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   deleteSource: (id: string) => request<void>(`/api/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  feedback: () => request<FeedbackView>("/api/feedback"),
+  feedbackStats: () => request<FeedbackStats>("/api/feedback/stats"),
+  answerFeedback: (id: string, answer: FeedbackAnswer) => request<void>(`/api/feedback/${encodeURIComponent(id)}/answer`, { body: answer }),
+  skipFeedback: (id: string) => request<void>(`/api/feedback/${encodeURIComponent(id)}/skip`, { body: {} }),
+  moreFeedback: () => request<FeedbackQuestion[]>("/api/feedback/more", { body: {} }),
+  undoFeedbackChange: (id: string) => request<void>(`/api/feedback/changes/${encodeURIComponent(id)}/undo`, { body: {} }),
   extPlugins: () => request<ExtPluginView[]>("/api/ext-plugins"),
   extPluginAction: (id: string, action: "approve" | "reject" | "rollback" | "disable" | "enable", body: Record<string, string> = {}) =>
     request<void>(`/api/ext-plugins/${encodeURIComponent(id)}/${action}`, { body }),
@@ -69,7 +75,7 @@ export const api = {
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins", "feedback"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -80,6 +86,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
     api.calendar().then(agenda => dispatch({ type: "agenda", agenda }), () => {});
     api.memory().then(memory => dispatch({ type: "memory", memory }), () => {});
     api.extPlugins().then(extPlugins => dispatch({ type: "extPlugins", extPlugins }), () => {});
+    api.feedback().then(feedback => dispatch({ type: "feedback", feedback }), () => {});
   };
   source.onerror = () => {
     dispatch({ type: "connection", connection: "lost" });
@@ -108,6 +115,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "schedules": return dispatch({ type: "schedules", schedules: data });
         case "watches": return dispatch({ type: "watches", watches: data });
         case "ext-plugins": return dispatch({ type: "extPlugins", extPlugins: data });
+        case "feedback": return dispatch({ type: "feedback", feedback: data });
       }
     });
   }

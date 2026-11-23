@@ -1,3 +1,5 @@
+import { Feedback } from "./feedback.ts";
+import { feedbackView } from "./feedback-service.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { Audit, Requests, type PermissionState } from "./broker.ts";
 import { Notifications, type Notification } from "./notifications.ts";
@@ -24,7 +26,7 @@ export type SurfaceState = {
 };
 type Delta = { id: string; text: string };
 type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications" | "schedules" | "watches"> & {
-  busy: { busy: boolean }; timeline: TimelineItem; delta: Delta;
+  feedback: ReturnType<typeof feedbackView>; busy: { busy: boolean }; timeline: TimelineItem; delta: Delta;
 };
 export type SurfaceEvent = { [K in keyof Payloads]: { event: K; data: Payloads[K] } }[keyof Payloads];
 
@@ -144,6 +146,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       state.schedules = Object.values(value.byId).map(row => row.item);
       emit({ event: "schedules", data: state.schedules });
     });
+    await watch(Feedback, value => emit({ event: "feedback", data: feedbackView(value) }));
     await watch(Notifications, value => { state.notifications = value.entries; emit({ event: "notifications", data: state.notifications }); });
     await watch(Ledger, value => { state.ledger = value.entries; emit({ event: "ledger", data: state.ledger }); });
     await watch(Leases, value => {

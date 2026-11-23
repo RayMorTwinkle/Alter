@@ -90,7 +90,7 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
       ? streamSimple(model, context, options).result() : models.completeSimple(model, context, options) };
 }
 
-export function judgeModels(models: Models, dir: string | undefined, now: () => number, owner: Pick<UsageLine, "taskId" | "wakeId">): Pick<Models, "getModel" | "completeSimple"> {
+export function auxiliaryModels(models: Models, dir: string | undefined, now: () => number, role: "judge" | "feedback", owner: Pick<UsageLine, "taskId" | "wakeId"> = {}): Pick<Models, "getModel" | "completeSimple"> {
   if (!dir) return models;
   return {
     getModel: (provider, id) => models.getModel(provider, id),
@@ -100,7 +100,7 @@ export function judgeModels(models: Models, dir: string | undefined, now: () => 
           () => models.completeSimple(model, context, options));
       }
       const started = performance.now();
-      const line: UsageLine = { at: new Date(now()).toISOString(), conversation: "judge", ...owner, thinking: options?.reasoning ?? "off", model: model.id,
+      const line: UsageLine = { at: new Date(now()).toISOString(), conversation: role, role, ...owner, thinking: options?.reasoning ?? "off", model: model.id,
         attempt: 1, latencyMs: 0, outcome: "error" };
       try {
         const message = await models.completeSimple(model, context, options);
@@ -137,7 +137,7 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
     const triage = options.metadata?.alterConversation === "triage";
     const role = options.metadata?.alterRole ?? options.metadata?.alterConversation;
     const accounting = attemptContext.getStore();
-    const chain = triage ? candidates.slice(0, 1) : candidates;
+    const chain = triage || role === "feedback" ? candidates.slice(0, 1) : candidates;
     for (const [index, id] of chain.entries()) {
       options.signal?.throwIfAborted();
       const model = { ...route, id, name: id };
@@ -194,7 +194,7 @@ function chainStreams(config: Config, conversation: Conversation): ProviderStrea
           if (!triage) {
             const record = accounting?.record ?? ((line: UsageLine) => appendUsage(config.dataDir, line));
             await record({
-              at, conversation: role === "judge" ? "judge" : conversation, role: typeof role === "string" ? role : undefined, thinking: options.reasoning ?? "off",
+              at, conversation: role === "judge" || role === "feedback" ? role : conversation, role: typeof role === "string" ? role : undefined, thinking: options.reasoning ?? "off",
               model: id, attempt: index + 1, fallbackFrom: chain[index - 1],
               fallback: index > 0 && id !== chain[index - 1], retry: index > 0 && id === chain[index - 1] ? 1 : 0,
               outcome: kind ? "error" : "ok", errorKind: kind, latencyMs: elapsed(), firstTokenMs,
