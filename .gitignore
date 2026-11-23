@@ -10,3 +10,4 @@ secrets/
 .DS_Store
 
 /data/
+.pnpm-store/

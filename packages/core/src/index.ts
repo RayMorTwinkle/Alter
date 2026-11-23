@@ -5,7 +5,7 @@ export {
 } from "./capabilities.ts";
 export { dataDirectory, gatewayConfig, loadRepoEnv, proactiveConfig } from "./config.ts";
 export { Events, Leases, openAlter } from "./main.ts";
-export { MemoryInputError, type MemoryItem } from "./memory.ts";
+export { MemoryInputError, MemoryConflict, type MemoryChange, type MemoryEntry, type MemoryItem } from "./memory.ts";
 export { createGatewayModels } from "./models.ts";
 export { context, conversationDoc, defineTool, reply, openNodeSqliteStorage, type ToolRegistration } from "./runtime.ts";
 export * as schema from "@earendil-works/pi-schema";

@@ -112,8 +112,8 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
           running.add(work);
           return work.finally(() => running.delete(work));
         }
-        async function readWatch<T>(operation: () => Promise<T>) {
-          const changed = "盯梢渠道已重新配置";
+        async function readSource<T>(operation: () => Promise<T>) {
+          const changed = "消息渠道已重新配置";
           if (current !== instance) throw new Error(changed);
           const result = await track(operation());
           if (current !== instance) throw new Error(changed);
@@ -131,10 +131,12 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
         current = instance;
         registered = true;
         const source = plugin.watchSource;
+        const ownMessages = plugin.ownMessages;
         await app.replacePlugin(id, { ...plugin,
+          ownMessages: ownMessages && ((since, until) => readSource(() => ownMessages(since, until))),
           watchSource: source && {
-            authorize: where => readWatch(() => source.authorize(where)),
-            poll: (where, since, until) => readWatch(() => source.poll(where, since, until)),
+            authorize: where => readSource(() => source.authorize(where)),
+            poll: (where, since, until) => readSource(() => source.poll(where, since, until)),
           },
           tools: plugin.tools.map(tool => ({ ...tool, async execute(...args) {
             if (current !== instance) return reply("插件已停用或配置已更新", true);

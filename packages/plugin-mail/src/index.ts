@@ -1,7 +1,7 @@
 import { defineTool, reply, schema, type AlterPlugin } from "@alter/core";
 import { append, compose, defaultClients, folderPath, withImap, type MailClients } from "./client.ts";
 import { validAddress, type MailConfig } from "./config.ts";
-import { external, read, search } from "./read.ts";
+import { external, ownSent, read, search } from "./read.ts";
 import { send, toolAttempt } from "./send.ts";
 import { mailWatchSource, watchInbox } from "./watch.ts";
 
@@ -48,6 +48,7 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
           reply(await send(config, clients, client, args, await toolAttempt(config, args.to, api, ctx)))),
       }),
     ],
+    ownMessages: (since, until) => withImap(config, clients, client => ownSent(client, config.address, since, until)),
     watchSource: mailWatchSource(config, clients),
     start: host => watchInbox(config, clients, host, undefined, connection),
   };

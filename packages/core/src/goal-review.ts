@@ -18,8 +18,8 @@ export function registerGoalReview(scheduler: ReturnType<typeof createScheduler>
     for (const [id, reviewed] of Object.entries(last)) if (reviewed <= at - cooldown) delete last[id];
     const remaining = 2 - Object.values(last).filter(reviewed => reviewed >= day).length;
     if (remaining <= 0) return;
-    const goals = memory.list().filter(g => g.kind === "goal" && g.status === "active" && !Object.hasOwn(last, g.id))
-      .sort((a, b) => (a.due ?? Infinity) - (b.due ?? Infinity)).slice(0, remaining);
+    const goals = memory.store.view().entries.filter(g => g.type === "goal" && g.status === "active" && !Object.hasOwn(last, g.id))
+      .sort((a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity)).slice(0, remaining);
     if (!goals.length) return;
     const funded = await budget.available(at);
     if (!funded || !hasBrowser()) {
@@ -28,10 +28,10 @@ export function registerGoalReview(scheduler: ReturnType<typeof createScheduler>
       return;
     }
     for (const goal of goals) {
-      const deadline = goal.due === undefined ? "无期限" : `期限 ${time.describe(goal.due).iso}`;
-      const brief = `围绕目标「${goal.text}」（${deadline}）做只读调研。找出 1～3 条用户可能不知道、对目标有帮助的新信息，每条附链接。不要发送任何内容。`;
+      const deadline = goal.dueAt === undefined ? "无期限" : `期限 ${time.describe(goal.dueAt).iso}`;
+      const brief = `围绕目标「${goal.body}」（${deadline}）做只读调研。找出 1～3 条用户可能不知道、对目标有帮助的新信息，每条附链接。不要发送任何内容。`;
       await dispatch(tx, ROOT_CONVERSATION_ID, `task-goal-${goal.id}-${at}`,
-        { brief, context: "fresh", permission: "restricted" }, { text: goal.text, timeZone });
+        { brief, context: "fresh", permission: "restricted" }, { text: goal.body, timeZone });
       last[goal.id] = at;
     }
   });

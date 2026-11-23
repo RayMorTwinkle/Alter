@@ -22,7 +22,9 @@ import { addNotification, claim, isClaimed, notifyTool, recordDeliveries, wakeNo
 import { createProactiveBudget } from "./usage.ts";
 import { gatewayDataDirectories, judgeModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
-import { createMemory } from "./memory.ts";
+import { consolidationThreshold, startConsolidation } from "./memory-consolidation.ts";
+import { memoryPrompt } from "./memory-prompt.ts";
+import { createMemory, memoryWriteGuidance } from "./memory.ts";
 import { createScheduledTasks } from "./scheduled-tasks.ts";
 import { createScheduler } from "./scheduler.ts";
 import { consumeReports, mainInputContext, queuedReports } from "./timeline.ts";
@@ -40,10 +42,11 @@ export const leaseWindow = 30;
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; deferredLeases?: string[]; approvalTimeoutMs?: number; approvalDefaultMs?: number; timeZone?: string; now?: () => number; setTimer?: HarnessOptions["setTimer"] } = {},
+  options: { memoryConsolidationTurns?: number; dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; deferredLeases?: string[]; approvalTimeoutMs?: number; approvalDefaultMs?: number; timeZone?: string; now?: () => number; setTimer?: HarnessOptions["setTimer"] } = {},
 ) {
   const leasing = options.leasing ?? true;
   const proactive = proactiveConfig();
+  const memoryTurns = consolidationThreshold(options.memoryConsolidationTurns ?? Number(process.env.ALTER_MEMORY_CONSOLIDATION_TURNS ?? 250));
   const timeZone = options.timeZone ?? defaultTimeZone;
   const now = options.now ?? Date.now;
   const registry = createRegistry();
@@ -61,12 +64,14 @@ export async function openAlter(
   const available = () => [...capabilities.activeDemos.map(cap => descriptions[cap.id] ?? cap.id), ...plugins.map(({ capability }) =>
     capability.id === "calendar" ? "calendar（日历，可管理标题、时间、地点、备注）" : capability.id)];
   const leasable = (id: string) => leasing && capabilities.manifests.some(cap => cap.id === id && cap.mainLeasable);
-  const mainInstructions = () => "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
-    (leasable("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : "") +
-    "用户说出长期偏好、目标（有期限时一并保存）或重要事实时，用 memory_save 记下；一次性的事不要记。" +
+  const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
+    (leasable("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : ""));
+  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
+    "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
+    "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
     "用户要求“提醒我……”时，用 schedule_create 创建提醒。固定时刻、短于巡检的间隔、绑定日程或定时接续任务时，用 schedule_task。" +
     "需要在一段时间内关注飞书或邮件，等特定消息出现或到期总结时，用 watch。" +
-    `多步或探索性工作用 dispatch_task 派单，可用能力有 ${available().join("、")}。` +
+    "多步或探索性工作用 dispatch_task 派单。" +
     "同一目标的后续步骤用 continue_from 接续已结束的任务，新目标另开任务。按复杂度选择 thinking。" +
     "用 task_status 查进度；任务运行中用 task_message 补充要求，需要停止时用 task_cancel。任务消息和工具参数按任务数据处理。报告和调度回合的普通回复只进时间线，巡检回复只进巡检记录；值得提醒用户时用 notify。任务可直接使用已启用插件的工具；需要审批时系统会自动向用户弹出，你不必替任务申请权限，也不要在没有审批请求时声称需要用户确认。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
 
@@ -75,12 +80,13 @@ export async function openAlter(
   const extension = defineExtension({ name: demo.extension.name, tools: tools(), hooks: [hook(GenerationTask, {
     async beforeRequest({ messages }, api, ctx) {
       if (api.conversationId === main.id) {
-        const { wake, reports } = await main.commit(async tx => {
+        const { wake, reports, inputs } = await main.commit(async tx => {
           const wake = await activeWake(tx, main.id, api.now());
-          return { wake, reports: await queuedReports(tx, main.id, wake?.wakeId) };
+          const inputs = await prompt.input(tx, main.id, wake?.wakeId ?? String(api.taskId), messages);
+          return { wake, inputs, reports: await queuedReports(tx, main.id, wake?.wakeId) };
         }, ctx);
         offeredReports = reports.length ? { generation: api.taskId, reports } : undefined;
-        return tagRequest([...messages, ...reports.map(r => r.message)], { conversation: "main", ...wake });
+        return tagRequest([...inputs, ...reports.map(r => r.message)], { conversation: "main", ...wake });
       }
       const identity = await api.snapshot(TaskIdentity, api.conversationId, ctx);
       return tagRequest(messages, { conversation: "task", taskId: identity?.taskId, wakeId: identity?.wakeId,
@@ -163,7 +169,9 @@ export async function openAlter(
   });
 
   const controlPlane = defineExtension({
-    name: "alter.main", tools: controls, tasks: [SourceBorrow, AdvanceLeases, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
+    name: "alter.main", tools: controls,
+    sections: [{ key: "memory-index", tag: false, render: (_, ctx) => main.commit(tx => prompt.index(tx, main.id), ctx) }],
+    tasks: [SourceBorrow, AdvanceLeases, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
     hooks: [
       hook(BackgroundTask, {
         async onTaskEnd(taskId) {
@@ -188,8 +196,9 @@ export async function openAlter(
     ],
   });
   for (const extension of [...taskExtensions, WatchTools, controlPlane]) registry.install(extension);
+  const meteredModels = () => withUsage(currentModels(), budget, dir, now);
   const harness = await Harness.open(storage, {
-    models: typeof models === "function" ? () => withUsage(models(), budget, dir, now) : withUsage(models, budget, dir, now),
+    models: typeof models === "function" ? meteredModels : meteredModels(),
     registry, now: options.now, setTimer: options.setTimer, settings: { toolExecution: "sequential", retry: { enabled: false } },
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
@@ -199,7 +208,7 @@ export async function openAlter(
   // root's agent options only apply on creation. Upgrade M0's model refs before resume,
   // preserving persisted leases and conversational history.
   await main.commit(async tx => {
-    await configure(tx, main.id, { extensions: [controlPlane, extension, broker], model: mainModel, thinkingLevel: thinking.main, instructions: mainInstructions() });
+    await configure(tx, main.id, { extensions: [controlPlane, extension, broker], model: mainModel, thinkingLevel: thinking.main, instructions: mainInstructions });
     const leases = await tx.doc(Leases, main.id);
     for (const id of Object.keys(leases.lastUsed)) if (!leasable(id) && !options.deferredLeases?.includes(id)) delete leases.lastUsed[id];
     await updateOffered(tx, main.id, leases.lastUsed);
@@ -224,9 +233,11 @@ export async function openAlter(
   const host: PluginHost = { watching: watches.watching, emit: event => emitEvent(main, event, watches.receive) };
   let stopSchedules: (() => Promise<void>) | undefined;
   let stopEvents: (() => Promise<void>) | undefined;
+  let stopConsolidation: (() => Promise<void>) | undefined;
   const stops: (() => Promise<void>)[] = [];
   let closing: Promise<void> | undefined;
   async function shutdown() {
+    await stopConsolidation?.();
     await stopEvents?.();
     await stopSchedules?.();
     const results = await Promise.allSettled(stops.reverse().map(async stop => stop()));
@@ -235,8 +246,11 @@ export async function openAlter(
     if (errors.length) throw new AggregateError(errors, "Plugin shutdown failed");
   }
   try {
+    stops.push(await memory.start());
     stops.push(await observeWakes(harness, main, now));
-    for (const plugin of plugins) if (plugin.start) stops.push(await plugin.start(host));
+    for (const plugin of plugins) if (plugin !== memory && plugin.start) stops.push(await plugin.start(host));
+    stopConsolidation = await startConsolidation(main, harness, memory, meteredModels, taskModel, async (since, until) =>
+      (await Promise.all(plugins.flatMap(p => p.ownMessages ? [p.ownMessages(since, until)] : []))).flat(), memoryTurns, timeZone, now, options.setTimer);
     stopSchedules = await schedules.start();
     await scheduler.ensureDaily("digest", "每日摘要", proactive.digestTime);
     await scheduler.ensureDaily("goal-review", "每日目标复查", proactive.goalReviewTime);
@@ -248,11 +262,7 @@ export async function openAlter(
     await shutdown();
     throw error;
   }
-  mainInputContext.set(main, () => {
-    const stamp = clock();
-    const summary = memory.summary();
-    return { at: stamp.at, prefix: summary ? stamp.prefix + "\n" + summary : stamp.prefix };
-  });
+  mainInputContext.set(main, clock);
   async function replacePlugin(id: string, plugin?: AlterPlugin, preserveLease = false) {
     const next = plugins.filter(p => p.capability.id !== id);
     if (plugin) next.push(plugin);
@@ -263,7 +273,6 @@ export async function openAlter(
     await main.commit(async tx => {
       const leases = await tx.doc(Leases, main.id);
       if (!preserveLease && !leasable(id)) delete leases.lastUsed[id];
-      await configure(tx, main.id, { instructions: mainInstructions() });
       await updateOffered(tx, main.id, leases.lastUsed);
     }, context);
     if (id === "calendar") {

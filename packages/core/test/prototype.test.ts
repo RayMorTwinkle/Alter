@@ -75,7 +75,7 @@ async function incoming(app: Alter) {
   return page.items.flatMap(entry => (entry.model ?? []).flatMap(msg => msg.role === "user" ? [contentText(msg.content)] : []));
 }
 
-const memoryTools = ["memory_delete", "memory_save", "memory_search", "memory_update"];
+const memoryTools = ["memory_delete", "memory_read", "memory_search", "memory_write"];
 const controls = ["dispatch_task", "enable_tool", ...memoryTools, "notify", "schedule_cancel", "schedule_create", "schedule_list", "schedule_pause", "schedule_task", "task_cancel", "task_message", "task_status", "watch", "watch_cancel", "watch_list"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "declare_permissions", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
@@ -882,38 +882,78 @@ it("stamps each model input at submission or dispatch and preserves the original
   expect(await readTranscript(child!)).toContainEqual({ kind: "user", text: "查日历", at: expect.any(Number) });
 });
 
-it("adds only profiles and current or pending goals between the clock and the original user text", async () => {
-  let at = 100;
-  const app = await open(() => say("OK"), new MemoryStorage(), [], undefined, { now: () => at }, false);
-  const { memory } = app;
-  expect(memory.summary()).toBe("");
-  const old = memory.save({ kind: "profile", text: "旧画像" });
-  memory.update(old, { status: "done" });
-  memory.save({ kind: "fact", text: "私人事实" });
-  const done = memory.save({ kind: "goal", text: "已完成目标" });
-  memory.update(done, { status: "done" });
-  memory.save({ kind: "goal", text: "参加考试", due: at });
-  at++;
-  memory.save({ kind: "goal", text: "找实习" });
-  at++;
-  memory.save({ kind: "profile", text: "回答简短" });
-  const raw = "今天安排什么？";
-  await submitMessage(app.main, raw);
+it("pins the index in the system prefix, keeps wake deltas in place and rebuilds after compaction", async () => {
+  const requests: Message[][] = [];
+  const app = await open((_, __, messages) => { requests.push(messages); return say("OK"); });
+  const systems = () => JSON.stringify(requests.at(-1)!.filter(m => m.role === "system"));
+  const users = () => requests.at(-1)!.filter(m => m.role === "user").map(m => contentText(m.content));
+  app.memory.save({ kind: "profile", text: "老画像。正文细节" });
+  await input(app, "第一轮");
+  const baseline = systems();
+  expect(baseline).toContain("老画像");
+  expect(baseline).not.toContain("正文细节");
+  const id = app.memory.save({ kind: "fact", text: "常用资料" });
+  await input(app, "第二轮");
+  expect(systems()).toBe(baseline);
+  expect(users().at(-1)).toMatch(/记忆更新：新增 .*常用资料.*\n第二轮/);
+  app.memory.update(id, { text: "新资料" });
+  await input(app, "第三轮");
+  expect(systems()).toBe(baseline);
+  expect(users().at(-2)).toMatch(/新增 .*常用资料/);
+  expect(users().at(-1)).toMatch(/修改 .*新资料/);
+  app.memory.delete(id);
+  await input(app, "第四轮");
+  expect(users().at(-1)).toContain("删除 #");
+  await app.main.configure({ compaction: { keepRecentTokens: 1 } }, context);
+  await app.main.compact(undefined, context);
+  await expect.poll(async () => (await app.main.context(context)).head?.kind).toBe("pi.compaction");
+  app.memory.save({ kind: "fact", text: "压缩后索引" });
+  await input(app, "下一代");
+  expect(systems()).toContain("压缩后索引");
+  expect(systems()).not.toContain("常用资料");
+  expect(users().at(-1)).toBe("下一代");
+});
+
+it("records a reply preference and a dated goal from one message and delivers both to the following wake", async () => {
+  const requests: Message[][] = [];
+  const message = "记住：回复时先说结论，我正在准备 2026-12-20 的考研。";
+  const app = await open((text, last, messages) => {
+    requests.push(messages);
+    if (last.role === "user" && text.endsWith(message)) return say([
+      fauxToolCall("memory_write", { op: "add", type: "preference", title: "回复顺序", body: "回复时先说结论。" }),
+      fauxToolCall("memory_write", { op: "add", type: "goal", title: "考研", body: "正在准备 12 月 20 日的研究生入学考试。", dueAt: "2026-12-20" }),
+    ], { stopReason: "toolUse" });
+    return say("OK");
+  }, new MemoryStorage(), [], undefined, { now: () => 0, timeZone: "Asia/Taipei" });
+  await submitMessage(app.main, message, "web", "user-message-id");
   await app.main.waitForIdle(context);
-  const content = (await incoming(app)).at(-1)!;
-  expect(content).toMatch(/^\[当前时间 [^\n]+\]\n\[记忆摘要\]/);
-  expect(content).toMatch(/目标（已过期，待确认）.*参加考试/);
-  expect(content.indexOf("回答简短")).toBeLessThan(content.indexOf("找实习"));
-  expect(content).toContain("旧画像");
-  expect(content).not.toMatch(/私人事实|已完成目标/);
-  expect(content.endsWith("\n" + raw)).toBe(true);
-  expect(await readTranscript(app.main)).toContainEqual({ kind: "user", text: raw, at: expect.any(Number) });
-  at++;
-  memory.save({ kind: "profile", text: "习".repeat(2000) });
-  await submitMessage(app.main, raw);
+  const { entries, index } = app.memory.store.view();
+  expect(entries).toMatchObject([
+    { type: "goal", title: "考研", source: "user-message-id", dueAt: Date.parse("2026-12-20T16:00Z") },
+    { type: "preference", title: "回复顺序", source: "user-message-id" },
+  ]);
+  expect(index).toContain("[偏好] 回复顺序 — 回复时先说结论。");
+  expect(requests.at(-1)!.some(m => m.role === "user" && contentText(m.content).includes("记忆更新"))).toBe(false);
+  await submitMessage(app.main, "下个回合");
   await app.main.waitForIdle(context);
-  const capped = (await incoming(app)).at(-1)!.split("\n").slice(1, -1).join("\n");
-  expect(capped).toHaveLength(1200);
+  const wake = contentText(requests.at(-1)!.findLast(m => m.role === "user")!.content);
+  expect(wake).toContain("新增 [偏好] 回复顺序");
+  expect(wake).toContain("新增 [目标] 考研");
+});
+
+it("validates model-written titles and reserves pending status for automatic goal expiry", async () => {
+  const errors: boolean[] = [];
+  const app = await open((text, last) => {
+    if (last.role === "user") return call("memory_write", { op: "add", type: "goal", body: "正在备考。",
+      title: text === "long" ? "考".repeat(21) : "考研", status: text === "expired" ? "pending" : "done" });
+    if (last.role === "toolResult") errors.push(last.isError);
+    return say("OK");
+  });
+  await input(app, "long");
+  await input(app, "expired");
+  await input(app, "completed");
+  expect(errors).toEqual([true, true, false]);
+  expect(app.memory.store.view().entries).toMatchObject([{ title: "考研", status: "done" }]);
 });
 
 it("lets a tainted main search memory but requires a separate user decision for each write", async () => {
@@ -923,19 +963,19 @@ it("lets a tainted main search memory but requires a separate user decision for 
     if (text === "lease") return call("enable_tool", { capability: "remote", reason: "read" });
     if (text === "read") return call("remote_read", {});
     if (text === "search") return call("memory_search", { query: "考试" });
-    if (text === "save") return call("memory_save", { kind: "goal", text: "考试" });
-    if (text === "update") return call("memory_update", { id, text: "参加考试" });
+    if (text.endsWith("write")) return call("memory_write", { op: "add", type: "goal", title: "考试", body: "考试" });
+    if (text.endsWith("update")) return call("memory_write", { op: "modify", id, body: "参加考试" });
     return call("memory_delete", { id });
   }, new MemoryStorage(), [externalPlugin().plugin], undefined, {}, false);
   await input(app, "lease");
   await input(app, "read");
   await input(app, "search");
-  for (const action of ["save", "update", "delete"]) {
+  for (const action of ["write", "update", "delete"]) {
     await app.main.submit({ type: "input", content: action }, context);
     const request = await parked(app);
-    expect(request).toMatchObject({ taskId: "main", audience: "user", tool: "memory_" + action,
+    expect(request).toMatchObject({ taskId: "main", audience: "user", tool: action === "delete" ? "memory_delete" : "memory_write",
       tainted: true, taint: { source: "remote_read" } });
-    expect(app.memory.list().map(item => item.text)).toEqual(action === "save" ? [] : [action === "update" ? "考试" : "参加考试"]);
+    expect(app.memory.list().map(item => item.text)).toEqual(action === "write" ? [] : [action === "update" ? "考试" : "参加考试"]);
     await answerUserPermission(app.main, { requestId: request.id, decision: action === "delete" ? "deny" : "once" });
     await app.main.waitForIdle(context);
     id = app.memory.list()[0]!.id;

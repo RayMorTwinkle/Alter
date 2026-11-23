@@ -269,3 +269,17 @@ it("describes the complete valid recipient, preserving the case of its local par
   expect(await describe("Ray+news@EXAMPLE.TEST")).toEqual({ to: "Ray+news@example.test" });
   expect(await describe("ray@example.test,other@example.test")).toBeUndefined();
 });
+
+it("collects only personally authored text from Sent for the consolidation window", async () => {
+  const f = setup();
+  for (const [i, from, subject, id] of [[1, config.address, "我的偏好", "<mine>"], [2, "other@test.invalid", "他人", "<other>"],
+    [3, config.address, "自动代发", "<alter.test.3@test.invalid>"], [4, config.address, "Fwd: 他人", "<forward>"],
+    [5, config.address, "过期", "<old>"], [6, config.address, "Re:问题", "<reply>"]] as const) {
+    f.inbox.set(i, { uid: i, seq: i, internalDate: new Date(i === 5 ? 0 : 100), bodyStructure: { type: "text/plain", part: String(i) },
+      envelope: { from: [{ address: from }], messageId: id, subject } });
+    f.parts.set(String(i), Buffer.from(i === 4 ? "无法区分转发正文" : "请用中文\n> 原邮件的内容"));
+  }
+  expect(await f.plugin.ownMessages!(50, 100)).toEqual([{ id: "<mine>", text: "请用中文", at: 100 }, { id: "<reply>", text: "请用中文", at: 100 }]);
+  expect(f.sessions[0]!.selected).toBe("custom/sent");
+  expect(f.sessions[0]!.download).toHaveBeenCalledTimes(3);
+});

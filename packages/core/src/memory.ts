@@ -1,37 +1,52 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { compile, int, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
+import { arr, bool, compile, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
 import { calendarTime } from "./calendar-time.ts";
 import type { Capability } from "./capabilities.ts";
 import { defaultTimeZone } from "./clock.ts";
-import { defineTool, reply } from "./runtime.ts";
+import { defineTool, LiveDoc, reply, type ToolExecutionApi, type Context } from "./runtime.ts";
+import { due, entryType, MemoryInputError, migratedType, nonempty, openMemoryStore, patchFields, sentence, status,
+  type EntryInput, type MemoryEntry, type Operation } from "./memory-store.ts";
+export { MemoryInputError, MemoryConflict, type MemoryEntry, type MemoryChange } from "./memory-store.ts";
 
 const kind = oneOf(["profile", "goal", "fact"]);
-const status = oneOf(["active", "done", "pending"]);
-const text = str({ pattern: "\\S" });
-const due = int({ description: "Goal deadline in Unix milliseconds", minimum: -8.64e15, maximum: 8.64e15 });
-const saveSchema = obj({ kind, text, due: opt(due) });
+const saveSchema = obj({ kind, text: nonempty, due: opt(due) });
 const validSave = compile(saveSchema);
-const patchFields = { text: opt(text), status: opt(status), due: opt(nullable(due)) };
-const patch = compile(obj(patchFields));
+const legacyPatch = { text: opt(nonempty), status: opt(status), due: opt(nullable(due)) };
+const patch = compile(obj({ ...patchFields, ...legacyPatch }));
+const dueText = str({ description: "ISO date (end of local day) or date-time. An offset-free time uses the user's time zone." });
 const id = str({ minLength: 1 });
-// Models get dates wrong as epoch numbers (seconds vs milliseconds), so tools take ISO text.
-const dueText = str({ description: "Goal deadline as an ISO date (YYYY-MM-DD, meaning the end of that local day) or date-time. Times without an offset use the user's time zone." });
-
+export const memoryWriteGuidance = "title 用 20 字以内的短标题概括主题，不要照抄正文；body 写完整内容。" +
+  "type 按内容选择：user 记用户是谁（身份、背景、作息、兴趣），preference 记希望 Alter 怎么做（回复风格、渠道、做事方式），" +
+  "goal 记要达成的事，有期限就填 ISO 日期或时间 dueAt；reference 记账号、地址、资源。一句话里有多件事时拆成多条，分别调用 memory_write。" +
+  "目标完成时用 modify 将 status 设为 done，重新开始时设为 active。";
 export type MemoryItem = {
   id: string; kind: Static<typeof kind>; text: string; due?: number; status: Static<typeof status>;
   createdAt: number; updatedAt: number;
 };
-type Row = Omit<MemoryItem, "id" | "due"> & { id: number; due: number | null };
-export class MemoryInputError extends Error {}
-
+function legacy(e: MemoryEntry): MemoryItem {
+  return { id: e.id, kind: e.type === "goal" ? "goal" : e.type === "reference" ? "fact" : "profile", text: e.body,
+    ...(e.dueAt !== undefined && { due: e.dueAt }), status: e.status, createdAt: e.createdAt, updatedAt: e.updatedAt };
+}
 const capability: Capability = { id: "memory", mainLeasable: true, actions: [
-  { name: "search", effect: "read" }, { name: "save", effect: "write-local", guarded: true },
-  { name: "update", effect: "write-local", guarded: true }, { name: "delete", effect: "write-local", guarded: true },
+  { name: "read", effect: "read" }, { name: "search", effect: "read" }, { name: "write", effect: "write-local", guarded: true },
+  { name: "delete", effect: "write-local", guarded: true },
 ] };
 
+async function messageSource(api: ToolExecutionApi, ctx: Context) {
+  if (!api.commit) return;
+  return api.commit(async tx => {
+    const first = (await tx.doc(LiveDoc, api.conversationId)).run?.first;
+    if (first === undefined) return;
+    const entry = await tx.entry(first);
+    if (entry?.kind !== "alter.user-input") return;
+    const data = entry.data;
+    if (data && typeof data === "object" && !Array.isArray(data) && typeof data.id === "string") return data.id;
+  }, ctx);
+}
+
 export function createMemory(dataDir?: string, now = Date.now, timeZone = defaultTimeZone) {
+  let store: ReturnType<typeof openMemoryStore>;
   const time = calendarTime(timeZone);
   function deadline(value: string) {
     try {
@@ -39,111 +54,86 @@ export function createMemory(dataDir?: string, now = Date.now, timeZone = defaul
       return value.length === 10 ? time.midnight(ms, 1) : ms;
     } catch (error) { throw new MemoryInputError((error as Error).message); }
   }
-  let db: DatabaseSync;
-  const listeners = new Set<(items: MemoryItem[]) => void>();
-  function select(where = "1", ...params: SQLInputValue[]): MemoryItem[] {
-    const rows = db.prepare(`SELECT * FROM memory WHERE ${where} ORDER BY updatedAt DESC, id DESC`).all(...params) as Row[];
-    return rows.map(({ id, due, ...item }) => ({ ...item, id: String(id), ...(due !== null && { due }) }));
-  }
-  function refresh(changed = false) {
-    if (changed && !listeners.size) return;
-    const at = now();
-    const expired = db.prepare("UPDATE memory SET status='pending', updatedAt=? WHERE kind='goal' AND status='active' AND due < ?").run(at, at);
-    if ((changed || expired.changes) && listeners.size) {
-      const items = select();
-      for (const listener of listeners) listener(items);
-    }
-  }
-  function search(query: string, filter?: MemoryItem["kind"]) {
-    refresh();
-    // MATCH treats quoted input as a literal phrase. Trigrams cannot match one or two code points.
-    const indexed = [...query].length >= 3;
-    const condition = indexed ? "id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)" : "text LIKE ? ESCAPE '!'";
-    const term = indexed ? '"' + query.replaceAll('"', '""') + '"' : "%" + query.replace(/[!%_]/g, "!$&") + "%";
-    return filter ? select(condition + " AND kind=?", term, filter) : select(condition, term);
-  }
-  function save(args: Static<typeof saveSchema>) {
+  function save(args: Static<typeof saveSchema>, source?: string) {
     if (!validSave.check(args)) throw new MemoryInputError("Expected a kind, non-empty text and optional deadline in milliseconds");
-    if (args.due !== undefined && args.kind !== "goal") throw new MemoryInputError("Only goals have deadlines");
-    const at = now();
-    const result = db.prepare("INSERT INTO memory(kind,text,due,status,createdAt,updatedAt) VALUES (?,?,?,'active',?,?)")
-      .run(args.kind, args.text, args.due ?? null, at, at);
-    refresh(true);
-    return String(result.lastInsertRowid);
+    return store.apply([{ op: "add", entry: { type: migratedType[args.kind], title: sentence(args.text, 30), body: args.text,
+      ...(source && { source }), ...(args.due !== undefined && { dueAt: args.due }) } }])[0]!.ids[0]!;
   }
   function update(id: string, changes: unknown) {
-    if (!patch.check(changes) || !Object.keys(changes).length) throw new MemoryInputError("Expected text, status or due");
-    const row = db.prepare("SELECT kind, status FROM memory WHERE id=?").get(id);
-    if (!row) return false;
-    if (changes.due != null && row.kind !== "goal") throw new MemoryInputError("Only goals have deadlines");
-    // A goal that expired by mistake comes back when its deadline moves into the future.
-    const revived = row.status === "pending" && typeof changes.due === "number" && changes.due > now();
-    db.prepare(`UPDATE memory SET text=coalesce(?,text), status=coalesce(?,status),
-      due=CASE WHEN ? THEN ? ELSE due END, updatedAt=? WHERE id=?`)
-      .run(changes.text ?? null, changes.status ?? (revived ? "active" : null), Number(changes.due !== undefined), changes.due ?? null, now(), id);
-    refresh(true);
+    if (!patch.check(changes) || !Object.keys(changes).length) throw new MemoryInputError("Expected an entry patch");
+    const e = store.read(id);
+    if (!e || e.supersededBy) return false;
+    const { due, text, ...fields } = changes;
+    if ((due !== undefined && fields.dueAt !== undefined) || (text !== undefined && fields.body !== undefined)) throw new MemoryInputError("Duplicate patch fields");
+    store.apply([{ op: "modify", id, patch: { ...fields, ...(text && { body: text, ...(!fields.title && e.title === sentence(e.body, 30) && { title: sentence(text, 30) }) }),
+      ...(due !== undefined && { dueAt: due }) } }]);
     return true;
   }
   function remove(id: string) {
-    const result = db.prepare("DELETE FROM memory WHERE id=?").run(id);
-    if (result.changes) refresh(true);
-    return !!result.changes;
+    const e = store.read(id);
+    if (!e || e.supersededBy) return false;
+    store.apply([{ op: "delete", id }]);
+    return true;
+  }
+  function list() { store.refresh(); return store.entries().map(legacy); }
+  function search(query: string, filter?: MemoryItem["kind"]) {
+    return store.search(query).map(legacy).filter(e => !filter || filter === e.kind);
   }
   function summary() {
-    refresh();
     let result = "";
-    for (const row of db.prepare(`SELECT kind,status,due,substr(text,1,1200) AS text FROM memory
-      WHERE kind='profile' OR (kind='goal' AND status IN ('active','pending'))
-      ORDER BY updatedAt DESC, id DESC`).iterate()) {
+    for (const row of list()) {
+      if (row.kind === "fact" || (row.kind === "goal" && row.status === "done")) continue;
       const label = row.kind === "profile" ? "画像" : row.status === "pending" ? "目标（已过期，待确认）" : "目标";
-      const due = typeof row.due === "number" ? `（期限 ${time.describe(row.due).label}）` : "";
+      const due = row.due === undefined ? "" : `（期限 ${time.describe(row.due).label}）`;
       result += (result ? "\n" : "[记忆摘要]\n") + label + due + "：" + row.text;
       if (result.length >= 1200) return result.slice(0, 1200).replace(/[\uD800-\uDBFF]$/, "");
     }
     return result;
   }
-
   return {
-    capability, save, update, delete: remove, search, summary,
-    list() { refresh(); return select(); },
+    capability, save, update, delete: remove, search, summary, list, deadline,
+    get store() { return store; },
     subscribe(listener: (items: MemoryItem[]) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      const notify = () => listener(list());
+      store.listeners.add(notify);
+      return () => store.listeners.delete(notify);
     },
     tools: [
-      defineTool({ name: "memory_search", description: "Search saved memories by literal substring and optional kind.",
-        parameters: obj({ query: str(), kind: opt(kind) }), replay: "safe",
-        execute: async args => reply(JSON.stringify(search(args.query, args.kind))) }),
-      defineTool({ name: "memory_save", description: "Save a lasting preference, goal or important fact. Only goals have deadlines.",
-        parameters: obj({ kind, text, due: opt(dueText) }),
-        execute: async ({ due, ...args }) => reply(save({ ...args, ...(due !== undefined && { due: deadline(due) }) })) }),
-      defineTool({ name: "memory_update", description: "Edit a memory by ID. Set due to null to clear a goal deadline.",
-        parameters: obj({ id, text: opt(text), status: opt(status), due: opt(nullable(dueText)) }),
-        execute: async ({ id, due, ...changes }) =>
-          update(id, { ...changes, ...(due !== undefined && { due: due === null ? null : deadline(due) }) }) ? reply(id) : reply("Unknown memory", true) }),
+      defineTool({ name: "memory_read", description: "Open memory entries by id or ids, including superseded history.",
+        parameters: obj({ id: opt(id), ids: opt(arr(id)) }), replay: "safe",
+        execute: async args => {
+          if ((args.id !== undefined) === (args.ids !== undefined) || args.ids?.length === 0) return reply("Expected id or ids", true);
+          store.refresh();
+          const found = (args.ids ?? [args.id!]).map(store.read);
+          return found.some(e => !e) ? reply("Unknown memory", true) : reply(JSON.stringify(args.ids ? found : found[0]));
+        } }),
+      defineTool({ name: "memory_search", description: "Search memory titles and bodies by literal substring.",
+        parameters: obj({ query: nonempty, kind: opt(kind) }), replay: "safe",
+        execute: async args => reply(JSON.stringify(store.search(args.query).filter(e => !args.kind || legacy(e).kind === args.kind).map(e => ({ ...legacy(e), ...e })))) }),
+      defineTool({ name: "memory_write", description: "add 新增；modify 提供 id 和要改的字段；supersede 提供旧 id 和完整新条目，旧条目保留在历史中。" + memoryWriteGuidance,
+        parameters: obj({ op: oneOf(["add", "modify", "supersede"]), id: opt(id), title: opt(str({ pattern: "\\S", maxLength: 20 })), type: opt(entryType), body: opt(nonempty),
+          guess: opt(bool()), dueAt: opt(nullable(dueText)), status: opt(oneOf(["active", "done"])) }),
+        execute: async ({ op, id, dueAt, ...fields }, api, ctx) => {
+          const source = await messageSource(api, ctx);
+          const data = { ...fields, ...(source && { source }), ...(dueAt !== undefined && { dueAt: dueAt === null ? null : deadline(dueAt) }) };
+          if (op === "modify") {
+            if (!id || (!Object.keys(fields).length && dueAt === undefined)) return reply("Expected id and changes", true);
+            if (fields.status !== undefined && (fields.type ?? store.read(id)?.type) !== "goal") return reply("Only goals have a writable status", true);
+            return update(id, data) ? reply(id) : reply("Unknown memory", true);
+          }
+          if ((op === "supersede") !== !!id || !data.title || !data.type || !data.body) return reply("Expected title, type, body and old id only for supersede", true);
+          if (fields.status !== undefined && data.type !== "goal") return reply("Only goals have a writable status", true);
+          const entry: EntryInput = { ...fields, ...(source && { source }), title: data.title, type: data.type, body: data.body, ...(data.dueAt != null && { dueAt: data.dueAt }) };
+          const action: Operation = op === "add" ? { op, entry } : { op, ids: [id!], entry };
+          return reply(store.apply([action])[0]!.ids.at(-1)!);
+        } }),
       defineTool({ name: "memory_delete", description: "Delete a memory by ID.",
         parameters: obj({ id }), execute: async ({ id }) => remove(id) ? reply(id) : reply("Unknown memory", true) }),
     ],
     async start() {
       if (dataDir) await mkdir(dataDir, { recursive: true });
-      db = new DatabaseSync(dataDir ? join(dataDir, "memory.sqlite") : ":memory:");
-      try {
-        db.exec(`CREATE TABLE IF NOT EXISTS memory (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, due INTEGER,
-          status TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL);
-          CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(text, content='memory', content_rowid='id', tokenize='trigram');
-          CREATE TRIGGER IF NOT EXISTS memory_insert AFTER INSERT ON memory BEGIN
-            INSERT INTO memory_fts(rowid,text) VALUES (new.id,new.text); END;
-          CREATE TRIGGER IF NOT EXISTS memory_delete AFTER DELETE ON memory BEGIN
-            INSERT INTO memory_fts(memory_fts,rowid,text) VALUES ('delete',old.id,old.text); END;
-          CREATE TRIGGER IF NOT EXISTS memory_update AFTER UPDATE OF text ON memory WHEN old.text != new.text BEGIN
-            INSERT INTO memory_fts(memory_fts,rowid,text) VALUES ('delete',old.id,old.text);
-            INSERT INTO memory_fts(rowid,text) VALUES (new.id,new.text); END;`);
-      } catch (error) {
-        db.close();
-        throw error;
-      }
-      return async () => db.close();
+      store = openMemoryStore(dataDir ? join(dataDir, "memory.sqlite") : ":memory:", now, timeZone);
+      return async () => store.close();
     },
   };
 }

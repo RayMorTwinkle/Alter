@@ -71,7 +71,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
         if (message.type !== "text") await transport.sendText(owner.chatId, "目前只支持文字");
         else if (text) await submitMessage(app.main, text, "feishu", `feishu-${id}`);
       } else {
-        await app.events.emit(event);
+        await app.events.emit({ ...event, author: owner && openId === owner.openId && message.type === "text" ? "user" : "external" });
         recorded.add(id);
       }
       store.remember(id);

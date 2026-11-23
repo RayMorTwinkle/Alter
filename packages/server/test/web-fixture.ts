@@ -62,13 +62,16 @@ export async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) 
   return { ...await open(), reopen: open };
 }
 
-type Event = SurfaceEvent | { event: "ext-plugins"; data: import("../../web/src/types.ts").ExtPluginView[] } | { event: "sources"; data: import("@alter/plugin-sources").SourceView[] } | { event: "plugins"; data: import("@alter/core").PluginView[] } | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
+type Event<T> = SurfaceEvent | import("../../web/src/types.ts").ExtPluginsEvent
+  | { event: "sources"; data: import("@alter/plugin-sources").SourceView[] } | { event: "plugins"; data: import("@alter/core").PluginView[] }
+  | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState }
+  | { event: "calendar"; data: unknown } | { event: "memory"; data: T };
 
-export async function stream(read: (path: string) => Promise<Response>) {
+export async function stream<T = MemoryItem[]>(read: (path: string) => Promise<Response>) {
   const response = await read("/api/events");
   expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/);
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  const events: Event[] = [];
+  const events: Event<T>[] = [];
   const ended = (async () => {
     let buffer = "";
     for (;;) {
@@ -81,12 +84,12 @@ export async function stream(read: (path: string) => Promise<Response>) {
         buffer = buffer.slice(index + 2);
         if (frame.startsWith(":")) continue;
         const [event, data] = frame.split("\n");
-        events.push({ event: event!.slice(7) as Event["event"], data: JSON.parse(data!.slice(6)) });
+        events.push({ event: event!.slice(7) as Event<T>["event"], data: JSON.parse(data!.slice(6)) });
       }
     }
   })();
   cleanup.push(async () => { await reader.cancel(); await ended; });
-  const seen = async (match: (e: Event) => boolean) => { await expect.poll(() => events.some(match)).toBe(true); };
+  const seen = async (match: (e: Event<T>) => boolean) => { await expect.poll(() => events.some(match)).toBe(true); };
   await seen(e => e.event === "snapshot");
   expect(events[0]?.event).toBe("snapshot");
   return { events, seen, ended };
