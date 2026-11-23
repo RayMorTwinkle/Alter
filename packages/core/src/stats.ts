@@ -188,7 +188,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
       task.usageSource = "ledger";
       addUsage(task.usage, line);
       task.models.add(line.model);
-      if (role === "task" || role === "goal" || (proactiveWake && line.conversation === "task")) {
+      if (role === "task" || role === "watch" || role === "goal" || (proactiveWake && line.conversation === "task")) {
         if (line.attempt === 1) task.rounds++;
         for (const tool of line.tools ?? []) task.tools.set(tool, (task.tools.get(tool) ?? 0) + 1);
       }
@@ -232,6 +232,13 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
   const sources = new Map<string, number>();
   for (const { wakeSource } of wakeRows) sources.set(wakeSource, (sources.get(wakeSource) ?? 0) + 1);
 
+  let watchWakes = 0, watchFinishes = 0;
+  for (const task of Object.values(tasks?.byId ?? {})) {
+    if (!task.watch) continue;
+    watchWakes += task.watch.wakes.filter(includes).length;
+    const last = task.watch.wakes.at(-1);
+    if (task.watch.finished && last !== undefined && includes(last)) watchFinishes++;
+  }
   const notices = (notifications?.entries ?? []).filter(item => includes(item.at));
   for (const item of notices) earliest = Math.min(earliest, item.at);
   const calendarDays = days ?? 1 + (Date.parse(dates.format(at)) - Date.parse(dates.format(earliest))) / 86_400_000;
@@ -242,7 +249,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
       items: taskRows.sort((a, b) => b.createdAt - a.createdAt) },
     wakes: { count: wakeRows.length, bySource: Object.fromEntries(sources), items: wakeRows },
     approvals: { decisions, pending, ...reviewStats(approvalReviews, start, at) },
-    funnel: proactive, watchWakeAccuracy: null,
+    funnel: proactive, watchWakeAccuracy: watchWakes ? watchFinishes / watchWakes : null,
     latency: { firstToken: firstToken.result(), total: latency.result() },
     topTasks: taskRows.flatMap(task => task.usage.costUsd === null ? [] : [{ taskId: task.taskId, costUsd: task.usage.costUsd }])
       .sort((a, b) => b.costUsd - a.costUsd || a.taskId.localeCompare(b.taskId)).slice(0, 10),

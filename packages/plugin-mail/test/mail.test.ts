@@ -191,7 +191,7 @@ it("coalesces EXISTS, catches up by UID after reconnect, and stops during backof
     arrive(9);
     await expect.poll(() => emit.mock.calls.length, { timeout: 3000 }).toBe(3);
     expect(emit.mock.calls).toEqual([4, 8, 9].map(uid => [{
-      source: "mail", kind: "new-message", ref: `INBOX/11/${uid}`, summary: `a@b.test — Message ${uid}`, at: expect.any(Number), untrusted: true,
+      source: "mail", kind: "new-message", contact: "a@b.test", ref: `INBOX/11/${uid}`, summary: `a@b.test — Message ${uid}`, at: expect.any(Number), untrusted: true,
     }]));
     app.sessions[1]!.emit("close");
   } finally {
@@ -244,4 +244,20 @@ it("requires a complete Sent search before submitting mail", async () => {
   expect(app.clients.smtp).not.toHaveBeenCalled();
   await app.call("mail_send", outgoing);
   expect(app.clients.smtp).toHaveBeenCalledTimes(1);
+});
+
+it("polls by delivery time and sender, sharing the IDLE ref and including the message body", async () => {
+  const f = setup();
+  const start = Date.now();
+  for (const [uid, address, at] of [[1, "boss@alter.test", start - 1], [2, "boss@alter.test", start], [3, "else@alter.test", start + 1]] as const) {
+    f.inbox.set(uid, { uid, seq: uid, internalDate: new Date(at), envelope: { subject: "项目", from: [{ address }] },
+      bodyStructure: { type: "text/plain", part: String(uid) } });
+    f.parts.set(String(uid), Buffer.from("今晚交付"));
+  }
+  const where = { channel: "mail", contact: "BOSS@alter.test" } as const;
+  await f.plugin.watchSource!.authorize(where);
+  const rows = await f.plugin.watchSource!.poll(where, start, start + 1000);
+  expect(rows).toMatchObject([{ ref: "INBOX/11/2", contact: "boss@alter.test", at: start, text: expect.stringContaining("今晚交付") }]);
+  expect(f.sessions[1]?.download).toHaveBeenCalledTimes(1);
+  expect(f.sessions.every(session => session.close.mock.calls.length)).toBe(true);
 });

@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.13).
+// Mirrors docs/architecture/web-api.md (v1.14).
 
 export type TimelineItem = {
   id: string;
@@ -93,8 +93,15 @@ export type TranscriptItem =
   | { kind: "tool_call"; tool: string; arguments: unknown; at: number }
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
+export type Watch = {
+  id: string; brief: string; where: { channel: "feishu" | "mail"; chatId?: string; contact?: string };
+  createdAt: number; until: number; keywords: string[]; thinking: NonNullable<Task["thinking"]>;
+  status: "running" | "completed" | "cancelled" | "failed"; wakes: number; pollError?: string;
+};
+
 export type Snapshot = {
   schedules?: ScheduledTask[]; // Available from v1.13.
+  watches?: Watch[]; // Available from v1.14.
   notifications?: Notification[]; // Absent in v1.6 snapshots and before the first snapshot.
   timeline: TimelineItem[];
   tasks: Task[];

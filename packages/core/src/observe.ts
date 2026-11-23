@@ -6,23 +6,24 @@ import {
   context, InboxDoc, LiveDoc, type ConversationDocToken, type Cursor, type EntryRecord, type JsonObject,
 } from "./runtime.ts";
 import { ScheduledTasks, type ScheduledTask } from "./scheduled-tasks.ts";
+import { watchList, type WatchItem } from "./watch.ts";
 import { Ledger, Tasks, type LedgerEntry, type TaskRecord } from "./state.ts";
 import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
 export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "checking"> & { arguments: unknown };
-type Task = Omit<TaskRecord, "conversationId" | "worker" | "lastEntry" | "messages" | "wakeId" | "endedAt" | "status"> & {
+type Task = Omit<TaskRecord, "watch" | "conversationId" | "worker" | "lastEntry" | "messages" | "wakeId" | "endedAt" | "status"> & {
   status: Exclude<TaskRecord["status"], "cancelled">;
   taskId: string; conversationId: string; allow: string[]; pending: PermissionRequest[];
 };
 export type SurfaceState = {
   timeline: TimelineItem[]; tasks: Task[]; pending: PermissionRequest[]; ledger: LedgerEntry[];
-  notifications: Notification[]; schedules: ScheduledTask[];
+  notifications: Notification[]; schedules: ScheduledTask[]; watches: WatchItem[];
   leases: { capability: string; idleTurns: number; window: number }[]; busy: boolean;
 };
 type Delta = { id: string; text: string };
-type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications" | "schedules"> & {
+type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications" | "schedules" | "watches"> & {
   busy: { busy: boolean }; timeline: TimelineItem; delta: Delta;
 };
 export type SurfaceEvent = { [K in keyof Payloads]: { event: K; data: Payloads[K] } }[keyof Payloads];
@@ -32,7 +33,7 @@ const limit = 200;
 // Both surfaces attach before resume. Seed the recent history once, then consume the
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
 export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
-  const state: SurfaceState = { timeline: [], schedules: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state: SurfaceState = { timeline: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   const turn: { source?: string; heartbeat?: boolean } = {};
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
@@ -53,7 +54,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
   }
 
   function updateTasks() {
-    state.tasks = Object.entries(records).map(([taskId, { worker, lastEntry, messages, wakeId, endedAt, status, ...task }]) => ({
+    state.tasks = Object.entries(records).map(([taskId, { worker, lastEntry, messages, wakeId, endedAt, status, watch, ...task }]) => ({
       ...task, allow: [], taskId, status: status === "cancelled" ? "failed" : status, ...(status === "cancelled" && { failure: status }),
       conversationId: String(task.conversationId), pending: state.pending.filter(req => req.taskId === taskId),
     }));
@@ -103,7 +104,15 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     } while (cursor && recent.length < limit);
     if (segment.length) readTurn();
     for (const item of recent.reverse()) add(item, false);
-    await watch(Tasks, value => { records = value.byId; updateTasks(); });
+    await watch(Tasks, value => {
+      records = value.byId;
+      updateTasks();
+      const watches = watchList(records);
+      if (JSON.stringify(watches) !== JSON.stringify(state.watches)) {
+        state.watches = watches;
+        emit({ event: "watches", data: watches });
+      }
+    });
     // A parked auto action is user-visible even after the request is answered. The
     // append-only audit supplies its original time and a stable ID after restart.
     let auditLength = 0;

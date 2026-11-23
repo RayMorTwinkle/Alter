@@ -11,10 +11,12 @@ const Progress = conversationDoc<Progress>("event-progress", () => ({ cursor: 0,
 const Seen = defineDocFamily<{ seen: boolean }, null>({ kind: "alter.event-ref", version: 1, family: true, scope: "session",
   initial: () => ({ seen: false }), checkpointWhen: () => false });
 
-export function emitEvent(main: Conversation, event: ExternalEvent) {
+export function emitEvent(main: Conversation, event: ExternalEvent, receive?: (tx: Tx, event: ExternalEvent) => Promise<void>) {
   return main.commit(async tx => {
+    await receive?.(tx, event);
     const log = await tx.doc(Events, main.id);
-    log.entries.push({ ...event, untrusted: true });
+    const { text: _body, ...summary } = event;
+    log.entries.push({ ...summary, untrusted: true });
     if (log.entries.length <= 500) return;
     const progress = await tx.doc(Progress, main.id);
     const index = log.trimmed ?? 0;

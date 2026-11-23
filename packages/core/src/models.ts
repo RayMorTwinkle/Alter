@@ -15,7 +15,7 @@ const completions = openAICompletionsApi();
 
 // The gateway reports each fallback attempt. Other providers expose one terminal usage record.
 const attemptContext = new AsyncLocalStorage<{ record(line: UsageLine): Promise<void>; now(): number }>();
-type Attribution = Pick<UsageLine, "wakeId" | "wakeAt" | "wakeSource" | "taskId" | "role"> & { conversation: Conversation; thinking?: "low" | "medium" | "high" | "max" };
+type Attribution = Pick<UsageLine, "watchWakeId" | "wakeId" | "wakeAt" | "wakeSource" | "taskId" | "role"> & { conversation: Conversation; thinking?: "low" | "medium" | "high" | "max" };
 const requests = new WeakMap<Message, Attribution>();
 
 // pi-durable copies the message array before streamSimple. Give this request a private identity
@@ -43,7 +43,8 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
     const attribution = last && requests.get(last);
     const heartbeat = attribution?.wakeSource === "heartbeat" || options?.sessionId?.startsWith("heartbeat-");
     const scheduled = attribution?.role === "schedule" || attribution?.wakeSource === "schedule";
-    const proactiveRole = scheduled ? "schedule" : heartbeat ? "heartbeat" : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
+    const proactiveRole = attribution?.role === "watch" ? "watch" : scheduled ? "schedule" : heartbeat ? "heartbeat"
+      : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
     const proactive = proactiveRole !== undefined;
     if (scheduled && attribution?.thinking) {
       const level = clampThinkingLevel(model, attribution.thinking);

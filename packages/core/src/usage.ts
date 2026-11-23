@@ -13,6 +13,7 @@ export type UsageLine = {
   taskId?: string;
   wakeId?: string;
   wakeSource?: string;
+  watchWakeId?: string;
   wakeAt?: number;
   fallback?: boolean;
   retry?: number;
@@ -104,17 +105,25 @@ export type ProactiveBudget = ReturnType<typeof createProactiveBudget>;
 const tokens = (line: UsageLine) => totalInput(line) + (line.outputTokens ?? 0);
 
 export function createProactiveBudget(time: ReturnType<typeof calendarTime>, limit: number, now: () => number, dir?: string) {
-  let cached: { day: number; balance: Promise<{ used: number }> } | undefined;
+  const memoryWakes = new Map<string, string>();
+  let cached: { day: number; balance: Promise<{ used: number; watchWakes: Map<string, string> }> } | undefined;
+  function wakeCharge(line: UsageLine, wakes: Map<string, string>) {
+    if (!line.watchWakeId || !line.taskId || wakes.get(line.taskId) === line.watchWakeId) return 0;
+    wakes.set(line.taskId, line.watchWakeId);
+    return 1;
+  }
   let pending = Promise.resolve();
 
   async function restore(day: number, end: number) {
     let used = 0;
+    const watchWakes = dir ? new Map<string, string>() : memoryWakes;
     for await (const line of dir ? usageLines(dir) : []) {
       if (!line.proactive && !["triage", "goal", "heartbeat", "schedule"].includes(usageRole(line))) continue;
       const at = Date.parse(line.at);
-      if (at >= day && at < end) used += tokens(line);
+      const charge = wakeCharge(line, watchWakes);
+      if (at >= day && at < end) used += tokens(line) + charge;
     }
-    return { used };
+    return { used, watchWakes };
   }
   function today(at: number) {
     const day = time.midnight(at);
@@ -139,7 +148,7 @@ export function createProactiveBudget(time: ReturnType<typeof calendarTime>, lim
         const state = await today(at);
         if (state.used >= limit) { release(); return; }
         return { at, release, async record(line: UsageLine) {
-          state.used += tokens(line);
+          state.used += tokens(line) + wakeCharge(line, state.watchWakes);
           if (dir) await appendUsage(dir, line);
         } };
       } catch (error) { release(); throw error; }
@@ -149,13 +158,14 @@ export function createProactiveBudget(time: ReturnType<typeof calendarTime>, lim
 
 export function usageTotals(lines: UsageLine[]) {
   const empty = () => ({ input: 0, output: 0, tokens: 0, calls: 0, aborted: 0 });
-  const totals = { main: empty(), task: empty(), triage: empty(), heartbeat: empty(), judge: empty(), total: empty() };
+  const totals = { main: empty(), task: empty(), triage: empty(), watch: empty(), heartbeat: empty(), judge: empty(), total: empty() };
   for (const line of lines) {
     if (line.statsOnly) continue;
     const role = line.conversation ?? usageRole(line);
     const groups = [totals.total];
     if (role === "task" || role === "main" || role === "triage" || role === "judge") groups.push(totals[role]);
     else if (role === "goal") groups.push(totals.task);
+    if (usageRole(line) === "watch") groups.push(totals.watch);
     if (usageRole(line) === "heartbeat") groups.push(totals.heartbeat);
     for (const group of groups) {
       group.input += totalInput(line);

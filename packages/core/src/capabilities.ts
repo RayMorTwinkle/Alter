@@ -21,11 +21,18 @@ export const demoManifests: Capability[] = [
 
 export type ExternalEvent = {
   source: string; kind: string; summary: string; ref: string; at: number; untrusted: true;
+  chatId?: string; contact?: string; contactName?: string; text?: string;
 };
-export type PluginHost = { emit(event: ExternalEvent): Promise<void> };
+export type WatchWhere = { channel: "feishu" | "mail"; chatId?: string; contact?: string };
+export type WatchSource = {
+  authorize(where: WatchWhere): Promise<void>;
+  poll(where: WatchWhere, since: number, until: number): Promise<ExternalEvent[]>;
+};
+export type PluginHost = { watching?(event: ExternalEvent): Promise<boolean>; emit(event: ExternalEvent): Promise<void> };
 export type AlterPlugin = {
   capability: Capability;
   tools: ToolRegistration[];
+  watchSource?: WatchSource;
   agenda?(days?: number): { id: string; title: string; start: number; end: number }[];
   calendarEvents?: {
     get(id: string): { start: number; end: number } | undefined;
@@ -43,7 +50,7 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = [], d
   const manifests = [...activeDemos, ...plugins.map(plugin => plugin.capability)];
   const toolActions = new Map<string, ToolAction>();
   const ids = new Set<string>();
-  const reserved = new Set(["dispatch_task", "task_status", "task_message", "task_cancel", "enable_tool", "declare_permissions", "finish"]);
+  const reserved = new Set(["dispatch_task", "task_status", "task_message", "task_cancel", "enable_tool", "declare_permissions", "finish", "sleep", "watch", "watch_list", "watch_cancel"]);
   for (const capability of manifests) {
     if (ids.has(capability.id)) throw new Error(`Duplicate capability: ${capability.id}`);
     ids.add(capability.id);

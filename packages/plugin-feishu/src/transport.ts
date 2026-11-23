@@ -4,7 +4,7 @@ import type { FeishuConfig } from "./config.ts";
 
 export type FeishuMessage = {
   id: string; openId?: string; chatId: string; chatType: string; type: string;
-  text?: string; at: number;
+  text?: string; content?: string; at: number;
 };
 type CardAction = { openId?: string; messageId?: string; requestId?: string; decision?: ApprovalDecision };
 type Toast = { toast: { type: "success" | "error" | "info"; content: string } };
@@ -39,6 +39,7 @@ export function dispatcher(handlers: FeishuHandlers) {
       }
       return handlers.message({ id: message.message_id, openId: sender.sender_type === "user" ? sender.sender_id?.open_id : undefined,
         chatId: message.chat_id, chatType: message.chat_type, type: message.message_type, text,
+        ...(message.message_type !== "text" && { content: message.content }),
         at: Number(message.create_time) || Date.now() });
     },
     "card.action.trigger": ({ operator, context, action }: RawAction) => {

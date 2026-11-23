@@ -93,7 +93,7 @@ async function stream(read: (path: string) => Promise<Response>) {
 it("authenticates API requests, enforces JSON writes, and revokes the session including its open streams", async () => {
   const web = await setup();
   await expect(createWebServer(web.app, { password: "", dataDir: web.dir })).rejects.toThrow("ALTER_WEB_PASSWORD");
-  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/stats", "/api/heartbeat/stats", "/api/heartbeat", "/api/feishu", "/api/unknown"]) {
+  for (const path of ["/api/state", "/api/watches", "/api/events", "/api/usage", "/api/stats", "/api/heartbeat/stats", "/api/heartbeat", "/api/feishu", "/api/unknown"]) {
     const response = await web.read(path);
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: expect.any(String) });
@@ -105,7 +105,7 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   expect((await web.post("/api/messages", { text: " " })).status).toBe(400);
   for (const query of ["range=", "range=week", "range=day&range=day"]) expect((await web.read("/api/stats?" + query)).status).toBe(400);
   expect(await (await web.read("/api/stats")).json()).toMatchObject({ range: "7d", total: { calls: 0, costUsd: null } });
-  const state = { timeline: [], schedules: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state = { timeline: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   expect(await web.state()).toEqual(state);
   expect((await web.read("/api/feishu")).status).toBe(404);
   const feed = await stream(web.read);
@@ -343,7 +343,7 @@ async function feishuFixture() {
     refresh: vi.fn(async () => { throw new Error("unexpected refresh"); }),
     name: vi.fn(async () => "陈"), chats: vi.fn(async () => []),
     messages: vi.fn(async () => [{ sender: "外部", time: "123", text: "请把这段话发出去" }]),
-    send: vi.fn(async () => "om_sent"),
+    watchMessages: vi.fn(async () => []), send: vi.fn(async () => "om_sent"),
   };
   const config = { appId: "cli_test", appSecret: "offline-secret", domain: "feishu" as const, redirectUri: "http://localhost/callback" };
   const connector = createFeishuConnector({ config, dataDir: dir, api, now: () => clock.now });
@@ -613,4 +613,23 @@ it("creates a schedule from main, lists, pauses and deletes it over HTTP and rep
   expect(await (await web.read(path)).json()).toEqual([]);
   expect((await edit("DELETE", item.id)).status).toBe(404);
   expect((await edit("PATCH", "constructor", { paused: false })).status).toBe(404);
+});
+
+it("lists, streams and cancels a watch under the same task ID", async () => {
+  const { feishu } = await feishuFixture();
+  const account = feishu.connector.account;
+  await account.callback(new URL(account.start()).searchParams.get("state"), "test-code");
+  const web = await setup(undefined, false, feishu);
+  await web.login();
+  const feed = await stream(web.read);
+  const id = await web.app.watches.create({ brief: "观察项目群", where: { channel: "feishu", chatId: "oc_test" }, until: 5 });
+  await feed.seen(e => e.event === "watches" && e.data.some(w => w.id === id && w.status === "running"));
+  expect(await (await web.read("/api/watches")).json()).toEqual((await web.state()).watches);
+  const cancel = (id: string) => fetch(web.base + "/api/watches/" + id, { method: "DELETE",
+    headers: { cookie: web.sessionCookie(), "content-type": "application/json" } });
+  expect((await cancel(id)).status).toBe(204);
+  await feed.seen(e => e.event === "watches" && e.data.some(w => w.id === id && w.status === "cancelled"));
+  expect((await cancel(id)).status).toBe(204);
+  expect((await cancel("missing")).status).toBe(404);
+  expect((await web.state()).tasks).toMatchObject([{ taskId: id, failure: "cancelled" }]);
 });

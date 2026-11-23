@@ -1,3 +1,4 @@
+import type { ExternalEvent } from "@alter/core";
 import { Client, defaultHttpInstance, defaultLogger, Domain, LoggerLevel, withUserAccessToken, type HttpInstance } from "@larksuiteoapi/node-sdk";
 import type { FeishuConfig } from "./config.ts";
 
@@ -22,6 +23,7 @@ export interface FeishuUserApi {
   name(token: string): Promise<string | undefined>;
   chats(token: string): Promise<Chat[]>;
   messages(token: string, chatId: string, limit: number): Promise<Message[]>;
+  watchMessages(token: string, chatId: string, since: number, until: number): Promise<ExternalEvent[]>;
   send(token: string, chatId: string, text: string): Promise<string>;
 }
 
@@ -91,6 +93,29 @@ export function sdkUserApi(config: FeishuConfig, endpoints?: { domain: string; o
         container_id: chatId, sort_type: "ByCreateTimeDesc", page_size: limit, with_sender_name: true } }, withUserAccessToken(token)));
       return (page.items ?? []).map(item => ({ sender: item.sender?.sender_name || item.sender?.id || "unknown",
         time: item.create_time, text: messageText(item.msg_type, item.body?.content) }));
+    },
+    async watchMessages(token, chatId, since, until) {
+      const events: ExternalEvent[] = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await data("message.list", client.im.message.list({ params: { container_id_type: "chat", container_id: chatId,
+          start_time: String(Math.floor(since / 1000)), end_time: String(Math.ceil(until / 1000)), sort_type: "ByCreateTimeAsc",
+          page_size: 50, page_token: cursor, with_sender_name: true } }, withUserAccessToken(token)));
+        for (const item of page.items ?? []) {
+          const at = Number(item.create_time);
+          if (!item.message_id || !Number.isFinite(at) || at < since || at >= until) continue;
+          const text = item.msg_type !== "text" && item.body?.content || messageText(item.msg_type, item.body?.content);
+          events.push({ source: "feishu", kind: "message", ref: item.message_id, chatId, at, untrusted: true,
+            ...(item.sender?.id && { contact: item.sender.id }), ...(item.sender?.sender_name && { contactName: item.sender.sender_name }),
+            summary: text.slice(0, 512), text });
+        }
+        if (!page.has_more) break;
+        cursor = page.page_token;
+        if (!cursor || seen.has(cursor)) throw new Error("Invalid Feishu message cursor");
+        seen.add(cursor);
+      } while (cursor);
+      return events;
     },
     async send(token, chatId, text) {
       const sent = await data("message.create", client.im.message.create({ params: { receive_id_type: "chat_id" },
