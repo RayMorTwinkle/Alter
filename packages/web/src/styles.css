@@ -404,3 +404,10 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .schedule-item.paused .row-main { opacity: .55; }
 .schedule-actions { display: flex; gap: 2px; flex: none; }
 .schedule-actions .icon-btn { width: 30px; height: 30px; font-size: 15px; }
+
+.watches { display: grid; gap: 8px; margin-bottom: 6px; }
+.watches h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.watch-item { display: flex; gap: 8px; align-items: flex-start; background: var(--paper); border-radius: var(--radius); padding: 10px 12px; }
+.watch-item.running { box-shadow: inset 2px 0 var(--accent); }
+.watch-item:not(.running) .row-main { opacity: .6; }
+.watch-error { font-size: 12px; color: var(--accent); margin-top: 4px; }
