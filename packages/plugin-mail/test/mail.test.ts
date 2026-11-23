@@ -261,3 +261,11 @@ it("polls by delivery time and sender, sharing the IDLE ref and including the me
   expect(f.sessions[1]?.download).toHaveBeenCalledTimes(1);
   expect(f.sessions.every(session => session.close.mock.calls.length)).toBe(true);
 });
+
+it("describes the complete valid recipient, preserving the case of its local part", async () => {
+  const { plugin } = setup();
+  const state = { conversationId: 1 as Parameters<ToolRegistration["execute"]>[1]["conversationId"], snapshot: async () => undefined };
+  const describe = (to: string) => plugin.describe!({ tool: "mail_send", arguments: { to, subject: "private", text: "private" } }, state);
+  expect(await describe("Ray+news@EXAMPLE.TEST")).toEqual({ to: "Ray+news@example.test" });
+  expect(await describe("ray@example.test,other@example.test")).toBeUndefined();
+});

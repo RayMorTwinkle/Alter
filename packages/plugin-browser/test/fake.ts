@@ -2,9 +2,10 @@ import { runInNewContext } from "node:vm";
 import { vi } from "vitest";
 
 // Each invocation gets fresh JS globals. Only the simulated ego spaces survive.
-export function fakeEgo() {
+export function fakeEgo(document?: object) {
   const url = "https://example.test/";
   const page = {
+    info: vi.fn(async () => ({ url, title: "Example" })),
     url: vi.fn(async () => url), snapshot: vi.fn(async () => "link @21"),
     goto: vi.fn(async (_url: string) => {}), waitForLoadState: vi.fn(async () => {}),
     click: vi.fn(async (_target: string) => {}), fill: vi.fn(async (_target: string, _text: string) => {}),
@@ -28,7 +29,7 @@ export function fakeEgo() {
     const lines: string[] = [];
     await runInNewContext(`(async () => {\n${script}\n})()`, {
       taskSpace, listTaskSpaces: async () => Array.from(spaces, ([id, name]) => ({ id, name })),
-      console: { log: (line: string) => lines.push(line) }, window: { innerHeight: 600, scrollBy },
+      document, NodeFilter: { SHOW_TEXT: 4 }, console: { log: (line: string) => lines.push(line) }, window: { innerHeight: 600, scrollBy },
     });
     return [...lines, "[ego-browser:notice] fixture"].join("\n");
   });

@@ -209,3 +209,13 @@ it("polls both pages with the user's bearer, stable message IDs and exact millis
   expect(pages.map(p => p.url.searchParams.get("page_token"))).toEqual([null, "next"]);
   expect(pages.every(p => p.bearer === "Bearer user-1" && p.url.searchParams.get("start_time") === "1" && p.url.searchParams.get("end_time") === "2")).toBe(true);
 });
+
+it("resolves the exact chat across directory pages without reading messages", async () => {
+  const f = await setup();
+  await f.connect();
+  const state = { conversationId: 1 as Parameters<ToolRegistration["execute"]>[1]["conversationId"], snapshot: async () => undefined };
+  const describe = (chat_id: string) => f.plugin.describe!({ tool: "feishu_send", arguments: { chat_id, text: "private" } }, state);
+  expect(await describe("oc_456")).toEqual({ chat_id: "oc_456", name: "乙", type: "p2p" });
+  expect(await describe("missing")).toBeUndefined();
+  expect(f.calls.some(c => c.url.pathname.endsWith("/messages"))).toBe(false);
+});

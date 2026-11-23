@@ -1,5 +1,5 @@
-import { expect, it } from "vitest";
-import { defineTool, reply, schema, type AlterPlugin } from "../src/index.ts";
+import { expect, it, vi } from "vitest";
+import { createCapabilityRegistry, defineTool, reply, schema, type AlterPlugin, type ToolRegistration } from "../src/index.ts";
 import { normalUrl, recordUntrusted } from "../src/taint.ts";
 import { cases } from "../evals/permissions/cases.ts";
 import { classify, describe } from "../evals/permissions/report.ts";
@@ -83,4 +83,16 @@ it("normalizes seen URLs so a trailing slash is the same page", () => {
     [{ type: "text", text: '<external source="browser" url="http://127.0.0.1:9/">page</external>' }]);
   expect(state.seen).toEqual(["http://127.0.0.1:9/"]);
   expect(state.seen).toContain(normalUrl("http://127.0.0.1:9"));
+});
+
+it("continues without context when a plugin metadata lookup stalls", async () => {
+  vi.useFakeTimers();
+  try {
+    const registry = createCapabilityRegistry([{ ...links, describe: () => new Promise<never>(() => {}) }]);
+    const lookup = registry.describe({ tool: "links_send", arguments: {} }, {
+      conversationId: 1 as Parameters<ToolRegistration["execute"]>[1]["conversationId"], snapshot: async () => undefined,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await lookup).toBeUndefined();
+  } finally { vi.useRealTimers(); }
 });

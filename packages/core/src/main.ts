@@ -100,7 +100,7 @@ export async function openAlter(
   const settings = openSettings(options.dataDir ?? storageDirectories.get(storage) ?? dir, proactive.heartbeat);
   const defaultMs = validateApprovalTimeout(options.approvalDefaultMs ?? Number(process.env.ALTER_APPROVAL_DEFAULT_MS ?? 60_000), "ALTER_APPROVAL_DEFAULT_MS");
   const broker = createBroker(() => main, capabilities, timeout, defaultMs, () => settings.approvalModel,
-    (statement, call, owner) => judge(judgeModels(currentModels(), dir, now, owner), taskModel, statement, call));
+    (statement, call, owner, context) => judge(judgeModels(currentModels(), dir, now, owner), taskModel, statement, call, context));
   const taskExtensions = [extension, TaskTools, broker];
   const dispatch = createDispatcher(taskExtensions, taskModel, clock, (requested = thinking.task ?? "high") => {
     const model = currentModels().getModel(taskModel.provider, taskModel.modelId);

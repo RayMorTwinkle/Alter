@@ -1,5 +1,6 @@
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineExtension, defineTool, reply, type Conversation, type ToolRegistration } from "./runtime.ts";
+import type { ApprovalCall, ApprovalContext } from "./approval-model.ts";
+import { defineExtension, defineTool, reply, type Conversation, type ConversationDocToken, type ConversationId, type JsonObject, type ToolRegistration } from "./runtime.ts";
 
 export type Effect = "read" | "write-local" | "external-send" | "irreversible" | "unknown";
 type ActionPolicy = { effect: Effect; guarded?: true; seenArg?: string };
@@ -29,9 +30,15 @@ export type WatchSource = {
   poll(where: WatchWhere, since: number, until: number): Promise<ExternalEvent[]>;
 };
 export type PluginHost = { watching?(event: ExternalEvent): Promise<boolean>; emit(event: ExternalEvent): Promise<void> };
+export type DescribeState = {
+  conversationId: ConversationId;
+  snapshot<T extends JsonObject>(doc: ConversationDocToken<T>): Promise<Readonly<T> | undefined>;
+};
 export type AlterPlugin = {
   capability: Capability;
   tools: ToolRegistration[];
+  // Return identifying metadata only. Never pass message bodies, snapshots or tool output.
+  describe?(call: ApprovalCall, state: DescribeState): ApprovalContext | undefined | Promise<ApprovalContext | undefined>;
   watchSource?: WatchSource;
   agenda?(days?: number): { id: string; title: string; start: number; end: number }[];
   calendarEvents?: {
@@ -60,14 +67,26 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = [], d
       toolActions.set(name, { capability: capability.id, action, ...policy });
     }
   }
-  for (const { capability, tools } of plugins) {
+  const descriptions = new Map<string, NonNullable<AlterPlugin["describe"]>>();
+  for (const { capability, tools, describe } of plugins) {
     const names = new Set(tools.map(tool => tool.name));
     if (names.size !== tools.length || names.size !== capability.actions.length ||
         tools.some(tool => toolActions.get(tool.name)?.capability !== capability.id)) {
       throw new Error(`Tools must match the actions declared by ${capability.id}`);
     }
+    if (describe) for (const name of names) descriptions.set(name, describe);
   }
-  return { manifests, toolActions, activeDemos };
+  async function describe(call: ApprovalCall, state: DescribeState) {
+    const lookup = descriptions.get(call.tool);
+    if (!lookup) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const deadline = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 5000).unref(); });
+      return await Promise.race([lookup(structuredClone(call), state), deadline]);
+    } catch { return undefined; }
+    finally { clearTimeout(timer); }
+  }
+  return { manifests, toolActions, activeDemos, describe };
 }
 export type CapabilityRegistry = ReturnType<typeof createCapabilityRegistry>;
 export const { toolActions } = createCapabilityRegistry();

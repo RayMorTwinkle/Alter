@@ -116,6 +116,11 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
 
   return {
     timeZone,
+    describe({ tool, arguments: { id } }) {
+      if (typeof id !== "string" || !["calendar_update", "calendar_delete", "calendar_restore"].includes(tool)) return;
+      const row = db.prepare("SELECT title, start, end FROM events WHERE id = ?").get(id) as Pick<Row, "title" | "start" | "end"> | undefined;
+      if (row) return { id, title: row.title, start: time.describe(row.start).iso, end: time.describe(row.end).iso };
+    },
     calendarEvents: {
       get(id) {
         return db.prepare("SELECT start, end FROM events WHERE id = ? AND deletedAt IS NULL").get(id) as

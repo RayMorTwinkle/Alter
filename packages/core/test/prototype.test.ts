@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { obj } from "@earendil-works/pi-schema";
+import { obj, str } from "@earendil-works/pi-schema";
 import { contentText, type AssistantMessage, type Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -1149,4 +1149,40 @@ it.each(["finish", "answer"])("handles steering while the model is about to %s",
   id = Object.keys((await app.harness.snapshot(Tasks, app.main.id, context))!.byId)[0]!;
   try { await input(app, "update"); } finally { release!(); }
   await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["updated result"]);
+});
+
+it.each(["exact limit", "over limit", "failed"])("keeps the review usable with plugin metadata (%s)", async scenario => {
+  const args = { message: "team" };
+  const tool = "fixture_send";
+  const title = "令".repeat(1000 - JSON.stringify({ title: "" }).length);
+  const executed = vi.fn(async () => reply("sent"));
+  const describe = vi.fn<NonNullable<AlterPlugin["describe"]>>(async call => {
+    call.arguments.message = "overwritten";
+    if (scenario === "failed") throw new Error("private plugin error");
+    return { title: scenario === "exact limit" ? title : title + "!" };
+  });
+  const plugin: AlterPlugin = {
+    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "send", effect: "external-send" }] },
+    tools: [defineTool({ name: tool, description: "send", parameters: obj({ message: str() }), execute: executed })], describe,
+  };
+  const payloads: unknown[] = [];
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("send");
+    if (text === "send") return call(tool, args);
+    if (text.startsWith('{"statement":')) {
+      payloads.push(JSON.parse(text));
+      return say('{"inScope":false,"reason":"请核对"}');
+    }
+    if (last.role === "toolResult" && last.toolName === tool) return finish("done");
+    return say("ok");
+  }, new MemoryStorage(), [plugin]);
+  await input(app, "delegate");
+  const request = await parked(app);
+  await expect.poll(() => payloads).toEqual([{ statement: [], call: { tool, arguments: args },
+    ...(scenario === "exact limit" && { context: { title } }) }]);
+  expect(describe).toHaveBeenCalledOnce();
+  const tasks = await app.harness.snapshot(Tasks, app.main.id, context);
+  expect(describe.mock.calls[0]?.[1].conversationId).toBe(tasks?.byId[request.taskId]?.conversationId);
+  await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
+  await expect.poll(() => executed.mock.calls.length).toBe(1);
 });
