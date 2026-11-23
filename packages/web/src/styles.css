@@ -399,3 +399,8 @@ a.text-btn { text-decoration: none; font-size: 14px; }
   .pair-code { margin-right: 0; }
   .topbar-actions .icon-btn { width: 32px; min-width: 32px; }
 }
+
+.schedule-item { display: flex; gap: 8px; align-items: flex-start; background: var(--paper); border-radius: var(--radius); padding: 10px 8px 10px 12px; }
+.schedule-item.paused .row-main { opacity: .55; }
+.schedule-actions { display: flex; gap: 2px; flex: none; }
+.schedule-actions .icon-btn { width: 30px; height: 30px; font-size: 15px; }
