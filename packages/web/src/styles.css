@@ -456,3 +456,14 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .time-range { display: flex; gap: 12px; font-size: 13px; }
 .time-range label { display: flex; align-items: center; gap: 6px; }
 .time-range input { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--fill); background: var(--surface); color: var(--ink); }
+
+.plugin-head.static { cursor: default; }
+.source-form { background: var(--paper); border-radius: var(--radius); padding: 12px; display: grid; gap: 10px; }
+.source-form .seg { flex-wrap: wrap; }
+.field textarea { font: 12px/1.5 ui-monospace, monospace; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--fill); background: var(--surface); color: var(--ink); resize: vertical; }
+.source-samples { font-size: 13px; display: grid; gap: 4px; }
+.source-samples span { color: var(--muted); font-size: 12px; }
+.source-samples ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.source-samples a { color: var(--ink); }
+.plugin-provides .text-btn.danger { margin-left: auto; color: var(--muted); font-size: 12px; }
+.plugin-provides .text-btn.danger:hover { color: var(--accent); }

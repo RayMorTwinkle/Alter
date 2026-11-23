@@ -62,7 +62,7 @@ export async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) 
   return { ...await open(), reopen: open };
 }
 
-type Event = SurfaceEvent | { event: "plugins"; data: import("@alter/core").PluginView[] } | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
+type Event = SurfaceEvent | { event: "sources"; data: import("@alter/plugin-sources").SourceView[] } | { event: "plugins"; data: import("@alter/core").PluginView[] } | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
 
 export async function stream(read: (path: string) => Promise<Response>) {
   const response = await read("/api/events");

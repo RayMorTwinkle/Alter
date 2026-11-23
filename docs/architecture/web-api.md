@@ -1,4 +1,4 @@
-# Web API 契约（v1.15）
+# Web API 契约（v1.16）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -264,6 +264,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | event | data | 说明 |
 |---|---|---|
 | `watches` | `Watch[]` | 盯梢记录变化（v1.14） |
+| `sources` | `SourceView[]` | 首次连接、重连、实例配置或轮询状态变化时整体替换（v1.16） |
 | `snapshot` | 同 `/api/state` | 首次连接与重连时 |
 | `timeline` | `TimelineItem` | 新条目（含用户自己发的消息回显） |
 | `delta` | `{ id: string; text: string }` | 主会话正在生成的回答，`text` 为**累计全文**，结束时由同 `id` 的 `timeline` 条目取代 |
@@ -324,13 +325,13 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 
 | 方法 | 路径 | 响应 |
 |---|---|---|
-| GET | `/api/plugins` | `PluginView[]`，含四个插件，按 `id` 识别 |
+| GET | `/api/plugins` | `PluginView[]`，按 `id` 识别 |
 | PATCH | `/api/plugins/:id` | 提交 `{ enabled?, settings? }`，等待该插件重新初始化后返回完整 `PluginView` |
 | POST | `/api/plugins/:id/check` | 使用 JSON 请求头，重新检查并返回完整 `PluginView` |
 | GET | `/api/plugins/feishu/guide` | `{ permissionsJson, redirectUri, eventsMode: "long-connection", steps }`，权限 JSON 字符串可直接粘贴至开放平台 |
 | GET / PATCH | `/api/settings` | 返回 `{ approvalModel, heartbeat: { enabled, start, end } }`。PATCH 至少提交一个字段，heartbeat 支持部分修改 |
 
-插件视图含 `id, name, provides, settings, enabled, values, status`。三组 `provides.channels/capabilities/sources` 使用标识符数组。Web 为内置渠道。飞书、邮件、浏览器、日历的标识符依次为 `feishu, mail, browser, calendar`。每个表单字段含 `key, label, type, required, help`，select 附 `options`。提交示例：
+插件视图含 `id, name, provides, settings, enabled, values, status`。三组 `provides.channels/capabilities/sources` 使用标识符数组。Web 为内置渠道。飞书、邮件、浏览器、日历、模板消息来源的标识符依次为 `feishu, mail, browser, calendar, sources`。每个表单字段含 `key, label, type, required, help`，select 附 `options`。提交示例：
 
 ```json
 {"enabled":true,"settings":{"ALTER_FEISHU_APP_ID":"cli_example","ALTER_FEISHU_APP_SECRET":"example-only"}}
@@ -343,3 +344,38 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 `plugins` SSE 事件携带与 GET 相同的完整数组，首次连接、重连或插件状态变化时发送。客户端整体替换。巡检保存后即时更新原有 `heartbeat` 视图和调度事件。时间使用服务配置的时区，格式为 `HH:MM`，支持跨午夜，起止必须不同；停用后 `nextAt` 为 null。审批模式支持 `shadow / auto / off`。影子一致率与误放次数沿用 `GET /api/approvals/stats` 的 `agreementRate` 与 `deniedButInScope`。
 
 活跃盯梢保留原任务 ID 和拉取进度。邮件或飞书插件重新配置后，下次补拉使用当前插件实例。停用期间拉取失败会记录 `pollError`；在观察期内重新启用并授权后，从上次成功拉取的位置继续。
+
+## 模板消息来源（v1.16）
+
+所有接口沿用 Web 会话鉴权。写请求使用 JSON Content-Type。
+
+| 方法 | 路径 | 请求与响应 |
+|---|---|---|
+| GET | `/api/sources/templates` | 返回 `SourceTemplate[]`。每个模板含 `template, name, fields`，字段使用 `PluginField` |
+| GET | `/api/sources` | 返回 `SourceView[]`，包括已停用的实例 |
+| POST | `/api/sources/preview` | 提交 `template, params`，返回 `200 { samples }`，最多三条。试拉期间不保存配置、进度或消息 |
+| POST | `/api/sources` | 提交 `name, template, params, intervalMinutes?, enabled?`。试拉成功返回 `201 { source, samples }`，失败不创建实例 |
+| PATCH | `/api/sources/:id` | 可修改名称、启用状态、间隔及部分参数。返回更新后的 `SourceView`。模板类型固定 |
+| DELETE | `/api/sources/:id` | 删除实例、凭证和轮询进度，返回 204 |
+
+`enabled` 默认 true，`intervalMinutes` 默认 30，最小 5。参数非法返回 400，实例不存在返回 404，试拉遇到网络、上游 HTTP 或内容格式错误返回 502。生产拉取只允许 HTTPS，拒绝 URL 内嵌凭证及 HTTP 重定向。每个响应最多 2 MiB，整个拉取限时 15 秒。
+
+| 模板 | 参数 | 样例条目 |
+|---|---|---|
+| `rss` | `url` | RSS 2.0 和 Atom 提取 `id, title, url`，可附 `publishedAt, body`。日期保留来源格式，摘要去 HTML 后最多 500 字符 |
+| `json` | `url, itemsPath?, idField, titleField, urlField, bodyField?, headers?, secrets?` | 列表与字段支持点路径。列表路径省略或为空时使用根数组。数字 ID 转为字符串，相对链接按接口地址解析 |
+| `github` | `token` | 读取 GitHub 通知，条目含 `id, repo, type, title, url`。issue、PR 等链接指向网页版，缺少主题地址时回退到仓库 |
+
+JSON 请求头可引用本实例的命名密钥。例如：
+
+```json
+{"template":"json","name":"项目公告","params":{"url":"https://example.org/news","itemsPath":"data.items","idField":"id","titleField":"title","urlField":"url","headers":{"Authorization":"Bearer ${secret:api}"},"secrets":{"api":"example-only"}}}
+```
+
+实例与进度使用数据目录中的插件加密存储。对外视图中，GitHub token 和 JSON 的每个请求头值、密钥值均以 `{"set":true}` 表示。PATCH 省略字段会保留旧值，提交 `headers` 或 `secrets` 会整体替换对应的映射，空对象可清除映射。
+
+每批按 ID 去重。实例保存最近 1000 个 ID，大列表另外保留超出窗口部分的摘要，用于识别连续多次返回的相同历史条目。如果上游重排了窗口之外的历史，已淘汰的 ID 可能再次进入分诊。启用状态下，新建实例的试拉同时建立基线，首次拉取不推送。单独重新启用实例或修改拉取参数后，下一次成功拉取重建基线。重启服务或热重载整个插件会继续使用已保存的基线、最近 1000 个 ID 和下次轮询时间。新消息携带 `source = "feed:<实例名>"`、`author = "external"` 和 `untrusted = true`，经已有分诊流程处理。
+
+`status.lastPollAt` 和 `status.nextPollAt` 为 Unix 毫秒。实例停用时 `nextPollAt` 为 null。全插件停用会暂停计时器。`todayCount` 是按服务时区计算的当日已送入分诊条数。`error` 在成功后为 null，失败时返回安全的错误原因。连续失败按实例间隔的 2、4、8 倍退避，最高 64 倍。GitHub 保存 Last-Modified 供下次条件请求使用，304 只更新状态，调度时间同时满足 X-Poll-Interval。
+
+SSE 在连接、重连、实例配置或轮询状态变化时发送 `sources`，数据与 `GET /api/sources` 相同。增删或重命名实例也更新 `plugins` 事件，模板插件的 `provides.sources` 按创建顺序列出实例名称。

@@ -8,6 +8,7 @@ import {
   MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
+import { templates, SourceError } from "@alter/plugin-sources";
 import type { PluginManager } from "./plugin-manager.ts";
 import { redirectUri, settingsWriter } from "./settings-api.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
@@ -98,6 +99,12 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     }
     if (clients.size) broadcast("plugins", plugins.list());
   });
+  const sources = plugins?.sources;
+  const stopSources = sources?.subscribe(namesChanged => {
+    if (!clients.size) return;
+    broadcast("sources", sources.list());
+    if (namesChanged) broadcast("plugins", plugins!.list());
+  });
   const saveSettings = settingsWriter(app);
   const stopHeartbeat = await subscribeHeartbeat(app.harness, event => {
     const message = frame("heartbeat", event);
@@ -172,6 +179,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (clients.has(res)) webDelivery(snapshot.notifications);
       if (surface.partial) write(res, frame("delta", surface.partial));
       if (plugins) write(res, frame("plugins", plugins.list()));
+      if (sources) write(res, frame("sources", sources.list()));
       return;
     } else if (method === "POST" && path === "/api/messages") {
       const { text } = await body(req);
@@ -253,6 +261,18 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return json(res, 200, await app.heartbeat.stats());
     } else if (method === "GET" && path === "/api/approvals/stats") {
       return json(res, 200, await approvalStats(app.main));
+    } else if (method === "GET" && path === "/api/sources/templates") {
+      return json(res, 200, templates);
+    } else if (method === "GET" && path === "/api/sources") {
+      return json(res, 200, sources?.list() ?? []);
+    } else if (sources && method === "POST" && path === "/api/sources/preview") {
+      return json(res, 200, await sources.preview(await body(req)));
+    } else if (sources && method === "POST" && path === "/api/sources") {
+      return json(res, 201, await sources.create(await body(req)));
+    } else if (sources && (method === "PATCH" || method === "DELETE") && /^\/api\/sources\/[^/]+$/.test(path)) {
+      const id = path.split("/")[3]!;
+      if (method === "PATCH") return json(res, 200, await sources.patch(id, await body(req)));
+      await sources.remove(id);
     } else if (method === "GET" && path === "/api/plugins") {
       return json(res, 200, plugins?.list() ?? []);
     } else if (method === "GET" && path === "/api/plugins/feishu/guide") {
@@ -282,7 +302,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
 
   const server = createServer((req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
+      const error = cause instanceof SourceError ? new HttpError(cause.status, cause.message) : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);
       if (res.headersSent) { res.destroy(); return; }
       if (error instanceof HttpError) json(res, error.status, { error: error.message });
@@ -293,6 +313,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     clearInterval(ping);
     stopHeartbeat();
     stopPlugins?.();
+    stopSources?.();
     unsubscribe?.();
     surface.detach();
     for (const res of clients.keys()) res.end();

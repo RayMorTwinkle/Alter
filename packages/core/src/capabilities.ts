@@ -22,7 +22,7 @@ export const demoManifests: Capability[] = [
 
 export type ExternalEvent = {
   source: string; kind: string; summary: string; ref: string; at: number; untrusted: true;
-  chatId?: string; contact?: string; contactName?: string; text?: string;
+  author?: "external"; chatId?: string; contact?: string; contactName?: string; text?: string;
 };
 export type WatchWhere = { channel: "feishu" | "mail"; chatId?: string; contact?: string };
 export type WatchSource = {
