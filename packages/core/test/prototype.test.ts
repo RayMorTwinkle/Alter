@@ -569,6 +569,26 @@ it.each(["restricted", "full"] as const)("opens and clicks, then parks a tainted
   expect((await ledger(app))[0]?.summary).toBe("browsed");
 });
 
+it.each(["eval", "fetch"] as const)("requires approval before browser_%s executes on a tainted full-permission task", async action => {
+  const ego = fakeEgo();
+  const tool = "browser_" + action;
+  const app = await open((text, last) => {
+    if (text === "delegate") return dispatch("browse", "full");
+    if (text === "browse") return call("browser_snapshot", {});
+    if (last.role === "toolResult" && last.toolName === "browser_snapshot") {
+      return action === "eval" ? call(tool, { expression: "1 + 1" }) : call(tool, { url: "/api" });
+    }
+    if (last.role === "toolResult" && last.toolName === tool) return finish("denied");
+    return say("OK");
+  }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
+  await input(app, "delegate");
+  const request = await parked(app);
+  expect(request).toMatchObject({ tool, audience: "user", tainted: true, taint: { source: "browser_snapshot" } });
+  await answerUserPermission(app.main, { requestId: request.id, decision: "deny" });
+  await expect.poll(() => ego.finish.mock.calls.length).toBe(1);
+  expect(ego.page[action === "eval" ? "evaluate" : "fetch"]).not.toHaveBeenCalled();
+});
+
 it("aborts a parked task even when plugin cleanup fails", async () => {
   const plugin: AlterPlugin = {
     capability: { id: "fixture", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },

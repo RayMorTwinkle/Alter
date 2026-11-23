@@ -4,7 +4,7 @@ import { actions, createSpace, runEgo, view } from "../src/ego.ts";
 const name = `Alter live ${randomUUID()}`;
 const id = await createSpace(runEgo, name);
 async function step(label: string, action: string, close = false) {
-  const result = await view(runEgo, name, id, action, 12_000, close);
+  const result = await view(runEgo, name, id, action, 12_000, { close });
   if (!result) throw new Error("Live space disappeared");
   console.log(label, result.text.length, "characters");
   if (result.isError) throw new Error(`${label} failed`);
