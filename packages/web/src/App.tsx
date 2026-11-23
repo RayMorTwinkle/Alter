@@ -109,7 +109,8 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const onFeedback = (id: string, feedback: "useful" | "useless") => void guard(() => api.updateNotification(id, { feedback })).catch(() => {});
 
   const panels = {
-    tasks: <TasksPanel tasks={state.tasks} leases={state.leases} onOpen={setOpenTask} />,
+    tasks: <TasksPanel tasks={state.tasks} leases={state.leases} watches={state.watches ?? []} onOpen={setOpenTask}
+      onCancelWatch={id => void guard(() => api.cancelWatch(id)).catch(() => {})} />,
     approvals: <ApprovalsPanel pending={state.pending} onAnswer={onAnswer} />,
     agenda: state.agenda && <AgendaPanel agenda={state.agenda} schedules={state.schedules ?? []}
       onPause={(id, paused) => void guard(() => api.pauseSchedule(id, paused)).catch(() => {})}

@@ -30,6 +30,7 @@ export const api = {
   transcript: (taskId: string) =>
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
   usage: () => request<UsageRow[]>("/api/usage"),
+  cancelWatch: (id: string) => request<void>(`/api/watches/${encodeURIComponent(id)}`, { method: "DELETE" }),
   pauseSchedule: (id: string, paused: boolean) => request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body: { paused } }),
   deleteSchedule: (id: string) => request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
   heartbeat: () => request<HeartbeatView>("/api/heartbeat"),
@@ -49,7 +50,7 @@ export const api = {
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -85,6 +86,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "notifications": return dispatch({ type: "notifications", notifications: data });
         case "heartbeat": return dispatch({ type: "heartbeat" });
         case "schedules": return dispatch({ type: "schedules", schedules: data });
+        case "watches": return dispatch({ type: "watches", watches: data });
       }
     });
   }

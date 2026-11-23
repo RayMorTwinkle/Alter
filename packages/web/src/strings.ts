@@ -172,6 +172,20 @@ const hant = {
     remove: "刪除",
     confirmRemove: "刪除這個定時任務？",
   },
+  watches: {
+    title: "盯梢",
+    status: { running: "盯著", completed: "已報告", cancelled: "已取消", failed: "失敗" },
+    mail: "郵箱",
+    feishu: "飛書",
+    chat: (id: string) => `飛書群 ${id}`,
+    contact: (name: string) => `聯繫人 ${name}`,
+    keywords: (words: string) => `關鍵詞：${words}`,
+    until: (at: string) => `盯到 ${at}`,
+    ended: (at: string) => `${at} 結束`,
+    wakes: (n: number) => `醒了 ${n} 次`,
+    cancel: "取消",
+    confirmCancel: "取消這個盯梢？",
+  },
 };
 
 export type Strings = typeof hant;
@@ -338,6 +352,20 @@ const hans: Strings = {
     resume: "恢复",
     remove: "删除",
     confirmRemove: "删除这个定时任务？",
+  },
+  watches: {
+    title: "盯梢",
+    status: { running: "盯着", completed: "已报告", cancelled: "已取消", failed: "失败" },
+    mail: "邮箱",
+    feishu: "飞书",
+    chat: (id: string) => `飞书群 ${id}`,
+    contact: (name: string) => `联系人 ${name}`,
+    keywords: (words: string) => `关键词：${words}`,
+    until: (at: string) => `盯到 ${at}`,
+    ended: (at: string) => `${at} 结束`,
+    wakes: (n: number) => `醒了 ${n} 次`,
+    cancel: "取消",
+    confirmCancel: "取消这个盯梢？",
   },
 };
 
