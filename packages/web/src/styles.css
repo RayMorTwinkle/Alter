@@ -161,6 +161,11 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .report .link { justify-self: start; font-size: 13px; margin-top: 2px; }
 
 .notice.resolved { color: var(--faint); }
+.compacted { color: var(--muted); font-size: 13px; }
+.compacted > summary { cursor: pointer; text-align: center; list-style: none; display: flex; gap: 6px; justify-content: center; align-items: center; }
+.compacted > summary::before, .compacted > summary::after { content: ""; flex: 1; border-top: 1px solid var(--fill); }
+.compacted[open] > summary { margin-bottom: 8px; }
+.compacted > :not(summary) { background: var(--paper); border-radius: var(--radius); padding: 10px 12px; color: var(--ink-2); }
 .notice { margin: 0; text-align: center; color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; }
 
 .composer {
@@ -415,6 +420,11 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .settings-hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
 .plugin-card { background: var(--paper); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 6px; }
 .plugin-card header { display: flex; align-items: center; gap: 8px; }
+.model-row header code { font-size: 13px; overflow-wrap: anywhere; }
+.model-edit { margin-left: auto; }
+.model-caps { margin: 0; font-size: 13px; color: var(--muted); }
+.model-form { display: grid; gap: 8px; }
+.model-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .plugin-head { flex: 1; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 2px 0; text-align: left; color: var(--ink); font: inherit; }
 .plugin-head b { font-size: 15px; font-weight: 600; }
 .plugin-head svg { margin-left: auto; color: var(--muted); transition: transform .15s; }

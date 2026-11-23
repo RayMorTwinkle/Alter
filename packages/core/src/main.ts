@@ -8,6 +8,7 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
 import { approvalClocks, createBroker, migrateRequests, Reviews } from "./broker.ts";
 import { activeLease, LeaseHistory, Leases, leaseTarget, leaseWindow } from "./leases.ts";
 import { judge } from "./approval-model.ts";
+import { compactionSettings, mainCompaction } from "./compaction.ts";
 import { openSettings } from "./settings.ts";
 import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type PluginHost } from "./capabilities.ts";
 import {
@@ -25,7 +26,7 @@ import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
 import { addNotification, claim, isClaimed, notifyTool, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
 import { createProactiveBudget } from "./usage.ts";
-import { gatewayDataDirectories, auxiliaryModels, tagRequest, withUsage } from "./models.ts";
+import { gatewayCapabilities, auxiliaryModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
 import { consolidationThreshold, startConsolidation } from "./memory-consolidation.ts";
 import { memoryPrompt } from "./memory-prompt.ts";
@@ -59,7 +60,7 @@ export async function openAlter(
     () => ({ dispatch, budget, harness }));
   const scheduler = createScheduler(() => main, registry, timeZone, now, schedules);
   const currentModels = () => typeof models === "function" ? models() : models;
-  const dir = gatewayDataDirectories.get(currentModels()) ?? options.dataDir ?? storageDirectories.get(storage);
+  const dir = gatewayCapabilities.get(currentModels())?.dataDir ?? options.dataDir ?? storageDirectories.get(storage);
   const askFeedback = feedbackCall(() => auxiliaryModels(currentModels(), dir, now, "feedback"), taskModel);
   const feedback = createFeedback(() => main, () => harness, memory, scheduler, now, timeZone, askFeedback, options.dataDir ?? storageDirectories.get(storage));
   const capabilities = createCapabilityRegistry([...plugins, scheduler], options.demos ?? true);
@@ -230,6 +231,7 @@ export async function openAlter(
     sections: [{ key: "memory-index", tag: false, render: (_, ctx) => main.commit(tx => prompt.index(tx, main.id), ctx) }],
     tasks: [SourceBorrow, AdvanceLeases, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
     hooks: [
+      mainCompaction(memory, mainModel),
       hook(BackgroundTask, {
         async onTaskEnd(taskId) {
           const handlers = plugins.flatMap(p => p.onTaskEnd ? [p.onTaskEnd] : []);
@@ -247,7 +249,8 @@ export async function openAlter(
   const meteredModels = () => withUsage(currentModels(), budget, dir, now);
   const harness = await Harness.open(storage, {
     models: typeof models === "function" ? meteredModels : meteredModels(),
-    registry, now: options.now, setTimer: options.setTimer, settings: { toolExecution: "sequential", retry: { enabled: false } },
+    registry, now: options.now, setTimer: options.setTimer, settings: () => ({ toolExecution: "sequential", retry: { enabled: false },
+      compaction: compactionSettings(currentModels(), [mainModel, taskModel], settings.compactAtTokens) }),
   }, context);
   const main: Conversation = await harness.root(context, { agent: {
     extensions: [controlPlane, extension, broker], modelTools: controls,
@@ -332,7 +335,9 @@ export async function openAlter(
     return borrowForSource(main, harness, [extension, broker], plugin, tool, args, signal, now());
   };
   const finishPluginRegistration = () => main.commit(tx => restoreLeases(tx, () => false), context);
-  return { harness, main, settings, feedback, replacePlugin, finishPluginRegistration, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
+  return { harness, main, settings,
+    get modelCapabilities() { return gatewayCapabilities.get(currentModels()); },
+    feedback, replacePlugin, finishPluginRegistration, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
     notifications: {
       alert: (source: string, title: string) => main.commit(tx => addNotification(tx, { id: crypto.randomUUID(), at: now(), kind: "notify",
         level: "now", status: "unread", source, title }), context),

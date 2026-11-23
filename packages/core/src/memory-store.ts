@@ -231,5 +231,5 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
     }
     return lines.length ? "记忆更新：" + lines.join(" / ") : "";
   }
-  return { entries, seed, read, apply, refresh, view, delta, changes, revision, lastBatch, undo, search, listeners, close: () => db.close() };
+  return { entries, seed, read, apply, refresh, view, delta, changes, revision, lastBatch, processed, undo, search, listeners, close: () => db.close() };
 }

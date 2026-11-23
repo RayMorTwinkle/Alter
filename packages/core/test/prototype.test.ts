@@ -976,7 +976,7 @@ it("validates model-written titles and reserves pending status for automatic goa
   expect(app.memory.store.view().entries).toMatchObject([{ title: "考研", status: "done" }]);
 });
 
-it("lets a main search memory but requires a separate user decision for each write", async () => {
+it("lets a main search and write memory without asking, even after reading external content", async () => {
   let id = "";
   const app = await open((text, last) => {
     if (last.role !== "user") return say("OK");
@@ -990,19 +990,16 @@ it("lets a main search memory but requires a separate user decision for each wri
   await input(app, "lease");
   await input(app, "read");
   await input(app, "search");
-  for (const action of ["write", "update", "delete"]) {
-    await app.main.submit({ type: "input", content: action }, context);
-    const request = await parked(app);
-    expect(request).toMatchObject({ taskId: "main", audience: "user", tool: action === "delete" ? "memory_delete" : "memory_write" });
-    expect(app.memory.list().map(item => item.text)).toEqual(action === "write" ? [] : [action === "update" ? "考试" : "参加考试"]);
-    await answerUserPermission(app.main, { requestId: request.id, decision: action === "delete" ? "deny" : "once" });
-    await app.main.waitForIdle(context);
-    id = app.memory.list()[0]!.id;
-  }
+  await input(app, "write");
+  id = app.memory.list()[0]!.id;
+  await input(app, "update");
   expect(app.memory.list()).toMatchObject([{ id, text: "参加考试" }]);
+  await input(app, "delete");
+  expect(app.memory.list()).toEqual([]);
+  expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending ?? {}).toEqual({});
 });
 
-it("offers schedules without leases and parks reminder creation and cancellation for the user", async () => {
+it("offers schedules without leases and lets the main session manage them without asking", async () => {
   let id = "";
   const at = Date.parse("2026-11-22T03:00Z");
   const app = await open((text, last) => {
@@ -1018,15 +1015,10 @@ it("offers schedules without leases and parks reminder creation and cancellation
   await userInput(app, "list");
   app.settings.set("off");
   const reminders = async () => app.schedules.list();
-  for (const action of ["create", "set"]) {
-    await app.main.submit({ type: "input", content: action }, context);
-    const request = await parked(app);
-    expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action });
-    expect((await reminders()).map(item => item.type)).toEqual(action === "create" ? [] : ["reminder"]);
-    await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
-    await app.main.waitForIdle(context);
-    if (action === "create") id = (await reminders())[0]!.id;
-  }
+  await input(app, "create");
+  expect((await reminders()).map(item => item.type)).toEqual(["reminder"]);
+  id = (await reminders())[0]!.id;
+  await input(app, "set");
   expect(await reminders()).toEqual([]);
 });
 
@@ -1252,4 +1244,68 @@ it.each(["exact limit", "over limit", "failed"])("keeps the review usable with p
   expect(describe.mock.calls[0]?.[1].conversationId).toBe(tasks?.byId[request.taskId]?.conversationId);
   await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
   await expect.poll(() => executed.mock.calls.length).toBe(1);
+});
+
+it("extracts memories only from the user's own compacted entries before summarizing outstanding commitments", async () => {
+  const summary = "## 欠着的事\n周五给用户发结果。\n\n## 最近语境\n正在对比两份资料。";
+  const calls: string[] = [];
+  const app = await open((text, _, messages) => {
+    const system = messages.filter(m => m.role === "system").map(m => contentText(m.content)).join("");
+    if (system.includes("从用户本人原话提取")) {
+      calls.push("memory");
+      expect(JSON.parse(text).messages).toEqual([{ id: "mine", text: "我习惯用公制单位。", at: expect.any(Number) }]);
+      return say(JSON.stringify([{ source: "mine", type: "preference", title: "计量单位", body: "使用公制单位。" }]));
+    }
+    if (system.includes("欠着的事")) {
+      calls.push("summary");
+      expect(app.memory.store.entries()).toMatchObject([{ source: "mine", title: "计量单位" }]);
+      expect(text).toContain("周五给你发结果");
+      return say(summary);
+    }
+    return say("周五给你发结果。");
+  });
+  await submitMessage(app.main, "我习惯用公制单位。", "web", "mine");
+  await app.main.waitForIdle(context);
+  await submitMessage(app.main, "这是第三方通知。", "system", "foreign");
+  await app.main.waitForIdle(context);
+  // The next normal generation should pick up a changed threshold on the live harness.
+  app.settings.set(app.settings.approvalModel, undefined, 20);
+  await input(app, "进度如何？");
+  const head = (await app.main.context(context)).head;
+  expect(head?.kind).toBe("pi.compaction");
+  expect(JSON.stringify(head?.model)).toContain("欠着的事");
+  expect(calls).toEqual(["memory", "summary"]);
+});
+
+it("keeps the old context on compaction failure and does not repeat committed memory writes", async () => {
+  let extracts = 0;
+  let summaries = 0;
+  const app = await open((_, __, history) => {
+    const prompt = history.filter(m => m.role === "system").map(m => contentText(m.content)).join("");
+    if (prompt.includes("从用户本人原话提取")) {
+      extracts++;
+      return say(JSON.stringify([{ source: extracts === 1 ? "unknown" : "source", title: "回复格式", type: "preference", body: "用纯文本。" }]));
+    }
+    if (prompt.includes("欠着的事")) {
+      summaries++;
+      return summaries === 1 ? say("partial", { stopReason: "length" }) : say("## 欠着的事\n无\n\n## 最近语境\n回复格式");
+    }
+    return say("OK");
+  });
+  await submitMessage(app.main, "请用纯文本回复。", "web", "source");
+  await app.main.waitForIdle(context);
+  await input(app, "下一轮");
+  await app.main.configure({ compaction: { keepRecentTokens: 1 } }, context);
+  const compact = async () => {
+    const id = await app.main.compact(undefined, context);
+    await app.harness.waitForTask(id, context);
+    return (await app.main.context(context)).head;
+  };
+  expect(await compact()).toBeUndefined();
+  expect(app.memory.list()).toHaveLength(0);
+  expect(await compact()).toBeUndefined();
+  expect(app.memory.list()).toHaveLength(1);
+  expect((await compact())?.kind).toBe("pi.compaction");
+  expect(app.memory.list()).toHaveLength(1);
+  expect([extracts, summaries]).toEqual([2, 2]);
 });

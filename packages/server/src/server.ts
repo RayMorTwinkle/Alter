@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, approvalStats, isApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  FeedbackError, MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
+  validModelOverrides, FeedbackError, MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
 import { templates, SourceError } from "@alter/plugin-sources";
@@ -337,13 +337,21 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return mutation(200, await plugins.get(path.split("/")[3]!).patch(await body(req)));
     } else if (plugins && method === "POST" && /^\/api\/plugins\/[^/]+\/check$/.test(path)) {
       return mutation(200, await plugins.get(path.split("/")[3]!).check());
+    } else if (method === "GET" && path === "/api/models") {
+      return json(res, 200, app.modelCapabilities?.list() ?? []);
+    } else if (method === "PUT" && path.startsWith("/api/models/")) {
+      const values = await body(req);
+      if (!validModelOverrides.check(values)) throw new HttpError(400, "Invalid model capabilities");
+      const result = app.modelCapabilities?.replace(path.slice("/api/models/".length), values);
+      if (!result) throw new HttpError(404, "Unknown configured model");
+      return mutation(200, result);
     } else if ((method === "GET" || method === "PATCH") && path === "/api/settings") {
       if (method === "PATCH") {
         const patch = await body(req);
         await saveSettings(patch);
         await activity();
       }
-      return json(res, 200, { approvalModel: app.settings.approvalModel, heartbeat: app.settings.heartbeat });
+      return json(res, 200, { approvalModel: app.settings.approvalModel, heartbeat: app.settings.heartbeat, compactAtTokens: app.settings.compactAtTokens });
     } else if (method === "GET" && path === "/api/stats") {
       const values = new URL(req.url!, "http://localhost").searchParams.getAll("range");
       const range = values[0] ?? "7d";

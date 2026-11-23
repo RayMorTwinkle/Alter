@@ -264,3 +264,12 @@ it("requires a user decision for an unrecognized runtime effect even with an in-
   const audit = await f.app.harness.snapshot(Audit, f.app.main.id, context);
   expect(audit?.entries.filter(row => row.tool === tool).map(row => row.effect)).toEqual(["irreversible", "irreversible"]);
 });
+
+it("lets the main session write memories without asking", async () => {
+  const f = await setup([]);
+  f.mainModel.setResponses([call("memory_write", { op: "add", type: "preference", title: "咖啡", body: "只喝美式不加糖。" }), say("记下了")]);
+  await submitMessage(f.app.main, "随口一提：我喝美式");
+  await f.app.main.waitForIdle(context);
+  expect(f.surface.snapshot().pending).toEqual([]);
+  expect(f.judged).toEqual([]);
+});

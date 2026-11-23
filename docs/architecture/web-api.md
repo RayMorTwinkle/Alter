@@ -165,7 +165,7 @@ type TranscriptItem =
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
-| `GET` / `PATCH` | `/api/settings` | `Settings`，可分别修改审批模式与巡检，见 v1.15 |
+| `GET` / `PATCH` | `/api/settings` | `Settings`，可分别修改审批模式、巡检与上下文压缩阈值，见 v1.15 |
 | `GET` | `/api/approvals/stats` | `{ modelAllowed, askedUser, userApproved, userDenied }`。依次为模型直接放行、转问用户、用户批准和用户拒绝的次数 |
 | `GET` | `/api/stats?range=7d` | `Stats`（v1.11）。需要登录，默认 `7d`。支持 `day`、`7d`、`30d`、`all`；非法、空值或重复参数返回 `400` |
 | `GET` | `/api/heartbeat` | 返回巡检开关、下次时间、自适应间隔、采纳率、当前需求信号及最近 50 条巡检记录，见下文 |
@@ -331,7 +331,9 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 | PATCH | `/api/plugins/:id` | 提交 `{ enabled?, settings? }`，等待该插件重新初始化后返回完整 `PluginView` |
 | POST | `/api/plugins/:id/check` | 使用 JSON 请求头，重新检查并返回完整 `PluginView` |
 | GET | `/api/plugins/feishu/guide` | `{ permissionsJson, redirectUri, eventsMode: "long-connection", steps }`，权限 JSON 字符串可直接粘贴至开放平台 |
-| GET / PATCH | `/api/settings` | 返回 `{ approvalModel, heartbeat: { enabled, start, end } }`。PATCH 至少提交一个字段，heartbeat 支持部分修改 |
+| GET / PATCH | `/api/settings` | 返回 `{ approvalModel, heartbeat: { enabled, start, end }, compactAtTokens }`。PATCH 至少提交一个字段，heartbeat 支持部分修改 |
+
+`compactAtTokens` 是正整数，默认 400,000 token。小窗口模型会按实际窗口预留回复空间。在 1,000,000 token 窗口下使用默认值时，估算上下文超过 395,904 token 可启动后台压缩，超过 400,000 token 时下一次生成等待压缩。盯梢任务关闭自动压缩。
 
 插件视图含 `id, name, provides, settings, enabled, values, status`。三组 `provides.channels/capabilities/sources` 使用标识符数组。Web 为内置渠道。飞书、邮件、浏览器、日历、模板消息来源的标识符依次为 `feishu, mail, browser, calendar, sources`。每个表单字段含 `key, label, type, required, help`，select 附 `options`。提交示例：
 

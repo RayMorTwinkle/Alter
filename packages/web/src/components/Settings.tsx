@@ -4,6 +4,7 @@ import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
 import { clock } from "../format.ts";
 import { ExtPlugins } from "./ExtPlugins.tsx";
+import { Models } from "./Models.tsx";
 import type { ApprovalStats, ExtPluginView, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
 
@@ -332,6 +333,8 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
           {stats && stats.modelAllowed + stats.askedUser > 0 &&
             <p className="settings-hint">{t.approvalCounts(stats.modelAllowed, stats.askedUser, stats.userApproved, stats.userDenied)}</p>}
         </section>
+
+        <Models settings={settings} onPatch={patch} />
 
         <section className="settings-block">
           <h3>{t.heartbeat}</h3>

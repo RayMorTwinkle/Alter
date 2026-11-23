@@ -7,7 +7,10 @@ import { gatewayConfig } from "../src/config.ts";
 import { chatCommand, observeChat } from "../src/cli.ts";
 import { openAlter } from "../src/main.ts";
 import { Notifications } from "../src/notifications.ts";
-import { createGatewayModels } from "../src/models.ts";
+import { defaultCompactAtTokens } from "../src/settings.ts";
+import { compactionSettings } from "../src/compaction.ts";
+import { resolveCapabilities } from "../src/model-capabilities.ts";
+import { gatewayCapabilities, createGatewayModels } from "../src/models.ts";
 import { context, MemoryStorage, openNodeSqliteStorage } from "../src/runtime.ts";
 import { stats } from "../src/stats.ts";
 import { Tasks } from "../src/state.ts";
@@ -328,4 +331,52 @@ it("keeps goals available to heartbeat without launching a daily research worker
   expect((await app.scheduler.list()).some(s => s.kind === "goal-review")).toBe(false);
   expect(app.memory.list()).toMatchObject([{ kind: "goal", text: "备考" }]);
   expect(f.requests).toHaveLength(0);
+});
+
+it("resolves exact, aliased and cross-provider catalog entries before defaults", () => {
+  const exact = resolveCapabilities("opencode-go/glm-5.3");
+  expect(exact).toMatchObject({ contextWindow: 1_000_000, maxTokens: 131072, reasoning: true, input: ["text"],
+    thinkingLevelMap: { low: "low", high: "high", max: "max", medium: null }, sources: { input: "catalog" } });
+  expect(resolveCapabilities("codex/gpt-6.2-astra")).toMatchObject({ contextWindow: 272000, thinkingLevelMap: { minimal: "low" } });
+  expect(resolveCapabilities("other/glm-5.3")).toMatchObject({ contextWindow: 1_000_000, input: ["text"], sources: { maxTokens: "catalog" } });
+  expect(resolveCapabilities(primary)).toMatchObject({ contextWindow: 65536, maxTokens: 4096, input: ["text", "image"],
+    thinkingLevelMap: null, sources: { reasoning: "default", thinkingLevelMap: "default" } });
+});
+
+it("merges chain limits, persists overrides and sends each fallback's own reasoning format and output budget", async () => {
+  const deepseek = "opencode-go/deepseek-v4.1-flash";
+  const glm = "opencode-go/glm-5.3";
+  const app = await setup(({ model }, res) => model === deepseek ? httpError(res, 503) : say(res, "ok"), 2000, [deepseek, glm]);
+  const chain = () => app.models.getModel("alter-main", "chain")!;
+  const caps = gatewayCapabilities.get(app.models)!;
+  expect(chain()).toMatchObject({ input: ["text"], contextWindow: 1_000_000, maxTokens: 131072, thinkingLevelMap: { medium: null } });
+  const ctx = { messages: [{ role: "user" as const, timestamp: 1, content: [
+    { type: "text" as const, text: "help" }, { type: "image" as const, mimeType: "image/png", data: "AA==" },
+  ] }] };
+  expect((await app.models.completeSimple(chain(), ctx, { reasoning: "high" })).stopReason).toBe("stop");
+  expect(app.requests.map(r => r.model)).toEqual([deepseek, glm]);
+  for (const request of app.requests) {
+    expect(request).not.toHaveProperty("max_tokens");
+    expect(JSON.stringify(request.messages)).not.toContain("image_url");
+  }
+  expect(app.requests[0]).toMatchObject({ thinking: { type: "enabled" }, reasoning_effort: "high" });
+  expect(app.requests[1]).toMatchObject({ reasoning_effort: "high" });
+  expect(app.requests[1]).not.toHaveProperty("thinking");
+  await app.models.completeSimple(chain(), ctx, { maxTokens: 80 });
+  expect(app.requests.at(-1)).toHaveProperty("max_tokens", 80);
+  expect(caps.replace(glm, { contextWindow: 64_000, maxTokens: 7600, input: ["text", "image"] })).toMatchObject({
+    sources: { contextWindow: "manual", maxTokens: "manual", input: "manual", reasoning: "catalog" },
+  });
+  expect(chain()).toMatchObject({ contextWindow: 64_000, maxTokens: 7600, input: ["text", "image"] });
+  await app.models.completeSimple(chain(), ctx);
+  expect(app.requests.at(-1)).toHaveProperty("max_tokens", 7600);
+  expect(JSON.stringify(app.requests.at(-1)!.messages)).toContain("image_url");
+  const restored = await createGatewayModels(gatewayConfig({ ALTER_LLM_BASE_URL: "http://localhost", ALTER_LLM_API_KEY: "offline-key",
+    ALTER_MAIN_MODEL: glm, ALTER_TASK_MODEL: glm, ALTER_DATA_DIR: app.dir }));
+  expect(restored.models.getModel("alter-task", "chain")).toMatchObject({ contextWindow: 64_000 });
+  const policy = (threshold = defaultCompactAtTokens) => compactionSettings(app.models, [app.mainModel], threshold);
+  expect(policy().modelOverrides["alter-main/chain"]?.reserveTokens).toBe(4000);
+  caps.replace(glm, {});
+  expect(policy()).toMatchObject({ modelOverrides: { "alter-main/chain": { reserveTokens: 600_000, backgroundTokens: 4096 } } });
+  expect(policy(300_000).modelOverrides["alter-main/chain"]?.reserveTokens).toBe(700_000);
 });

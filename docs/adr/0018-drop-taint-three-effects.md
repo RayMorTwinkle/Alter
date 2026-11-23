@@ -17,7 +17,7 @@
 
 ## 决策
 
-**一、效果只留三档：`read` / `write` / `irreversible`。** `write-local`、`external-send` 并入 `write`。插件清单只能声明这三种；未声明的工具按 `irreversible` 处理。任务自身的控制工具（`finish`、`sleep`、`declare_permissions`）与主会话的 `notify` 属于系统内部动作，不经审批。能把数据带出去的工具即使看起来是读（如浏览器打开任意网址），也标为 write。
+**一、效果只留三档：`read` / `write` / `irreversible`。** `write-local`、`external-send` 并入 `write`。插件清单只能声明这三种；未声明的工具按 `irreversible` 处理。任务自身的控制工具（`finish`、`sleep`、`declare_permissions`）与主会话的 `notify`、记忆和定时安排属于系统内部动作，不经审批（记忆在面板中可见、可撤销，猜测的记忆由回访确认）。能把数据带出去的工具即使看起来是读（如浏览器打开任意网址），也标为 write。
 
 **二、删除污点追踪。** 删除 Taint 文档、已见 URL 列表、租用记录的 tainted 字段，以及统计与时间线中的相关展示。
 

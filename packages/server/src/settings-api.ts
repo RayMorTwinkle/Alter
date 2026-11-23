@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { isApprovalMode, isHeartbeatSettings, type AlterApp } from "@alter/core";
+import { isApprovalMode, isCompactAtTokens, isHeartbeatSettings, type AlterApp } from "@alter/core";
 import type { PluginManager } from "./plugin-manager.ts";
 import { HttpError } from "./static.ts";
 
@@ -16,7 +16,8 @@ export function settingsWriter(app: AlterApp) {
   let settingsWrite = Promise.resolve();
   return async (patch: Record<string, unknown>) => {
     const write = settingsWrite.then(async () => {
-      if (!Object.keys(patch).length || Object.keys(patch).some(k => !["heartbeat", "approvalModel"].includes(k)) ||
+      if (!Object.keys(patch).length || Object.keys(patch).some(k => !["heartbeat", "approvalModel", "compactAtTokens"].includes(k)) ||
+          ("compactAtTokens" in patch && !isCompactAtTokens(patch.compactAtTokens)) ||
           ("approvalModel" in patch && !isApprovalMode(patch.approvalModel))) throw new HttpError(400, "Invalid settings");
       const prev = app.settings.heartbeat;
       let heartbeat = prev;
@@ -27,11 +28,13 @@ export function settingsWriter(app: AlterApp) {
         if (!isHeartbeatSettings(next)) throw new HttpError(400, "Invalid heartbeat window");
         heartbeat = next;
       }
+      const prevThreshold = app.settings.compactAtTokens;
       const mode = app.settings.approvalModel;
-      app.settings.set(isApprovalMode(patch.approvalModel) ? patch.approvalModel : mode, "heartbeat" in patch ? heartbeat : undefined);
+      app.settings.set(isApprovalMode(patch.approvalModel) ? patch.approvalModel : mode, "heartbeat" in patch ? heartbeat : undefined,
+        isCompactAtTokens(patch.compactAtTokens) ? patch.compactAtTokens : prevThreshold);
       if ("heartbeat" in patch) {
         try { await app.heartbeat.start(app.now(), true); await app.reports.sync(); }
-        catch (error) { app.settings.set(mode, prev); throw error; }
+        catch (error) { app.settings.set(mode, prev, prevThreshold); throw error; }
       }
     });
     settingsWrite = write.catch(() => {});

@@ -454,18 +454,18 @@ it("persists an authenticated approval mode and reports approval counts", async 
   expect((await web.read("/api/settings")).status).toBe(401);
   expect((await web.read("/api/approvals/stats")).status).toBe(401);
   await web.login();
-  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "on", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
+  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "on", compactAtTokens: 400_000, heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
   const patch = (value: unknown) => fetch(web.base + "/api/settings", { method: "PATCH",
     headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value) });
-  for (const invalid of [{}, { approvalModel: true }, { approvalModel: "auto" }, { approvalModel: "shadow" }, { approvalModel: "on", extra: false }]) {
+  for (const invalid of [{}, { approvalModel: true }, { approvalModel: "auto" }, { approvalModel: "shadow" }, { approvalModel: "on", extra: false }, { compactAtTokens: 0 }, { compactAtTokens: 1.5 }]) {
     expect((await patch(invalid)).status).toBe(400);
   }
-  expect(await (await patch({ approvalModel: "off" })).json()).toMatchObject({ approvalModel: "off" });
+  expect(await (await patch({ approvalModel: "off", compactAtTokens: 12345 })).json()).toMatchObject({ approvalModel: "off", compactAtTokens: 12345 });
   expect(await (await web.read("/api/approvals/stats")).json()).toEqual({ modelAllowed: 0, askedUser: 0, userApproved: 0, userDenied: 0 });
   await web.close();
   const reopened = await web.reopen();
   await reopened.login();
-  expect(await (await reopened.read("/api/settings")).json()).toMatchObject({ approvalModel: "off" });
+  expect(await (await reopened.read("/api/settings")).json()).toMatchObject({ approvalModel: "off", compactAtTokens: 12345 });
 });
 
 it("publishes heartbeat starts, finishes and schedule changes and serves direct run feedback", async () => {
@@ -592,4 +592,23 @@ it("serves feedback history, SSE changes, stats and undo through authenticated r
   expect(view.history).toMatchObject([{ id: q.id, status: "answered" }]);
   expect((await web.post("/api/feedback/changes/" + view.history[0].changeIds[0] + "/undo", {})).status).toBe(204);
   expect(await (await web.read("/api/feedback/stats")).json()).toMatchObject({ answered: 1, changeCount: 1, satisfaction: [] });
+});
+
+it("authenticates model reads and replacements, validates overrides and clears them", async () => {
+  const web = await setup();
+  const put = (id: string, value: unknown) => fetch(web.base + "/api/models/" + encodeURIComponent(id), {
+    method: "PUT", headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value),
+  });
+  expect((await web.read("/api/models")).status).toBe(401);
+  expect((await put("offline/main", {})).status).toBe(401);
+  await web.login();
+  expect(await (await web.read("/api/models")).json()).toMatchObject([
+    { id: "offline/main", sources: { input: "default" } }, { id: "offline/task" },
+  ]);
+  expect((await put("missing/id", {})).status).toBe(404);
+  for (const invalid of [{ maxTokens: 0 }, { input: ["audio"] }, { thinkingLevelMap: { invalid: "max" } }, { apiKey: "x" }]) {
+    expect((await put("offline/main", invalid)).status).toBe(400);
+  }
+  expect(await (await put("offline/main", { input: ["text"] })).json()).toMatchObject({ input: ["text"], sources: { input: "manual" } });
+  expect(await (await put("offline/main", {})).json()).toMatchObject({ input: ["text", "image"], sources: { input: "default" } });
 });
