@@ -397,3 +397,18 @@ it("accepts owner feedback forms once, syncs Web skips and serves more questions
   expect(await click("owner", q.id, "more")).toMatchObject({ toast: { type: "success" } });
   expect((await f.app.feedback.view()).history.find(i => i.id === q.id)?.moreUsed).toBe(true);
 });
+
+it("closes a feedback card whose question left the bank with a schema 2.0 update", async () => {
+  const f = await setup();
+  await f.pair();
+  const { conversationDoc } = await import("../../core/src/runtime.ts");
+  const Cards = conversationDoc<{ byId: Record<string, { messageId: string }> }>("feishu-cards", () => ({ byId: {} }));
+  await f.app.main.commit(async tx => { (await tx.doc(Cards, f.app.main.id)).byId["0b1c-retired-question"] = { messageId: "om_old" }; }, context);
+  await f.close();
+  const g = await f.reopen();
+  await expect.poll(() => g.transport.updateCard.mock.calls.length).toBe(1);
+  const [messageId, card] = g.transport.updateCard.mock.calls[0]!;
+  expect(messageId).toBe("om_old");
+  expect(card).toMatchObject({ schema: "2.0", body: { elements: [{ tag: "div" }] } });
+  expect(JSON.stringify(card)).toContain("题目已更新");
+});

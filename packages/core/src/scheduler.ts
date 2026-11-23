@@ -15,8 +15,10 @@ export type ScheduleItem = {
 // Handlers commit their durable effects through tx, together with the occurrence checkpoint.
 type NextOccurrence = { nextAt: number };
 type Handler = (item: Readonly<ScheduleItem>, tx: Tx, firedAt: number) => void | NextOccurrence | Promise<void | NextOccurrence>;
-export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId; window?: string }>; retiring?: Record<string, TaskId[]> }>("schedules", () => ({ byId: {} }));
+export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId; window?: string; gen?: number }>; retiring?: Record<string, TaskId[]> }>("schedules", () => ({ byId: {} }));
 const Cancel = defineSignal({ name: "alter.schedule-cancel", version: 1, schema: bool() });
+// A key that woke a wait can never be slept on again, so every reschedule moves to a fresh generation.
+const wakeKey = (row: { item: ScheduleItem; gen?: number }) => row.gen ? `${row.item.at}-${row.gen}` : String(row.item.at);
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
 export function createScheduler(main: () => Conversation, registry: ReturnType<typeof createRegistry>, timeZone: string, now: () => number,
@@ -40,7 +42,7 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
             } else if (item.repeat) item.at = time.nextDaily(firedAt, item.repeat.daily);
             else { item.status = "done"; return complete; }
           }
-          return { status: "sleeping", until: item.at, checkpoint: { phase: "tick" }, signals: [Cancel.key(String(item.at))] };
+          return { status: "sleeping", until: item.at, checkpoint: { phase: "tick" }, signals: [Cancel.key(wakeKey(row))] };
         }, ctx).catch(async error => {
           if (runtime.signal.aborted) throw error;
           console.warn(`Alter schedule ${id} failed, retrying in one minute:`, error);
@@ -106,7 +108,7 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
         const doc = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
         const row = doc.byId[item.id];
         if (!row) return;
-        if (row.item.status === "scheduled") await tx.signal(row.worker, Cancel, String(row.item.at), true);
+        if (row.item.status === "scheduled") await tx.signal(row.worker, Cancel, wakeKey(row), true);
         if (item.kind === "reminder") await scheduled.importReminder(tx, row.item);
         else {
           doc.retiring ??= {};
@@ -123,14 +125,15 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
       const existing = byId[id];
       if (first === undefined) {
         if (existing?.item.status === "scheduled") {
-          await tx.signal(existing.worker, Cancel, String(existing.item.at), true);
+          await tx.signal(existing.worker, Cancel, wakeKey(existing), true);
           existing.item.status = "done";
         }
       } else if (!existing || existing.item.status === "done" || (reset && existing.item.status === "cancelled")) {
         const worker = await tx.createTask(tasks.get(kind)!, id, { ownership: { kind: "conversation" }, background: true });
         byId[id] = { worker, window, item: { id, kind, text, at: first, createdAt: now(), status: "scheduled" } };
       } else if (existing.item.status === "scheduled" && existing.window !== window && (reset || existing.window !== undefined)) {
-        await tx.signal(existing.worker, Cancel, String(existing.item.at), true);
+        await tx.signal(existing.worker, Cancel, wakeKey(existing), true);
+        existing.gen = (existing.gen ?? 0) + 1;
         existing.item.at = first;
       }
       if (existing) existing.window = window;
@@ -144,9 +147,10 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     return main().commit(async tx => {
       const { byId } = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
       if (!Object.hasOwn(byId, id)) return false;
-      const { item, worker } = byId[id]!;
+      const row = byId[id]!;
+      const { item, worker } = row;
       if (item.status === "scheduled") {
-        await tx.signal(worker, Cancel, String(item.at), true);
+        await tx.signal(worker, Cancel, wakeKey(row), true);
         item.status = "cancelled";
       }
       return item.status === "cancelled";

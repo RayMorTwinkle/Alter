@@ -7,7 +7,7 @@ import { calendarTime } from "../src/calendar-time.ts";
 import { openAlter } from "../src/main.ts";
 import { Notifications } from "../src/notifications.ts";
 import { observeSurface } from "../src/observe.ts";
-import { context, openNodeSqliteStorage, type HarnessOptions } from "../src/runtime.ts";
+import { context, MemoryStorage, openNodeSqliteStorage, type HarnessOptions } from "../src/runtime.ts";
 
 it("interprets offsets, validates wall times and advances by local calendar day", () => {
   const ny = calendarTime("America/New_York");
@@ -141,4 +141,36 @@ it("rolls back a failed handler and keeps the latest 500 notifications on retry"
   expect(retained).toHaveLength(500);
   expect(retained.at(-1)?.id).toBe("2");
   expect(attempts).toBe(2);
+});
+
+it("reschedules an adaptive item to the same time without reusing a woken signal key", async ({ onTestFinished }) => {
+  vi.stubEnv("ALTER_HEARTBEAT", "off");
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  let now = Date.parse("2026-12-01T00:00Z");
+  const timers = new Map<() => void, number>();
+  const setTimer: HarnessOptions["setTimer"] = (callback, delay) => {
+    timers.set(callback, now + delay);
+    return () => timers.delete(callback);
+  };
+  const advance = (iso: string) => {
+    now = Date.parse(iso);
+    for (const [callback, due] of [...timers]) if (due <= now) { timers.delete(callback); callback(); }
+  };
+  const app = await openAlter(new MemoryStorage(),
+    createModels(), { provider: "unused", modelId: "unused" }, undefined, {}, { timeZone: "Asia/Taipei", now: () => now, setTimer });
+  onTestFinished(() => app.close());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => warn.mockRestore());
+  const handler = vi.fn();
+  app.scheduler.register("pulse", handler);
+  app.harness.resume();
+  const at = Date.parse("2026-12-01T12:00Z");
+  await app.scheduler.ensureAdaptive("pulse", "近况", at, "a");
+  for (const window of ["b", "c"]) {
+    await app.scheduler.ensureAdaptive("pulse", "近况", at, window);
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  expect(warn.mock.calls.filter(call => String(call[0]).includes("failed, retrying"))).toEqual([]);
+  advance("2026-12-01T12:00Z");
+  await expect.poll(() => handler.mock.calls.length).toBe(1);
 });
