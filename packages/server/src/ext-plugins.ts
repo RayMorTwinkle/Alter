@@ -97,7 +97,7 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
       if (closed) return;
       closed = true;
       await runtime.close(); await queue;
-      for (const id of registered.keys()) await app.replacePlugin(capability(id));
+      for (const id of registered.keys()) await app.replacePlugin(capability(id), undefined, true);
       registered.clear();
     },
     async install(input: Record<string, unknown>) {

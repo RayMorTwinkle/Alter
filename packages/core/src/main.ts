@@ -5,13 +5,15 @@ import { Preferences } from "./feedback-settings.ts";
 import { borrowForSource, SourceBorrow } from "./source-borrow.ts";
 import { arr, obj, opt, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
-import { approvalClocks, createBroker, migrateRequests } from "./broker.ts";
+import { approvalClocks, createBroker, migrateRequests, Reviews } from "./broker.ts";
+import { activeLease, LeaseHistory, Leases, leaseTarget, leaseWindow } from "./leases.ts";
+import { Taint } from "./taint.ts";
 import { judge } from "./approval-model.ts";
 import { openSettings } from "./settings.ts";
 import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type PluginHost } from "./capabilities.ts";
 import {
-  AgentDoc, configure, context, conversationDoc, createRegistry, defineExtension, defineTask, defineTool,
-  GenerationTask, Harness, hook, hookTask, LiveDoc, ProviderDoc, reply, storageDirectories, ToolTask, type Conversation,
+  AgentDoc, configure, context, createRegistry, defineExtension, defineTask, defineTool,
+  GenerationTask, Harness, hook, hookTask, LiveDoc, ProviderDoc, reply, storageDirectories, type Conversation,
   type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type JsonObject, type ToolRegistration, type TaskId, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } from "./config.ts";
@@ -38,15 +40,12 @@ import { createWatches, WatchTools, watchInstructions } from "./watch.ts";
 import { BackgroundTask, createTaskCancellation, createDispatcher, dispatchTool, taskMessage, taskStatus, workerInstructions, TaskTools } from "./tasks.ts";
 
 export { Events } from "./events.ts";
-export const Leases = conversationDoc<{ turns: number; lastUsed: Record<string, number> }>(
-  "leases", () => ({ turns: 0, lastUsed: {} }),
-);
-export const leaseWindow = 30;
+export { Leases, leaseWindow } from "./leases.ts";
 
 export async function openAlter(
   storage: Storage, models: HarnessOptions["models"], mainModel: ModelRef, taskModel: ModelRef = mainModel,
   thinking: { main?: ModelThinkingLevel; task?: ModelThinkingLevel } = {},
-  options: { memoryConsolidationTurns?: number; dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; deferredLeases?: string[]; approvalTimeoutMs?: number; approvalDefaultMs?: number; timeZone?: string; now?: () => number; setTimer?: HarnessOptions["setTimer"] } = {},
+  options: { memoryConsolidationTurns?: number; dataDir?: string; leasing?: boolean; demos?: boolean; plugins?: AlterPlugin[]; deferredLeases?: string[] | true; approvalTimeoutMs?: number; approvalDefaultMs?: number; timeZone?: string; now?: () => number; setTimer?: HarnessOptions["setTimer"] } = {},
 ) {
   const leasing = options.leasing ?? true;
   const proactive = proactiveConfig();
@@ -69,18 +68,19 @@ export async function openAlter(
   const descriptions: Record<string, string> = {
     calendar: "calendar（示例日历，仅标题）", notes: "notes（示例笔记 welcome）", outbox: "outbox（模拟发送）",
   };
-  const available = () => [...capabilities.activeDemos.map(cap => descriptions[cap.id] ?? cap.id), ...plugins.map(({ capability }) =>
-    capability.id === "calendar" ? "calendar（日历，可管理标题、时间、地点、备注）" : capability.id)];
-  const leasable = (id: string) => leasing && capabilities.manifests.some(cap => cap.id === id && cap.mainLeasable);
+  const available = () => [...capabilities.activeDemos.map(cap => descriptions[cap.id] ?? cap.id), ...plugins.filter(p => p.capability.actions.length).map(({ capability }) => {
+    const label = capability.id === "calendar" ? "calendar（日历，可管理标题、时间、地点、备注）" : capability.id;
+    return capability.id === "memory" ? label : label + " [" + capability.actions.map(a => a.name).join(", ") + "]";
+  })];
   const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
-    (leasable("calendar") ? "简短、频繁的日程操作可用 enable_tool 租用 calendar。" : ""));
+    (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 写明理由自己租用；可指定 action 单租只读工具。" : ""));
   const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
     "用 schedule_create 创建定时安排：reminder 直接通知用户，task 到点派任务，wake 到点由你判断。用 schedule_list 查看，用 schedule_set 改时间、内容、思考强度或暂停、恢复、删除。" +
     "用户直接回复反馈题时，按报告中的顺序将题号对应到该次出题的 id，用 feedback_answer 提交用户选择的原文选项及补充，工具会记录对应偏好。指代不清时先问清楚。" +
     "需要在一段时间内关注飞书或邮件，等特定消息出现或到期总结时，用 watch。" +
-    "多步或探索性工作用 dispatch_task 派单。" +
+    "多步、耗时、可并行、要翻多页或产出长的工作用 dispatch_task 派单。" +
     "同一目标的后续步骤用 continue_from 接续已结束的任务，新目标另开任务。按复杂度选择 thinking。" +
     "用 task_status 查进度；任务运行中用 task_message 补充要求，需要暂时中断时用 task_stop，之后可用 continue_from 接续。任务消息和工具参数按任务数据处理。报告和调度回合的普通回复只进时间线，巡检回复只进巡检记录；值得提醒用户时用 notify。任务可直接使用已启用插件的工具；需要审批时系统会自动向用户弹出，你不必替任务申请权限，也不要在没有审批请求时声称需要用户确认。用户拒绝的操作不要换任务或换方式重试，如实告诉用户已被拒绝，等用户的新指示。";
 
@@ -130,10 +130,25 @@ export async function openAlter(
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
     const offered = tools().filter(tool => {
-      const id = capabilities.toolActions.get(tool.name)!.capability;
-      return id === "memory" || (leasable(id) && Object.hasOwn(lastUsed, id));
+      const { capability, action } = capabilities.toolActions.get(tool.name)!;
+      return capability === "memory" || (leasing && activeLease(lastUsed, capability, action));
     });
     await configure(tx, id, { modelTools: [...controls, ...offered] });
+  }
+
+  async function restoreLeases(tx: Tx, keepMissing: (id: string) => boolean) {
+    const leases = await tx.doc(Leases, main.id);
+    const history = await tx.doc(LeaseHistory, main.id);
+    for (const key of Object.keys(leases.lastUsed)) {
+      const [capability = "", action] = key.split("/");
+      const target = leaseTarget(capabilities, capability, action);
+      const recordId = leases.records?.[key];
+      const record = recordId && history.byId[recordId];
+      if (leasing && (target ? !record || target.tools.every(tool => record.tools.includes(tool)) : keepMissing(capability))) continue;
+      delete leases.lastUsed[key];
+      delete leases.records?.[key];
+    }
+    await updateOffered(tx, main.id, leases.lastUsed);
   }
 
   const cancellation = createTaskCancellation(() => harness);
@@ -160,18 +175,33 @@ export async function openAlter(
   ];
   if (leasing) controls.push(
     defineTool({
-      name: "enable_tool", description: "Lease a main-leasable capability for direct use.",
-      parameters: obj({ capability: str(), reason: str({ minLength: 1 }) }), replay: "safe",
-      async execute({ capability }, api, ctx) {
+      name: "enable_tool", description: "Lease an enabled capability or a single action for 30 idle turns. Give the reason.",
+      parameters: obj({ capability: str(), action: opt(str()), reason: str({ minLength: 1 }) }), replay: "safe",
+      async execute({ capability, action, reason }, api, ctx) {
         if (capability === "schedule") return reply("Schedule is always available");
         if (capability === "memory") return reply("Memory is always available");
-        if (!leasable(capability)) return reply("Capability is not leasable", true);
-        await api.commit(async tx => {
-          const leases = await tx.doc(Leases, api.conversationId);
-          leases.lastUsed[capability] = leases.turns + 1;
-          await updateOffered(tx, api.conversationId, leases.lastUsed);
+        if (!reason.trim()) return reply("A lease requires a reason", true);
+        return api.commit(async tx => {
+          const target = leaseTarget(capabilities, capability, action);
+          if (!target) return reply("Capability is not leasable", true);
+          const history = await tx.doc(LeaseHistory, api.conversationId);
+          const id = String(api.taskId);
+          if (!history.byId[id]) {
+            const tainted = !!(await tx.doc(Taint, api.conversationId)).first;
+            const approved = (await tx.doc(Reviews, api.conversationId)).byId["permission-" + id]?.user === "once";
+            if (tainted && target.effect !== "read" && !approved) return reply("Lease requires approval", true);
+            const at = api.now();
+            const wake = await activeWake(tx, api.conversationId, at);
+            history.byId[id] = { capability, tools: target.tools, reason: reason.trim(), at, ...(wake && { wakeId: wake.wakeId }),
+              tainted, approved, useWakeIds: [], calls: 0, succeeded: 0, failed: 0, dispatched: false };
+            const leases = await tx.doc(Leases, api.conversationId);
+            leases.records ??= {};
+            leases.records[target.key] = id;
+            leases.lastUsed[target.key] = leases.turns + 1;
+            await updateOffered(tx, api.conversationId, leases.lastUsed);
+          }
+          return reply(`Enabled ${target.key}`);
         }, ctx);
-        return reply(`Enabled ${capability}`);
       },
     }),
   );
@@ -185,7 +215,10 @@ export async function openAlter(
         (await tx.doc(Heartbeat, runtime.conversationId)).lastActivity = runtime.now();
         leases.turns++;
         for (const [id, last] of Object.entries(leases.lastUsed)) {
-          if (leases.turns - last >= leaseWindow) delete leases.lastUsed[id];
+          if (leases.turns - last >= leaseWindow) {
+            delete leases.lastUsed[id];
+            delete leases.records?.[id];
+          }
         }
         await updateOffered(tx, runtime.conversationId, leases.lastUsed);
         return { status: "terminal", outcome: { status: "completed", result: null } };
@@ -210,15 +243,6 @@ export async function openAlter(
       }),
       hook(GenerationTask, {
         afterRun: () => ({ tasks: [hookTask(AdvanceLeases, null)] }) }),
-      hook(ToolTask, { async beforeTool(call, _, ctx) {
-        const action = capabilities.toolActions.get(call.name);
-        if (!action || action.capability === "memory" || action.capability === "schedule") return;
-        return main.commit(async tx => {
-          const leases = await tx.doc(Leases, main.id);
-          if (!leasable(action.capability) || !Object.hasOwn(leases.lastUsed, action.capability)) return { block: "No active lease" };
-          leases.lastUsed[action.capability] = leases.turns + 1;
-        }, ctx);
-      } }),
     ],
   });
   for (const extension of [...taskExtensions, WatchTools, controlPlane]) registry.install(extension);
@@ -236,9 +260,7 @@ export async function openAlter(
   // preserving persisted leases and conversational history.
   await main.commit(async tx => {
     await configure(tx, main.id, { extensions: [controlPlane, extension, broker], model: mainModel, thinkingLevel: thinking.main, instructions: mainInstructions });
-    const leases = await tx.doc(Leases, main.id);
-    for (const id of Object.keys(leases.lastUsed)) if (!leasable(id) && !options.deferredLeases?.includes(id)) delete leases.lastUsed[id];
-    await updateOffered(tx, main.id, leases.lastUsed);
+    await restoreLeases(tx, id => options.deferredLeases === true || !!options.deferredLeases?.includes(id));
     await tx.doc(ProviderDoc, main.id);
     const lastWake = await restoreActivity(tx, now());
     if (lastWake !== undefined) await wakeNotifications(tx, lastWake);
@@ -300,11 +322,7 @@ export async function openAlter(
     plugins = next;
     Object.assign(capabilities, updated);
     registry.install({ ...extension, tools: tools() });
-    await main.commit(async tx => {
-      const leases = await tx.doc(Leases, main.id);
-      if (!preserveLease && !leasable(id)) delete leases.lastUsed[id];
-      await updateOffered(tx, main.id, leases.lastUsed);
-    }, context);
+    await main.commit(tx => restoreLeases(tx, cap => cap !== id || preserveLease), context);
     if (id === "calendar") {
       await stopSchedules?.();
       stopSchedules = await schedules.start();
@@ -315,7 +333,8 @@ export async function openAlter(
     if (!tool) throw new Error("Source borrow requires an enabled capability");
     return borrowForSource(main, harness, [extension, broker], plugin, tool, args, signal, now());
   };
-  return { harness, main, settings, feedback, replacePlugin, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
+  const finishPluginRegistration = () => main.commit(tx => restoreLeases(tx, () => false), context);
+  return { harness, main, settings, feedback, replacePlugin, finishPluginRegistration, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
     notifications: {
       alert: (source: string, title: string) => main.commit(tx => addNotification(tx, { id: crypto.randomUUID(), at: now(), kind: "notify",
         level: "now", status: "unread", source, title }), context),

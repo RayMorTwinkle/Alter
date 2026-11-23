@@ -411,7 +411,13 @@ it("extracts a watch ID from a successful tool result and recovers a placed run 
   await f.app.close();
   f.provider.setResponses([call("enable_tool", { capability: "watch", reason: "查看活动" }), call("watch_create", {}), say("准备好了")]);
   const g = await f.open();
+  g.app.settings.set("off");
   g.app.harness.resume();
+  const pending = async () => Object.values((await g.app.harness.snapshot(Requests, g.app.main.id, context))?.pending ?? {})[0];
+  for (const tool of ["enable_tool", "watch_create"]) {
+    await expect.poll(pending).toMatchObject({ tool, tainted: true });
+    await answerUserPermission(g.app.main, { requestId: (await pending())!.id, decision: "once" });
+  }
   await expect.poll(async () => (await g.app.heartbeat.view()).runs[0]?.finalReply).toBe("准备好了");
   expect((await g.app.heartbeat.view()).runs[0]).toMatchObject({ id: run.id, notified: false,
     actions: [{ tool: "enable_tool" }, { tool: "watch_create", id: "watch-17" }] });

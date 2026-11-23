@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.21).
+// Mirrors docs/architecture/web-api.md (v1.22).
 
 export type TimelineItem = {
   id: string;
@@ -186,6 +186,11 @@ export type StatsLatency = { samples: number; p50Ms: number | null; p95Ms: numbe
 export type Stats = {
   range: StatsRange; timeZone: string; at: number; total: StatsUsage;
   byRole: (StatsUsage & { role: string })[]; byModel: (StatsUsage & { model: string })[];
+  leases: {
+    count: number; byTool: Record<string, number>; taintedRate: number | null; dispatchAfterLeaseRate: number | null;
+    items: { id: string; capability: string; tools: string[]; reason: string; at: number; wakeId?: string;
+      tainted: boolean; approved: boolean; useWakeIds: string[]; calls: number; succeeded: number; failed: number; dispatched: boolean }[];
+  };
   tasks: { count: number; completed: number; terminal: number; successRate: number | null; items: StatsTask[] };
   wakes: { count: number; bySource: Record<string, number>; items: StatsWake[] };
   approvals: {

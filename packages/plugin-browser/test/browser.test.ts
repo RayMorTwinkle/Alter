@@ -26,17 +26,17 @@ function setup(snapshotLimit?: number, document?: object) {
 
 const details = { untrusted: true, source: "browser" };
 
-it("classifies each browser tool and cannot be leased by main", () => {
+it("classifies each browser tool and can be leased by main", () => {
   const { plugin } = setup();
-  expect(plugin.capability).toMatchObject({ id: "browser", mainLeasable: false });
+  expect(plugin.capability).toMatchObject({ id: "browser", mainLeasable: true });
   const registry = createCapabilityRegistry([plugin]);
   expect(Object.fromEntries([...registry.toolActions].filter(([, a]) => a.capability === "browser")
     .map(([name, a]) => [name, a.effect]))).toEqual({
     browser_open: "read", browser_snapshot: "read", browser_scroll: "read", browser_click: "write-local",
-    browser_fill: "external-send", browser_press: "external-send", browser_close: "write-local",
+    browser_fill: "external-send", browser_press: "external-send", browser_close: "read",
     browser_eval: "external-send", browser_fetch: "external-send", browser_screenshot: "read", browser_wait: "external-send",
     browser_handoff: "write-local", browser_select: "external-send", browser_upload: "external-send", browser_dialog: "external-send",
-    browser_tabs: "read", browser_switch: "write-local", browser_adopt: "write-local", browser_back: "write-local", browser_forward: "write-local",
+    browser_tabs: "read", browser_switch: "read", browser_adopt: "write-local", browser_back: "write-local", browser_forward: "write-local",
   });
 });
 

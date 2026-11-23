@@ -18,6 +18,7 @@ import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugi
 import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { stats } from "../src/stats.ts";
 import { Taint } from "../src/taint.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
 import { observeSurface, stopMainTurn } from "../src/observe.ts";
@@ -381,7 +382,6 @@ it("recovers a parked call after SIGKILL with no graceful close", async () => {
 it("renews the calendar lease on use and expires it at thirty idle turns", async () => {
   let eventId = "";
   const offers = new Map<string, string[]>();
-  let refused = "";
   const app = await open((text, last, _, offered) => {
     if (last.role === "user") offers.set(text, offered);
     if (text === "calendar please") return call("enable_tool", { capability: "calendar", reason: "manage schedule" });
@@ -389,7 +389,6 @@ it("renews the calendar lease on use and expires it at thirty idle turns", async
     if (text === "update") return call("calendar_update", { id: eventId, title: "review" });
     if (text === "outbox please") return call("enable_tool", { capability: "outbox", reason: "send" });
     if (last.role === "toolResult" && last.toolName === "calendar_create") eventId = text;
-    if (last.role === "toolResult" && last.isError) refused = text;
     return say("OK");
   });
   await input(app, "calendar please");
@@ -405,8 +404,7 @@ it("renews the calendar lease on use and expires it at thirty idle turns", async
   expect(offers.get("update")).toEqual(withCalendar);
   expect(offers.get("after update 30")).toEqual(withCalendar);
   expect(offers.get("outbox please")).toEqual(controls);
-  expect(offers.get("final")).toEqual(controls);
-  expect(refused).toContain("not leasable");
+  expect(offers.get("final")).toEqual([...controls, "outbox_send"].sort());
 });
 
 it("allows auto local writes and accepts only a host decision for an external send", async () => {
@@ -516,7 +514,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
   const plugin = createMailPlugin(mailConfig, mail.clients);
   let leaseResult = "";
   const app = await open((text, last, _, offered) => {
-    if (text === "try lease") return call("enable_tool", { capability: "mail", reason: "read inbox" });
+    if (text === "try lease") return call("enable_tool", { capability: "mail", action: "read", reason: "read inbox" });
     if (last.role === "toolResult" && last.toolName === "enable_tool") leaseResult = text;
     if (text === "delegate") {
       expect(offered).not.toContain("mail_send");
@@ -530,7 +528,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
     return say("OK");
   }, new MemoryStorage(), [plugin]);
   await input(app, "try lease");
-  expect(leaseResult).toContain("not leasable");
+  expect(leaseResult).toBe("Enabled mail/read");
   await input(app, "delegate");
   const request = await parked(app);
   expect(request).toMatchObject({ audience: "user", capability: "mail", tool: "mail_send" });
@@ -817,6 +815,56 @@ it("gates a leased main tool after an external result, including when the user s
   await stopMainTurn(app);
   expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
   expect(execute).toHaveBeenCalledTimes(2);
+});
+
+it("leases read actions directly and gates both a tainted send lease and its concrete call", async () => {
+  const { plugin, execute } = externalPlugin();
+  plugin.capability.mainLeasable = false; // Pre-#95 manifest.
+  const dir = await mkdtemp(join(tmpdir(), "alter-lease-stats-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const app = await open((text, last) => {
+    if (last.role !== "user") return say("OK");
+    if (text.startsWith("rent ")) return call("enable_tool", { capability: "remote", action: text.slice(5), reason: text });
+    if (text === "read" || text === "send") return call("remote_" + text, {});
+    if (text === "delegate") return dispatch("child");
+    if (text === "child") return finish("done");
+    return say("OK");
+  }, new MemoryStorage(), [plugin]);
+  app.settings.set("auto");
+  const query = async () => (await stats("all", "UTC", { app, dir })).leases;
+  expect(await query()).toEqual({ count: 0, taintedRate: null, dispatchAfterLeaseRate: null, byTool: {}, items: [] });
+  await input(app, "rent read");
+  await input(app, "read");
+  await input(app, "rent read");
+  async function decide(input: string, tool: string, decision: "once" | "deny") {
+    await app.main.submit({ type: "input", content: input }, context);
+    const request = await parked(app);
+    expect(request).toMatchObject({ taskId: "main", tool, reason: "rent send", tainted: true, taint: { source: "remote_read" } });
+    if (tool === "enable_tool") expect(JSON.parse(request.argumentsJson)).toMatchObject({ capability: "remote", action: "send" });
+    expect((await answerUserPermission(app.main, { requestId: request.id, decision })).isError).toBe(false);
+    await app.main.waitForIdle(context);
+  }
+  await decide("rent send", "enable_tool", "deny");
+  expect((await app.main.agent(context)).tools.map(t => t.name)).not.toContain("remote_send");
+  await input(app, "send");
+  expect(execute).not.toHaveBeenCalled();
+  await decide("rent send", "enable_tool", "once");
+  await decide("send", "remote_send", "deny");
+  expect(execute).not.toHaveBeenCalled();
+  await decide("send", "remote_send", "once");
+  expect(execute).toHaveBeenCalledTimes(1);
+  await input(app, "delegate");
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  await expect.poll(async () => (await stats("all", "UTC", { app, dir })).approvals.shadow.compared).toBe(2);
+  const result = await query();
+  expect(result.items.find(item => item.approved)?.useWakeIds).toHaveLength(1);
+  expect(result).toMatchObject({ count: 3, taintedRate: 2 / 3, dispatchAfterLeaseRate: 2 / 3,
+    byTool: { remote_read: 2, remote_send: 1 } });
+  expect(result.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ reason: "rent read", tainted: false, approved: false, calls: 1, succeeded: 1, dispatched: false }),
+    expect.objectContaining({ reason: "rent read", tainted: true, approved: false, calls: 0, dispatched: true }),
+    expect.objectContaining({ tools: ["remote_send"], approved: true, calls: 1, succeeded: 1, failed: 0, dispatched: true }),
+  ]));
 });
 
 it("withholds an external result if its taint cannot be persisted", async () => {

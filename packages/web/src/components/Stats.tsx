@@ -108,6 +108,8 @@ export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; o
           <Tile label={t.cost} value={usd(total.costUsd) ?? "—"} sub={total.costUsd === null ? t.noPrice : undefined} />
           <Tile label={t.successRate} value={percent(stats.tasks.successRate)} sub={t.tasksSummary(stats.tasks.completed, stats.tasks.terminal)} />
           <Tile label={t.wakes} value={String(stats.wakes.count)} sub={`${t.calls} ${total.calls}`} />
+          {stats.leases.count > 0 && <Tile label={t.leases} value={String(stats.leases.count)}
+            sub={t.leasesSub(percent(stats.leases.taintedRate), percent(stats.leases.dispatchAfterLeaseRate))} />}
         </div>
 
         {stats.daily.length > 1 && <Daily days={stats.daily} />}

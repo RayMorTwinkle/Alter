@@ -110,7 +110,7 @@ CLI 会先订阅主会话和审批记录，再调用 `resume()`。输入一行�
 
 ## Issue #12 · 插件契约与 163 邮箱
 
-宿主在 `openAlter(storage, models, mainModel, taskModel, thinking, { plugins })` 的最后一个参数传入插件。每个插件提供 `capability`、`tools`，可选的 `start(host)` 返回异步停止函数。每次打开的实例都从示例能力与本次插件生成注册表。工具名须与清单中的 `能力名_动作名` 一一对应。Broker、派单允许清单和主会话租约都使用当前实例的能力。任务可以调用四个邮件工具；`mail.mainLeasable` 为 `false`，auto 任务执行 `mail_send` 前须等用户审批。
+宿主在 `openAlter(storage, models, mainModel, taskModel, thinking, { plugins })` 的最后一个参数传入插件。每个插件提供 `capability`、`tools`，可选的 `start(host)` 返回异步停止函数。每次打开的实例都从示例能力与本次插件生成注册表。工具名须与清单中的 `能力名_动作名` 一一对应。Broker、派单允许清单和主会话租约都使用当前实例的能力。任务和主会话租约均可使用四个邮件工具。主会话可指定 `action: "read"` 只租读取；auto 任务执行 `mail_send` 前须等用户审批。
 
 Harness 就绪后启动事件源。插件通过 `await host.emit({ source, kind, summary, ref, at, untrusted: true })` 报告事件，`at` 是 Unix 毫秒时间。宿主将事件写入主会话的 `alter.events` 文档，保留最近 500 条。事件不会触发模型轮次。调用方用 `await app.close()` 等待事件源停止及在途事件写入，再关闭 Harness。
 

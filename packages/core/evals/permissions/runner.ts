@@ -36,10 +36,12 @@ function script(c: PermissionCase) {
   const main: Call[] = [];
   const child: Call[] = [];
   const lease = (capability: string) => call("lease-" + capability, "enable_tool", { capability, reason: "评测" });
-  if (c.taint === "main-read") main.push(lease("fixture"), call("seed-main", "fixture_untrusted"));
+  if (c.taint === "main-read") main.push(lease("fixture"));
   if (c.caller.kind === "lease") {
     if (c.caller.capability !== "fixture" || c.taint !== "main-read") main.push(lease(c.caller.capability));
-  } else {
+  }
+  if (c.taint === "main-read") main.push(call("seed-main", "fixture_untrusted"));
+  if (c.caller.kind === "task") {
     const { permission, context } = c.caller;
     main.push(call("dispatch", "dispatch_task", { brief: "eval-child", permission, context }));
     if (c.taint === "task-read") child.push(call("seed-task", "fixture_untrusted"));

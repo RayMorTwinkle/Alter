@@ -12,7 +12,7 @@ const { bool, int, obj, opt, str } = schema;
 const message = obj({ to: str({ description: "One recipient email address" }), subject: str(), text: str() });
 export function createMailPlugin(config: MailConfig, clients: MailClients = defaultClients, connection?: (ok: boolean) => void): AlterPlugin {
   return {
-    capability: { id: "mail", mainLeasable: false, actions: [
+    capability: { id: "mail", mainLeasable: true, actions: [
       { name: "search", effect: "read" }, { name: "read", effect: "read" },
       { name: "draft", effect: "write-local" }, { name: "send", effect: "external-send" },
     ] },

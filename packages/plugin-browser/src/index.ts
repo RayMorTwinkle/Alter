@@ -104,14 +104,14 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
   }
 
   return {
-    capability: { id: "browser", mainLeasable: false, actions: [
+    capability: { id: "browser", mainLeasable: true, actions: [
       { name: "open", effect: "read", guarded: true, seenArg: "url" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
       { name: "click", effect: "write-local" }, { name: "fill", effect: "external-send" },
-      { name: "press", effect: "external-send" }, { name: "close", effect: "write-local" },
+      { name: "press", effect: "external-send" }, { name: "close", effect: "read" },
       { name: "eval", effect: "external-send" }, { name: "fetch", effect: "external-send" },
       { name: "screenshot", effect: "read" }, { name: "wait", effect: "external-send" }, { name: "handoff", effect: "write-local" },
       { name: "select", effect: "external-send" }, { name: "upload", effect: "external-send" }, { name: "dialog", effect: "external-send" },
-      { name: "tabs", effect: "read" }, { name: "switch", effect: "write-local" }, { name: "adopt", effect: "write-local" },
+      { name: "tabs", effect: "read" }, { name: "switch", effect: "read" }, { name: "adopt", effect: "write-local" },
       { name: "back", effect: "write-local" }, { name: "forward", effect: "write-local" },
     ] },
     async describe({ tool, arguments: args }, state) {

@@ -1,3 +1,5 @@
+import { activeWake } from "./wake.ts";
+import { activeLease, LeaseHistory, Leases, leaseTarget } from "./leases.ts";
 import { interacted } from "./feedback-settings.ts";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import type { ApprovalCall, ApprovalContext, Judgment } from "./approval-model.ts";
@@ -157,7 +159,10 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         const main = getMain();
         const isMain = api.conversationId === main.id;
         const control = call.name === "finish" || call.name === "sleep" || call.name === "declare_permissions";
-        const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write-local" }
+        const target = isMain && call.name === "enable_tool" && typeof call.arguments.reason === "string" && call.arguments.reason.trim()
+          ? leaseTarget(registry, call.arguments.capability, call.arguments.action) : undefined;
+        const descriptor: ToolAction | undefined = target ? { capability: target.capability, action: "lease", effect: target.effect }
+          : control ? { capability: "task", action: call.name, effect: "write-local" }
           : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write-local" }
           : registry.toolActions.get(call.name);
         const borrowed = call.parent && /^ext:([a-z0-9-]+):(read|write-local|external-send|irreversible):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
@@ -171,7 +176,15 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         return main.commit(async tx => {
           const task = (await tx.doc(Tasks, main.id)).byId[taskId];
           const risky = effect === "external-send" || effect === "irreversible" || effect === "unknown";
-          const state = risky || descriptor?.guarded ? await tx.doc(Taint, api.conversationId) : undefined;
+          const leasedCall = isMain && !target && registry.toolActions.has(call.name) && capability !== "memory" && capability !== "schedule";
+          const leases = leasedCall ? await tx.doc(Leases, main.id) : undefined;
+          const key = leases && activeLease(leases.lastUsed, capability, action);
+          if (leases && !key) return { block: "No active lease" };
+          const leaseId = key && leases?.records?.[key];
+          const history = leaseId ? await tx.doc(LeaseHistory, main.id) : undefined;
+          const lease = leaseId ? history?.byId[leaseId] : undefined;
+          const wake = lease ? await activeWake(tx, main.id, api.now()) : undefined;
+          const state = risky || descriptor?.guarded || ((target || leasedCall) && effect !== "read") ? await tx.doc(Taint, api.conversationId) : undefined;
           const taint = state?.first;
           const audit = await tx.doc(Audit, main.id);
           const { pending } = await tx.doc(Requests, main.id);
@@ -181,6 +194,14 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at, ...(borrower && { borrower }),
               ...(decision === "park" && { audience: "user" as const }), ...(taint && { tainted: true as const }) });
             audit.last[id] = decision;
+            if (decision === "allow" && key && leases) {
+              leases.lastUsed[key] = leases.turns + 1;
+              if (lease && leaseId && history) {
+                lease.calls++;
+                if (wake && !lease.useWakeIds.includes(wake.wakeId)) lease.useWakeIds.push(wake.wakeId);
+                history.inFlight[id] = leaseId;
+              }
+            }
           }
           function block(message: string) { record("deny"); return { block: message }; }
           if ((!isMain && task?.status !== "running") || !descriptor) return block("Unknown capability or inactive task");
@@ -211,7 +232,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           }
           const value = descriptor.seenArg && call.arguments[descriptor.seenArg];
           const url = typeof value === "string" ? normalUrl(value) : undefined;
-          const seen = !risky && url && state?.seen?.includes(url);
+          const seen = effect === "read" && url && state?.seen?.includes(url);
           const sensitive = (taint && !seen) || (risky && task && task.permission !== "full");
           if (task?.proactive && sensitive) return block("Proactive research cannot request approval");
           if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
@@ -228,14 +249,16 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             if (Object.values(pending).some(r => r.taskId === taskId && r.deferred && r.tool === call.name &&
               r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
             const checking = eligible && setting === "auto" && scope.approved !== undefined;
+            const items = lease?.approved ? [{ tool: call.name, target: lease.capability, purpose: lease.reason }] : scope.items;
+            const reason = target ? String(call.arguments.reason) : lease?.reason ?? task?.brief ?? "Main session tool call";
             pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
-              argumentsJson, reason: (borrower ? "插件 " + borrower + " 借用：" : "") + (task?.brief ?? "Main session tool call"), expiresAt: at + timeout,
-              statement: scope.items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
+              argumentsJson, reason: (borrower ? "插件 " + borrower + " 借用：" : "") + reason, expiresAt: at + timeout,
+              statement: items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
               ...(!isMain && { defaultAt: at + Math.min(defaultMs, timeout) }), ...(checking && { checking: true }),
               ...(taint && { tainted: true, taint: { ...taint } }) };
             req = pending[id]!;
-            if (eligible && setting !== "off") {
-              const statement = scope.items.slice(0, scope.approved);
+            if (setting !== "off" && (eligible || (lease?.approved && effect !== "irreversible" && effect !== "unknown"))) {
+              const statement = items.slice(0, scope.approved);
               byId[id] = { taskId, tool: call.name, itemCount: statement.length };
               await tx.createTask(review, { id, taskId, conversationId: api.conversationId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement,
                 tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
@@ -283,18 +306,23 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
       },
       async afterTool(call, result, api, ctx) {
         const action = registry.toolActions.get(call.name);
-        if (!action) return;
         const untrusted = isUntrusted(result.details);
         const main = getMain();
-        if (!untrusted && !(api.conversationId === main.id && result.isError)) return;
+        if (!untrusted && (api.conversationId !== main.id || (!action && !result.isError))) return;
         try {
           await main.commit(async tx => {
             if (untrusted) recordUntrusted(await tx.doc(Taint, api.conversationId), {
-              source: call.name, capability: action.capability, at: api.now(),
+              source: call.name, capability: action?.capability ?? "unknown", at: api.now(),
             }, result.output);
-            // A stopped main turn has no background-task owner to clear its parked lease call.
-            if (api.conversationId === main.id && result.isError) {
-              delete (await tx.doc(Requests, main.id)).pending[`permission-${api.taskId}`];
+            if (api.conversationId === main.id) {
+              const id = `permission-${api.taskId}`;
+              const history = await tx.doc(LeaseHistory, main.id);
+              const leaseId = history.inFlight[id];
+              if (leaseId) {
+                history.byId[leaseId]![result.isError ? "failed" : "succeeded"]++;
+                delete history.inFlight[id];
+              }
+              if (result.isError) delete (await tx.doc(Requests, main.id)).pending[id];
             }
           }, ctx);
         } catch (error) {
