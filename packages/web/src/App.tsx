@@ -54,6 +54,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [showUsage, setShowUsage] = useState(false);
   const [showHeartbeat, setShowHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const awaiting = state.extPlugins.find(p => p.pending);
   const [heartbeat, setHeartbeat] = useState<HeartbeatView | null>(null);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
   const [showNotices, setShowNotices] = useState(false);
@@ -167,6 +168,12 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       </header>
 
       {error && <div className="toast" role="alert" onClick={() => setError("")}>{t.error}：{error}</div>}
+      {awaiting && !showSettings && (
+        <div className="install-banner" role="status">
+          <span>{t.ext.pendingBanner(awaiting.pending!.manifest.displayName)}</span>
+          <button className="text-btn" onClick={() => setShowSettings(true)}>{t.ext.review}</button>
+        </div>
+      )}
 
       <main className="workspace">
         <Chat state={state} onSend={onSend} onStop={onStop} onAnswer={onAnswer} onOpenTask={setOpenTask} />
@@ -196,7 +203,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
       {showUsage && <StatsSheet onClose={() => setShowUsage(false)} />}
-      {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} onToggleLocale={onToggleLocale} />}
+      {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} onToggleLocale={onToggleLocale} extPlugins={state.extPlugins} />}
       {showHeartbeat && <HeartbeatSheet view={heartbeat} onClose={() => setShowHeartbeat(false)} onChange={() => setHeartbeatTick(n => n + 1)} />}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>

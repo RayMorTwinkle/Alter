@@ -1,4 +1,4 @@
-import type { Agenda, LedgerEntry, MemoryItem, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
+import type { ExtPluginView, Agenda, LedgerEntry, MemoryItem, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
 
 export type State = Snapshot & {
   draft: { id: string; text: string } | null;
@@ -6,6 +6,7 @@ export type State = Snapshot & {
   agenda: Agenda | null; // null until loaded, and when the server has no calendar
   memory: MemoryItem[];
   heartbeatTick: number;
+  extPlugins: ExtPluginView[];
 };
 
 export type Action =
@@ -22,10 +23,11 @@ export type Action =
   | { type: "notifications"; notifications: Notification[] }
   | { type: "heartbeat" }
   | { type: "schedules"; schedules: ScheduledTask[] }
-  | { type: "watches"; watches: Watch[] };
+  | { type: "watches"; watches: Watch[] }
+  | { type: "extPlugins"; extPlugins: ExtPluginView[] };
 
 export const initialState: State = {
-  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: [], heartbeatTick: 0,
+  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: [], heartbeatTick: 0, extPlugins: [],
 };
 
 function upsert(timeline: TimelineItem[], item: TimelineItem) {
@@ -66,6 +68,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, notifications: action.notifications };
     case "watches":
       return { ...state, watches: action.watches };
+    case "extPlugins":
+      return { ...state, extPlugins: action.extPlugins };
     case "schedules":
       return { ...state, schedules: action.schedules };
     case "heartbeat":

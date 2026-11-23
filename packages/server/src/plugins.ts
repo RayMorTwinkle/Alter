@@ -4,6 +4,7 @@ import { calendarDescription, calendarInstance } from "@alter/plugin-calendar";
 import { feishuDescription, feishuInstance } from "@alter/plugin-feishu";
 import { mailDescription, mailInstance } from "@alter/plugin-mail";
 import { openSources } from "@alter/plugin-sources";
+import { externalPlugins } from "./ext-plugins.ts";
 import { openSecrets } from "./secrets.ts";
 import { createPluginManager } from "./plugin-manager.ts";
 
@@ -17,5 +18,11 @@ export function installedPlugins(app: AlterApp, dataDir: string, env = process.e
     { description: browserDescription, enabled: env.ALTER_BROWSER !== "off", open: () => browserInstance() },
     { description: sources.description, open: () => ({ plugin: sources.plugin, status: () => ({ state: "ok" }) }) },
   ], env, secrets);
-  return { ...manager, sources };
+  const ext = externalPlugins(app, dataDir, secrets);
+  return { ...manager, sources, ext,
+    list: () => [...manager.list(), ...ext.views()],
+    get: (id: string) => id.startsWith("ext-") ? ext.get(id) : manager.get(id),
+    async start() { const result = await manager.start(); await ext.start(); return result; },
+    async close() { await ext.close(); await manager.close(); },
+  };
 }

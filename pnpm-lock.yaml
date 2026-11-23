@@ -98,14 +98,28 @@ importers:
         specifier: 8.0.2
         version: 8.0.2
 
+  packages/plugin-runtime:
+    dependencies:
+      '@alter/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+
+  packages/plugin-sdk: {}
+
   packages/plugin-sources:
     dependencies:
+      '@alter/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@alter/core':
         specifier: workspace:*
         version: link:../core
 
   packages/server:
     dependencies:
+      '@alter/plugin-runtime':
+        specifier: workspace:*
+        version: link:../plugin-runtime
       '@alter/core':
         specifier: workspace:*
         version: link:../core

@@ -2,7 +2,7 @@ import { submitWake } from "./timeline.ts";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import type { ApprovalCall, ApprovalContext, Judgment } from "./approval-model.ts";
 import type { ApprovalMode } from "./settings.ts";
-import type { CapabilityRegistry, Effect, ToolAction } from "./capabilities.ts";
+import { permitsBorrow, type CapabilityRegistry, type Effect, type ToolAction } from "./capabilities.ts";
 import {
   context, conversationDoc, defineExtension, defineSignal, defineTask, hook, reply, ToolTask,
   type Conversation, type ConversationId, type TaskId, type Tx,
@@ -21,7 +21,7 @@ type Request = {
 };
 type AuditEntry = {
   taskId: string; tool: string; capability: string; action: string; effect: Effect;
-  decision: "park" | "allow" | "deny"; at: number; audience?: "user"; tainted?: true;
+  borrower?: string; decision: "park" | "allow" | "deny"; at: number; audience?: "user"; tainted?: true;
 };
 export type PermissionState = { pending: Record<string, Request> };
 export const Requests = conversationDoc<PermissionState>("permissions", () => ({ pending: {} }));
@@ -161,8 +161,11 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write-local" }
           : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write-local" }
           : registry.toolActions.get(call.name);
-        if (isMain && !descriptor) return;
-        const taskId = isMain ? "main" : (await api.snapshot(TaskIdentity, api.conversationId, ctx))?.taskId ?? "";
+        const borrowed = call.parent && /^ext:([a-z0-9-]+):(read|write-local|external-send|irreversible):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
+        const borrower = borrowed?.[1];
+        if (isMain && !descriptor && !borrower) return;
+        const identity = isMain ? undefined : await api.snapshot(TaskIdentity, api.conversationId, ctx);
+        const taskId = isMain ? "main" : identity?.taskId ?? "";
         const id = `permission-${api.taskId}`;
         const signal = await api.readSignal(Decision, id, ctx);
         const { capability, action, effect } = descriptor ?? { capability: "unknown", action: call.name, effect: "unknown" };
@@ -176,12 +179,14 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           const at = api.now();
           function record(decision: AuditEntry["decision"]) {
             if (audit.last[id] === decision) return;
-            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at,
+            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at, ...(borrower && { borrower }),
               ...(decision === "park" && { audience: "user" as const }), ...(taint && { tainted: true as const }) });
             audit.last[id] = decision;
           }
           function block(message: string) { record("deny"); return { block: message }; }
           if ((!isMain && task?.status !== "running") || !descriptor) return block("Unknown capability or inactive task");
+          if (borrowed && !permitsBorrow(borrowed[2]!, effect)) return block("Borrow exceeds calling effect");
+          if (identity?.sourcePlugin && effect !== "read") return block("Message sources can only borrow read tools");
           if (task?.proactive && !control && (effect !== "read" || capability !== "browser")) return block("Proactive research is read-only");
           const { byId } = await tx.doc(Reviews, main.id);
           const result = byId[id];
@@ -225,7 +230,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
               r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
             const checking = eligible && setting === "auto" && scope.approved !== undefined;
             pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
-              argumentsJson, reason: task?.brief ?? "Main session tool call", expiresAt: at + timeout,
+              argumentsJson, reason: (borrower ? "插件 " + borrower + " 借用：" : "") + (task?.brief ?? "Main session tool call"), expiresAt: at + timeout,
               statement: scope.items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
               ...(!isMain && { defaultAt: at + Math.min(defaultMs, timeout) }), ...(checking && { checking: true }),
               ...(taint && { tainted: true, taint: { ...taint } }) };
