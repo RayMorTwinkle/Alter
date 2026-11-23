@@ -17,7 +17,7 @@ type NextOccurrence = { nextAt: number };
 type Handler = (item: Readonly<ScheduleItem>, tx: Tx, firedAt: number) => void | NextOccurrence | Promise<void | NextOccurrence>;
 export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId; window?: string; gen?: number }>; retiring?: Record<string, TaskId[]> }>("schedules", () => ({ byId: {} }));
 const Cancel = defineSignal({ name: "alter.schedule-cancel", version: 1, schema: bool() });
-// A key that woke a wait can never be slept on again, so every reschedule moves to a fresh generation.
+// A key that woke a wait can never be slept on again, so each sleep moves to a fresh generation.
 const wakeKey = (row: { item: ScheduleItem; gen?: number }) => row.gen ? `${row.item.at}-${row.gen}` : String(row.item.at);
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
@@ -42,6 +42,8 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
             } else if (item.repeat) item.at = time.nextDaily(firedAt, item.repeat.daily);
             else { item.status = "done"; return complete; }
           }
+          // Every sleep takes a new key: a cancel or reschedule may have woken the previous one.
+          row.gen = (row.gen ?? 0) + 1;
           return { status: "sleeping", until: item.at, checkpoint: { phase: "tick" }, signals: [Cancel.key(wakeKey(row))] };
         }, ctx).catch(async error => {
           if (runtime.signal.aborted) throw error;
@@ -133,7 +135,6 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
         byId[id] = { worker, window, item: { id, kind, text, at: first, createdAt: now(), status: "scheduled" } };
       } else if (existing.item.status === "scheduled" && existing.window !== window && (reset || existing.window !== undefined)) {
         await tx.signal(existing.worker, Cancel, wakeKey(existing), true);
-        existing.gen = (existing.gen ?? 0) + 1;
         existing.item.at = first;
       }
       if (existing) existing.window = window;
