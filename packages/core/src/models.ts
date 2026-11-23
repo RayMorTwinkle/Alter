@@ -4,7 +4,7 @@ import type { Api, AssistantMessage, AssistantMessageEvent, Message, Model, Prov
 import { withClientIdentity } from "@earendil-works/pi-ai/utils/identity";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import { createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
+import { clampThinkingLevel, createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
 import type { gatewayConfig } from "./config.ts";
 import { appendUsage, budgetExhausted, splitUsage, type ProactiveBudget, type UsageLine } from "./usage.ts";
 
@@ -15,7 +15,7 @@ const completions = openAICompletionsApi();
 
 // The gateway reports each fallback attempt. Other providers expose one terminal usage record.
 const attemptContext = new AsyncLocalStorage<{ record(line: UsageLine): Promise<void>; now(): number }>();
-type Attribution = Pick<UsageLine, "wakeId" | "wakeAt" | "wakeSource" | "taskId"> & { conversation: Conversation };
+type Attribution = Pick<UsageLine, "wakeId" | "wakeAt" | "wakeSource" | "taskId" | "role"> & { conversation: Conversation; thinking?: "low" | "medium" | "high" | "max" };
 const requests = new WeakMap<Message, Attribution>();
 
 // pi-durable copies the message array before streamSimple. Give this request a private identity
@@ -42,7 +42,13 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
     const last = context.messages.at(-1);
     const attribution = last && requests.get(last);
     const heartbeat = attribution?.wakeSource === "heartbeat" || options?.sessionId?.startsWith("heartbeat-");
-    const proactive = heartbeat || options?.sessionId?.startsWith("proactive-");
+    const scheduled = attribution?.role === "schedule" || attribution?.wakeSource === "schedule";
+    const proactiveRole = scheduled ? "schedule" : heartbeat ? "heartbeat" : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
+    const proactive = proactiveRole !== undefined;
+    if (scheduled && attribution?.thinking) {
+      const level = clampThinkingLevel(model, attribution.thinking);
+      options = { ...options, reasoning: level === "off" ? undefined : level };
+    }
     if (!proactive && !(attribution && dir)) return models.streamSimple(model, context, options);
     async function* run() {
       const permit = proactive ? await budget.acquire(options?.signal) : undefined;
@@ -56,7 +62,7 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
         const elapsed = () => Math.round(performance.now() - started);
         async function record(line: UsageLine) {
           recorded = true;
-          const row = { ...attribution, ...line, conversation, role: heartbeat ? "heartbeat" : proactive ? "goal" : line.role ?? conversation,
+          const row = { ...attribution, ...line, conversation, role: proactiveRole ?? line.role ?? conversation,
             thinking: options?.reasoning ?? "off", ...(proactive && { proactive: true as const }) };
           if (permit) await permit.record(row);
           else if (dir) await appendUsage(dir, row);

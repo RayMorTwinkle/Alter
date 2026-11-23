@@ -75,6 +75,10 @@ function surfaceText(entry: InputEntry | undefined, fallback: string) {
 
 function inputItem(entry: InputEntry | undefined, text: string, id: string, at: number): TimelineItem {
   const data = entryData(entry);
+  if (entry?.kind === "alter.schedule" && typeof data?.scheduleId === "string" && typeof data.dueAt === "number") {
+    return { kind: "notice", source: "schedule", text: surfaceText(entry, text),
+      id: `schedule-${data.scheduleId}-${data.dueAt}`, at: typeof data.at === "number" ? data.at : at };
+  }
   if (entry?.kind === "alter.task-report" && typeof data?.taskId === "string" && typeof data.at === "number") {
     return { kind: "report", id: `report-${data.taskId}`, taskId: data.taskId, text: surfaceText(entry, text), at: data.at };
   }
@@ -101,13 +105,17 @@ export function assistantId(taskId: number, at: number) {
 
 type Turn = { source?: string; heartbeat?: boolean };
 export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] {
+  const data = entryData(entry);
+  if (entry.kind === "alter.schedule-notice" && typeof data?.text === "string" && typeof data.at === "number") {
+    return [{ kind: "notice", id: `entry-${entry.id}`, text: data.text, at: data.at }];
+  }
   const items: TimelineItem[] = [];
   for (const [index, msg] of (entry.model ?? []).entries()) {
     const id = `entry-${entry.id}-${index}`;
     const at = msg.timestamp;
     if (msg.role === "user") {
       const item = inputItem(entry, contentText(msg.content), id, at);
-      turn.source = item.kind === "user" ? item.source : undefined;
+      turn.source = item.source;
       turn.heartbeat = entry.kind === heartbeatKind;
       if (!turn.heartbeat) items.push(item);
     }

@@ -174,15 +174,15 @@ export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }
   },
 });
 
-type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom"> & { thinking?: ModelThinkingLevel };
+type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom" | "triggerSource"> & { thinking?: ModelThinkingLevel };
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
   resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
   return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs, goal?: TaskRecord["goal"]) => {
     const tasks = await tx.doc(Tasks, mainId);
     if (tasks.byId[taskId]) return;
     const stamp = clock();
-    const wake = !goal || args.continuedFrom ? await activeWake(tx, mainId, stamp.at) : undefined;
-    const inspection = goal ? undefined : await activeHeartbeat(tx);
+    const wake = !args.triggerSource && (!goal || args.continuedFrom) ? await activeWake(tx, mainId, stamp.at) : undefined;
+    const inspection = goal || args.triggerSource ? undefined : await activeHeartbeat(tx);
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
     if (previous) {
@@ -223,12 +223,15 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       delete scope.approved;
       delete scope.full;
     }
+    const scheduled = args.triggerSource === "scheduled" || wake?.wakeSource === "schedule";
+    if (scheduled) identity.scheduled = true;
+    else delete identity.scheduled;
     identity.taskId = taskId;
     if (wake) identity.wakeId = wake.wakeId;
     else delete identity.wakeId;
     identity.reminders = 0;
     tasks.byId[taskId] = {
-      worker, ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
+      worker, ...(scheduled && { triggerSource: "scheduled" }), ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
       permission: inspection && args.permission === "full" ? "restricted" : args.permission, status: "running",
       ...inspection, ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),

@@ -58,10 +58,15 @@ export function calendarTime(timeZone: string) {
       : new Date(ms).toISOString();
     return { iso, label: `${digits.slice(0, 10)} ${digits.slice(11, 16)} (周${"日一二三四五六"[date.getUTCDay()]})` };
   }
-  function nextDaily(after: number, daily: string) {
+  function nextDaily(after: number, daily: string, weekdays?: readonly number[]) {
     const today = Math.floor(wall(after) / dayMs) * dayMs + dailyMinutes(daily) * 60_000;
-    const candidate = instant(today, true);
-    return candidate > after ? candidate : instant(today + dayMs, true);
+    for (let days = 0; days <= 7; days++) {
+      const local = today + days * dayMs;
+      if (weekdays && !weekdays.includes(new Date(local).getUTCDay())) continue;
+      const candidate = instant(local, true);
+      if (candidate > after) return candidate;
+    }
+    throw new Error("Expected at least one weekday from 0 to 6");
   }
 
   function quietHours(at: number) {

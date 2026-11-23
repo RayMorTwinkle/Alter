@@ -1,6 +1,6 @@
 import { context, conversationDoc, LiveDoc, type Conversation, type ConversationId, type Harness, type LiveState, type Tx } from "./runtime.ts";
 
-export type Wake = { wakeId: string; wakeSource: string; wakeAt: number };
+export type Wake = { wakeId: string; wakeSource: string; wakeAt: number; thinking?: "low" | "medium" | "high" | "max" };
 export const Wakes = conversationDoc<{ byId: Record<string, Wake> }>("wakes", () => ({ byId: {} }));
 
 export async function activeWake(tx: Tx, id: ConversationId, at: number) {
@@ -25,7 +25,9 @@ async function recordWake(tx: Tx, id: ConversationId, run: NonNullable<LiveState
   else if (entry?.kind === "alter.heartbeat") wakeSource = "heartbeat";
   else if (entry?.kind === "alter.schedule" && !/^expired-permission-/.test(submission?.requestId ?? "")) wakeSource = "schedule";
   else if (/^(expired-)?permission-/.test(submission?.requestId ?? "")) wakeSource = "approval";
-  const wake = { wakeId, wakeSource, wakeAt: at };
+  const thinking = meta?.thinking;
+  const wake: Wake = { wakeId, wakeSource, wakeAt: at };
+  if (wakeSource === "schedule" && (thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "max")) wake.thinking = thinking;
   byId[wakeId] = wake;
   return wake;
 }

@@ -1,4 +1,4 @@
-# Web API 契约（v1.12）
+# Web API 契约（v1.13）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -70,6 +70,7 @@ type Task = {
   context: "fork" | "fresh";
   heartbeatAt?: number; heartbeatId?: string;
   continuedFrom?: string;
+  triggerSource?: "scheduled";   // v1.13：定时派单
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
   allow: string[];            // 兼容旧客户端，恒为空数组
@@ -127,6 +128,19 @@ type MemoryItem = {
   updatedAt: number;
 };
 
+type ScheduleTrigger =
+  | { kind: "at"; at: string }
+  | { kind: "every"; minutes: number }
+  | { kind: "daily"; time: string; weekdays?: number[] }
+  | { kind: "event"; eventId: string; offsetMinutes: number; anchor: "start" | "end" };
+
+type ScheduledTask = {
+  id: string; brief: string; trigger: ScheduleTrigger; action: "task" | "wake";
+  continue_from?: string; thinking?: "low" | "medium" | "high" | "max";
+  createdAt: number; nextAt: number | null; paused: boolean;
+  lastRun?: { dueAt: number; at: number; missed: boolean; skipped?: string; taskId?: string };
+};
+
 type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
 
 type TranscriptItem =
@@ -139,7 +153,7 @@ type TranscriptItem =
 
 | 方法 | 路径 | 返回 |
 |---|---|---|
-| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], notifications: Notification[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
+| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], schedules: ScheduledTask[], notifications: Notification[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
 | `POST` | `/api/messages` | 请求 `{ text }` → `202 { id }`；主会话忙时排队，不报错 |
 | `POST` | `/api/permissions/:id` | 请求 `{ decision: "once" &#124; "statement" &#124; "task-full" &#124; "deny", note?: string }` → `204`。已处理、已到期或对主会话租约选择任务级授权返回 `409`。旧客户端可用布尔字段 `allow` 提交单次批准或拒绝 |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
@@ -157,6 +171,9 @@ type TranscriptItem =
 | `GET` | `/api/feishu/oauth/start` | 需要登录；`302` 跳转至飞书授权页 |
 | `GET` | `/api/feishu/oauth/callback?code=…&state=…` | 成功 `302` 回到 `/`；无效、过期、重复或拒绝授权返回 `400` 错误页；换令牌或保存失败返回 `502` 错误页 |
 | `POST` | `/api/feishu/account/disconnect` | 需要登录；清除本地授权，重复调用均返回 `204` |
+| `GET` | `/api/schedules` | `ScheduledTask[]`（v1.13），含已暂停和已完成的定时任务 |
+| `PATCH` | `/api/schedules/:id` | 请求 `{ paused: boolean }` → `204`，重复设置相同状态也返回 `204`。参数错误返回 `400`，未知或已完成返回 `404` |
+| `DELETE` | `/api/schedules/:id` | 删除后返回 `204`，未知或已删除返回 `404` |
 | `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
 | `POST` | `/api/notifications/:id` | 更新已读或反馈 → `204`。请求至少含 `status`（仅 `read`）或 `feedback`（`useful` 或 `useless`）之一。无效字段返回 `400`，未知或已淘汰的 ID 返回 `404` |
 | `GET` | `/api/memory` | `MemoryItem[]`，按 `updatedAt` 倒序。读取时将已过期的 active 目标转为 pending |
@@ -175,6 +192,14 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直接执行。
 
 `timeline` 返回最近 200 条；更早的用 `GET /api/state?before=<id>` 分页（v1 可不实现）。
+
+## 定时任务（v1.13）
+
+主会话通过 `schedule_task` 创建，网页可查看、暂停、恢复和删除。时间戳均为 Unix 毫秒。`at` 接受 ISO 时间，无偏移量时使用用户时区。`every` 按创建时刻对齐，间隔至少 5 分钟。`daily` 使用本地 `HH:mm`，可附非空的星期数组（0 为周日）。`event` 以当前日程的开始或结束时间加有符号的分钟数计算，日程改期后更新，删除日程会移除关联安排并在时间线留下通知。
+
+`nextAt` 为当前计划时间，已完成的一次性安排为 `null`。暂停期间停止执行。恢复周期任务时跳到下一个计划时刻，恢复已到点的一次性任务会执行一次。离线期间错过多次只补跑一次。`lastRun.dueAt` 是本次处理的原定时间，`at` 是实际处理时间。重启时已过期或运行中晚到至少一分钟记 `missed: true`。当日主动预算耗尽或接续目标仍在运行时，`skipped` 给出本次跳过原因。
+
+新任务默认使用 `fresh` 上下文和 `restricted` 权限。`continue_from` 用于 `task`，继承原任务的会话、权限和约束。`wake` 将简报作为主会话自己的安排写入时间线，来源为 `schedule`。`/api/stats` 的定时调用计入 `byRole` 的 `schedule`，定时派单的任务明细含 `triggerSource: "scheduled"`。
 
 ## 调用、任务与唤醒统计（v1.11）
 
@@ -237,6 +262,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | `pending` | `PermissionRequest[]` | 待审批列表整体替换 |
 | `ledger` | `LedgerEntry[]` | 账本整体替换 |
 | `busy` | `{ busy: boolean }` | 主会话是否在生成 |
+| `schedules` | `ScheduledTask[]` | v1.13：创建、暂停、恢复、改期、触发或删除后整体替换。首次连接与重连由 snapshot 提供 |
 | `notifications` | `Notification[]` | v1.7 新增。提醒触发、已读或反馈更新时整体替换，首次连接与重连由 snapshot 提供 |
 | `heartbeat` | `{ type: "start" 或 "end", id }`、`{ type: "feedback", id, feedback }` 或 `{ type: "schedule", nextAt }` | 巡检开始、结束（含跳过或顺延）、反馈或下次时间变化。收到事件及重连后读取 `GET /api/heartbeat` |
 | `memory` | `MemoryItem[]` | v1.5：工具写入、网页修改或删除、读取触发过期转换后推送全量列表。首次连接与重连后请求 `GET /api/memory` 获取当前列表 |

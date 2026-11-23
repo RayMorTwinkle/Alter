@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.12).
+// Mirrors docs/architecture/web-api.md (v1.13).
 
 export type TimelineItem = {
   id: string;
@@ -37,6 +37,7 @@ export type Task = {
   context: "fork" | "fresh";
   heartbeatAt?: number; heartbeatId?: string;
   continuedFrom?: string;
+  triggerSource?: "scheduled";
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
   allow: string[]; // v1.10 compatibility field. The server sends [].
@@ -45,6 +46,19 @@ export type Task = {
   conversationId: string;
   createdAt: number;
   pending: PermissionRequest[];
+};
+
+export type ScheduleTrigger =
+  | { kind: "at"; at: string }
+  | { kind: "every"; minutes: number }
+  | { kind: "daily"; time: string; weekdays?: number[] }
+  | { kind: "event"; eventId: string; offsetMinutes: number; anchor: "start" | "end" };
+
+export type ScheduledTask = {
+  id: string; brief: string; trigger: ScheduleTrigger; action: "task" | "wake";
+  continue_from?: string; thinking?: "low" | "medium" | "high" | "max";
+  createdAt: number; nextAt: number | null; paused: boolean;
+  lastRun?: { dueAt: number; at: number; missed: boolean; skipped?: string; taskId?: string };
 };
 
 export type Notification = {
@@ -80,6 +94,7 @@ export type TranscriptItem =
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
 export type Snapshot = {
+  schedules?: ScheduledTask[]; // Available from v1.13.
   notifications?: Notification[]; // Absent in v1.6 snapshots and before the first snapshot.
   timeline: TimelineItem[];
   tasks: Task[];
@@ -129,6 +144,7 @@ export type StatsReview = {
 };
 
 export type StatsTask = {
+  triggerSource?: "scheduled";
   taskId: string; status: Task["status"] | "cancelled"; createdAt: number; continuedFrom: string | null;
   wakeId: string | null; thinking: string; models: string[]; usage: StatsUsage;
   usageSource: "ledger" | "transcript" | "none"; durationMs: number | null; rounds: number;

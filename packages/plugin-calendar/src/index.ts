@@ -25,11 +25,16 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
   dataDir: string; timeZone: string; now?: () => number;
 }): CalendarPlugin {
   const time = calendarTime(timeZone);
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(id: string) => void>();
   let db: DatabaseSync;
 
-  function changed() {
-    for (const listener of listeners) listener();
+  function subscribe(listener: (id: string) => void) {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }
+
+  function changed(id: string) {
+    for (const listener of listeners) listener(id);
   }
 
   function display({ external, ...row }: Row) {
@@ -91,7 +96,7 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
       const conflicts = overlapping(row.start, row.end, false, row.id).map(display);
       const result = reply(JSON.stringify({ event: display(row), conflicts }));
       db.exec("COMMIT");
-      changed();
+      changed(row.id);
       return result;
     } catch (error) {
       db.exec("ROLLBACK");
@@ -105,12 +110,19 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
       deletedAt = CASE WHEN ? THEN COALESCE(deletedAt, ?) ELSE NULL END WHERE id = ? RETURNING *`)
       .get(Number(deleted), at, Number(deleted), at, id) as Row | undefined;
     if (!row) throw new Error("Unknown event");
-    changed();
+    changed(id);
     return reply(JSON.stringify(display(row)));
   }
 
   return {
     timeZone,
+    calendarEvents: {
+      get(id) {
+        return db.prepare("SELECT start, end FROM events WHERE id = ? AND deletedAt IS NULL").get(id) as
+          Pick<AgendaEvent, "start" | "end"> | undefined;
+      },
+      subscribe,
+    },
     agenda(days = 7) {
       const from = time.midnight(now());
       return overlapping(from, time.midnight(from, days), false).map(row => ({
@@ -118,10 +130,7 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
         ...(row.location && { location: row.location }), ...(row.notes && { notes: row.notes }),
       }));
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe,
     capability: { id: "calendar", mainLeasable: true, actions: [
       { name: "list", effect: "read" }, { name: "create", effect: "write-local" }, { name: "update", effect: "write-local", guarded: true },
       { name: "delete", effect: "write-local", guarded: true }, { name: "restore", effect: "write-local" },

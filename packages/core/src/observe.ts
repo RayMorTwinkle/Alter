@@ -5,6 +5,7 @@ import { Leases, leaseWindow, type openAlter } from "./main.ts";
 import {
   context, InboxDoc, LiveDoc, type ConversationDocToken, type Cursor, type EntryRecord, type JsonObject,
 } from "./runtime.ts";
+import { ScheduledTasks, type ScheduledTask } from "./scheduled-tasks.ts";
 import { Ledger, Tasks, type LedgerEntry, type TaskRecord } from "./state.ts";
 import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
 
@@ -17,11 +18,11 @@ type Task = Omit<TaskRecord, "conversationId" | "worker" | "lastEntry" | "messag
 };
 export type SurfaceState = {
   timeline: TimelineItem[]; tasks: Task[]; pending: PermissionRequest[]; ledger: LedgerEntry[];
-  notifications: Notification[];
+  notifications: Notification[]; schedules: ScheduledTask[];
   leases: { capability: string; idleTurns: number; window: number }[]; busy: boolean;
 };
 type Delta = { id: string; text: string };
-type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications"> & {
+type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications" | "schedules"> & {
   busy: { busy: boolean }; timeline: TimelineItem; delta: Delta;
 };
 export type SurfaceEvent = { [K in keyof Payloads]: { event: K; data: Payloads[K] } }[keyof Payloads];
@@ -31,7 +32,7 @@ const limit = 200;
 // Both surfaces attach before resume. Seed the recent history once, then consume the
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
 export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
-  const state: SurfaceState = { timeline: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state: SurfaceState = { timeline: [], schedules: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   const turn: { source?: string; heartbeat?: boolean } = {};
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
@@ -129,6 +130,10 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       }));
       emit({ event: "pending", data: state.pending });
       updateTasks();
+    });
+    await watch(ScheduledTasks, value => {
+      state.schedules = Object.values(value.byId).map(row => row.item);
+      emit({ event: "schedules", data: state.schedules });
     });
     await watch(Notifications, value => { state.notifications = value.entries; emit({ event: "notifications", data: state.notifications }); });
     await watch(Ledger, value => { state.ledger = value.entries; emit({ event: "ledger", data: state.ledger }); });

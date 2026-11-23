@@ -133,7 +133,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
   function taskStats(taskId: string, task: TaskRecord) {
     const result = task.status === "completed" || task.status === "cancelled" ? results.get(taskId) : undefined;
     const ended = task.endedAt ?? result?.at ?? (task.status === "running" ? at : undefined);
-    return { taskId, status: task.status, createdAt: task.createdAt, continuedFrom: task.continuedFrom ?? null,
+    return { taskId, ...(task.triggerSource && { triggerSource: task.triggerSource }), status: task.status, createdAt: task.createdAt, continuedFrom: task.continuedFrom ?? null,
       wakeId: task.wakeId ?? null, thinking: task.thinking, models: new Set<string>(), usage: emptyUsage(),
       durationMs: ended === undefined || !task.createdAt ? null : Math.max(0, ended - task.createdAt),
       usageSource: "none" as "ledger" | "transcript" | "none", rounds: 0, tools: new Map<string, number>(),
@@ -157,8 +157,8 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
     }
   }
 
-  function wakeStats(wake: Wake) {
-    return { ...wake, usage: emptyUsage(), dispatchedTasks: dispatched.get(wake.wakeId) ?? 0 };
+  function wakeStats({ wakeId, wakeSource, wakeAt }: Wake) {
+    return { wakeId, wakeSource, wakeAt, usage: emptyUsage(), dispatchedTasks: dispatched.get(wakeId) ?? 0 };
   }
   const wakeDetails = new Map<string, ReturnType<typeof wakeStats>>();
   function includeWake(wake: Wake) {
@@ -174,6 +174,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
     const ms = Date.parse(line.at);
     if (!Number.isFinite(ms) || ms > at) continue;
     const role = usageRole(line);
+    const proactiveWake = role === "heartbeat" || role === "schedule";
     if (includes(ms)) {
       addUsage(total, line);
       addUsage(bucket(roles, role, emptyUsage), line);
@@ -187,12 +188,12 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
       task.usageSource = "ledger";
       addUsage(task.usage, line);
       task.models.add(line.model);
-      if (role === "task" || role === "goal" || (role === "heartbeat" && line.conversation === "task")) {
+      if (role === "task" || role === "goal" || (proactiveWake && line.conversation === "task")) {
         if (line.attempt === 1) task.rounds++;
         for (const tool of line.tools ?? []) task.tools.set(tool, (task.tools.get(tool) ?? 0) + 1);
       }
     }
-    if ((role === "main" || (role === "heartbeat" && line.conversation === "main")) && line.wakeId) {
+    if ((role === "main" || (proactiveWake && line.conversation === "main")) && line.wakeId) {
       const wake = wakeDetails.get(line.wakeId) ?? includeWake({ wakeId: line.wakeId, wakeSource: line.wakeSource ?? "unknown", wakeAt: line.wakeAt ?? ms });
       if (wake) addUsage(wake.usage, line);
     }
