@@ -10,10 +10,10 @@ export type { FeishuAccount } from "./account.ts";
 export { feishuConfigFromEnv, type FeishuConfig } from "./config.ts";
 export type { FeishuHandlers, FeishuMessage, FeishuTransport } from "./transport.ts";
 export type FeishuPairing = { paired: true } | { paired: false; code: string; expiresAt: number };
-type Options = { dataDir: string; now?: () => number } & ({ transport: FeishuTransport } | { config: FeishuConfig });
+type Options = { dataDir: string; now?: () => number; changed?: () => void } & ({ transport: FeishuTransport } | { config: FeishuConfig });
 const lifetime = 10 * 60_000;
 
-export function createFeishuSurface(options: Options): AlterSurface & { pairing(): FeishuPairing } {
+export function createFeishuSurface(options: Options): AlterSurface & { pairing(): FeishuPairing; isPaired(): boolean } {
   const store = openState(options.dataDir);
   const now = options.now ?? Date.now;
   const attempts = new Map<string, number>();
@@ -53,6 +53,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
         const failures = attempts.get(openId) ?? 0;
         if (!status.paired && failures < 5 && text === status.code) {
           store.remember(id, { openId, chatId });
+          options.changed?.();
           clearTimeout(timer);
           challenge = undefined;
           attempts.clear();
@@ -145,5 +146,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
     } catch (error) { await stop(); throw error; }
     return stop;
   }
-  return { id: "feishu", start, pairing };
+  return { id: "feishu", start, pairing, isPaired: () => !!store.value.owner };
 }
+
+export { feishuDescription, feishuInstance, feishuGuide } from "./settings.ts";

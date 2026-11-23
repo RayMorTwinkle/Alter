@@ -51,12 +51,12 @@ export function watchList(records: Record<string, TaskRecord>) {
 }
 export type WatchItem = ReturnType<typeof watchList>[number];
 
-export function createWatches(main: () => Conversation, host: () => Harness, plugins: AlterPlugin[], dispatch: ReturnType<typeof createDispatcher>,
+export function createWatches(main: () => Conversation, host: () => Harness, getPlugins: () => readonly AlterPlugin[], dispatch: ReturnType<typeof createDispatcher>,
   cancellation: ReturnType<typeof createTaskCancellation>, budget: ProactiveBudget, time: ReturnType<typeof calendarTime>, now: () => number) {
   const batchMs = Number(process.env.ALTER_WATCH_BATCH_MS ?? 30_000);
   if (!Number.isSafeInteger(batchMs) || batchMs < 0) throw new Error("ALTER_WATCH_BATCH_MS must be a nonnegative integer");
   const openedAt = now();
-  const source = (where: WatchWhere) => plugins.find(plugin => plugin.capability.id === where.channel)?.watchSource;
+  const source = (where: WatchWhere) => getPlugins().find(plugin => plugin.capability.id === where.channel)?.watchSource;
   async function enqueue(tx: Tx, task: TaskRecord, event: ExternalEvent) {
     const watch = task.watch;
     if (!watch || task.status !== "running" || !matchesWatch(watch, task.createdAt, event)) return;
@@ -83,7 +83,7 @@ export function createWatches(main: () => Conversation, host: () => Harness, plu
       buffer.seen = [];
     }, context);
     const child = await host().conversation(task.conversationId, context);
-    if (child) for (const plugin of plugins) await plugin.onTaskEnd?.(child);
+    if (child) for (const plugin of getPlugins()) await plugin.onTaskEnd?.(child);
   }
 
   type Poll = { end: number; rows: ExternalEvent[] } | { end: number; error: string };

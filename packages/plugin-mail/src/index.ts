@@ -10,7 +10,7 @@ export type { MailClients, MailConnection } from "./client.ts";
 
 const { bool, int, obj, opt, str } = schema;
 const message = obj({ to: str({ description: "One recipient email address" }), subject: str(), text: str() });
-export function createMailPlugin(config: MailConfig, clients: MailClients = defaultClients): AlterPlugin {
+export function createMailPlugin(config: MailConfig, clients: MailClients = defaultClients, connection?: (ok: boolean) => void): AlterPlugin {
   return {
     capability: { id: "mail", mainLeasable: false, actions: [
       { name: "search", effect: "read" }, { name: "read", effect: "read" },
@@ -44,6 +44,8 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
       }),
     ],
     watchSource: mailWatchSource(config, clients),
-    start: host => watchInbox(config, clients, host),
+    start: host => watchInbox(config, clients, host, undefined, connection),
   };
 }
+
+export { mailDescription, mailInstance } from "./settings.ts";

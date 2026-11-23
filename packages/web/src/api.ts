@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, FeishuPairing, Funnel, HeartbeatView, MemoryItem, Snapshot, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, ApprovalStats, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryItem, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -33,6 +33,13 @@ export const api = {
   cancelWatch: (id: string) => request<void>(`/api/watches/${encodeURIComponent(id)}`, { method: "DELETE" }),
   pauseSchedule: (id: string, paused: boolean) => request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body: { paused } }),
   deleteSchedule: (id: string) => request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  plugins: () => request<PluginView[]>("/api/plugins"),
+  updatePlugin: (id: string, patch: PluginPatch) => request<PluginView>(`/api/plugins/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
+  checkPlugin: (id: string) => request<PluginView>(`/api/plugins/${encodeURIComponent(id)}/check`, { body: {} }),
+  feishuGuide: () => request<FeishuGuide>("/api/plugins/feishu/guide"),
+  settings: () => request<Settings>("/api/settings"),
+  updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: patch }),
+  approvalStats: () => request<ApprovalStats>("/api/approvals/stats"),
   heartbeat: () => request<HeartbeatView>("/api/heartbeat"),
   runHeartbeat: () => request<unknown>("/api/heartbeat/run", { body: {} }),
   heartbeatFeedback: (id: string, feedback: "useful" | "useless") =>

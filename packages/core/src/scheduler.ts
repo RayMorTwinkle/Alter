@@ -15,7 +15,7 @@ export type ScheduleItem = {
 // Handlers commit their durable effects through tx, together with the occurrence checkpoint.
 type NextOccurrence = { nextAt: number };
 type Handler = (item: Readonly<ScheduleItem>, tx: Tx, firedAt: number) => void | NextOccurrence | Promise<void | NextOccurrence>;
-export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId }> }>("schedules", () => ({ byId: {} }));
+export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId; window?: string }> }>("schedules", () => ({ byId: {} }));
 const Cancel = defineSignal({ name: "alter.schedule-cancel", version: 1, schema: bool() });
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
@@ -112,7 +112,7 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     if (exists) return;
     await create({ kind, text, daily, at: new Date(time.nextDaily(now(), daily)).toISOString() }, `daily-${kind}`);
   }
-  async function ensureAdaptive(kind: string, text: string, first: number | undefined) {
+  async function ensureAdaptive(kind: string, text: string, first: number | undefined, window = "", reset = false) {
     const id = `adaptive-${kind}`;
     await main().commit(async tx => {
       const { byId } = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
@@ -122,10 +122,14 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
           await tx.signal(existing.worker, Cancel, String(existing.item.at), true);
           existing.item.status = "done";
         }
-      } else if (!existing || existing.item.status === "done") {
+      } else if (!existing || existing.item.status === "done" || (reset && existing.item.status === "cancelled")) {
         const worker = await tx.createTask(tasks.get(kind)!, id, { ownership: { kind: "conversation" }, background: true });
-        byId[id] = { worker, item: { id, kind, text, at: first, createdAt: now(), status: "scheduled" } };
+        byId[id] = { worker, window, item: { id, kind, text, at: first, createdAt: now(), status: "scheduled" } };
+      } else if (existing.item.status === "scheduled" && existing.window !== window && (reset || existing.window !== undefined)) {
+        await tx.signal(existing.worker, Cancel, String(existing.item.at), true);
+        existing.item.at = first;
       }
+      if (existing) existing.window = window;
     }, context);
   }
   function list() {

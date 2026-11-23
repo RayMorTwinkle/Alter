@@ -41,7 +41,7 @@ function timestamp(ms: number) {
 }
 
 export function createScheduledTasks(main: () => Conversation, registry: ReturnType<typeof createRegistry>, timeZone: string,
-  now: () => number, calendar: AlterPlugin["calendarEvents"], services: () => Services) {
+  now: () => number, getCalendar: () => AlterPlugin["calendarEvents"], services: () => Services) {
   const time = calendarTime(timeZone);
   const openedAt = now();
   function next(trigger: Input["trigger"], after: number, base: number) {
@@ -53,6 +53,7 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       }
       case "daily": return time.nextDaily(after, trigger.time, trigger.weekdays);
       case "event": {
+        const calendar = getCalendar();
         if (!calendar) throw new Error("Calendar is unavailable");
         const event = calendar.get(trigger.eventId);
         return event ? timestamp(event[trigger.anchor] + Math.round(trigger.offsetMinutes * minute)) : null;
@@ -110,6 +111,7 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       if (!row) return complete;
       const item = row.item;
       const at = runtime.now();
+      const calendar = getCalendar();
       if (calendar && item.trigger.kind === "event" && item.nextAt !== null) {
         const due = next(item.trigger, at, item.createdAt);
         if (due !== item.nextAt) await setEventTime(tx, item, due);
@@ -178,14 +180,15 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
     }, context);
   }
   async function start() {
+    const calendar = getCalendar();
     function sync(eventId?: string, deleted = false) {
       return main().commit(async tx => {
         const { byId } = await tx.doc(ScheduledTasks, root);
         const changes = [];
         for (const row of Object.values(byId)) {
           const { trigger, nextAt, createdAt } = row.item;
-          if (!calendar || trigger.kind !== "event" || nextAt === null || (eventId && eventId !== trigger.eventId)) continue;
-          const due = deleted ? null : next(trigger, now(), createdAt);
+          if (trigger.kind !== "event" || nextAt === null || (eventId && eventId !== trigger.eventId)) continue;
+          const due = deleted ? null : calendar ? next(trigger, now(), createdAt) : nextAt;
           if (!eventId || due !== nextAt) changes.push({ row, due });
         }
         // Admit every signal read before the first table write, including timeline entries.

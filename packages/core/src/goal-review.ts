@@ -10,7 +10,7 @@ const Reviews = conversationDoc<{ last: Record<string, number> }>("goal-reviews"
 const cooldown = 3 * 86_400_000;
 
 export function registerGoalReview(scheduler: ReturnType<typeof createScheduler>, memory: ReturnType<typeof createMemory>,
-  dispatch: ReturnType<typeof createDispatcher>, budget: ProactiveBudget, timeZone: string, hasBrowser: boolean) {
+  dispatch: ReturnType<typeof createDispatcher>, budget: ProactiveBudget, timeZone: string, hasBrowser: () => boolean) {
   const time = calendarTime(timeZone);
   scheduler.register("goal-review", async (item, tx, at) => {
     const { last } = await tx.doc(Reviews, ROOT_CONVERSATION_ID);
@@ -22,7 +22,7 @@ export function registerGoalReview(scheduler: ReturnType<typeof createScheduler>
       .sort((a, b) => (a.due ?? Infinity) - (b.due ?? Infinity)).slice(0, remaining);
     if (!goals.length) return;
     const funded = await budget.available(at);
-    if (!funded || !hasBrowser) {
+    if (!funded || !hasBrowser()) {
       await addNotification(tx, { id: `${item.id}-${item.at}`, at, kind: "goal", source: "goal", status: "unread",
         level: "silent", title: "已跳过目标复查", body: funded ? "浏览器能力未启用" : budgetExhausted }, day);
       return;

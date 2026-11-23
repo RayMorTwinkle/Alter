@@ -1,4 +1,4 @@
-# Web API 契约（v1.14）
+# Web API 契约（v1.15）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -15,8 +15,8 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 | `ALTER_APPROVAL_DEFAULT_MS` | `60000` | 任务审批的默认等待时间（毫秒） |
 | `ALTER_APPROVAL_MODEL` | `shadow` | 首次启动使用的审批模式，已保存的 settings.json 优先 |
 | `ALTER_WEB_PASSWORD` | 无（必填） | 单用户登录密码 |
-| `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 同时设置以启用飞书机器人入口与用户账号 Connector |
-| `ALTER_FEISHU_REDIRECT_URI` | `http://127.0.0.1:<ALTER_WEB_PORT>/api/feishu/oauth/callback` | 端口默认 4317，与开放平台登记值完全一致 |
+| `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 飞书凭证的环境变量后备值 |
+| `ALTER_FEISHU_REDIRECT_URI` | 当前 Web 访问地址下的 `/api/feishu/oauth/callback` | 与开放平台登记值完全一致 |
 | `ALTER_FEISHU_DOMAIN` | `feishu` | 国际版用 `lark` |
 
 服务端同时托管前端构建产物（`packages/web/dist`），开发时前端用 Vite 代理 `/api`。
@@ -25,7 +25,7 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 
 ### 飞书用户账号
 
-在开放平台自建应用的「安全设置 → 重定向 URL」登记 `http://127.0.0.1:4317/api/feishu/oauth/callback`。浏览器必须能访问此地址。改用其他端口、域名或反向代理时，登记实际回调地址，并将 `ALTER_FEISHU_REDIRECT_URI` 配置为同一值。
+在开放平台自建应用的「安全设置 → 重定向 URL」登记 `http://127.0.0.1:4317/api/feishu/oauth/callback`。浏览器必须能访问此地址。改用其他端口、域名或反向代理时，登记引导接口给出的地址。代理终止 TLS 时，请显式配置公网 HTTPS 回调地址。
 
 在「权限管理」为用户身份开通以下权限并发布版本。授权页按空格分隔请求这六个 scope。
 
@@ -167,7 +167,7 @@ type TranscriptItem =
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
-| `GET` / `PATCH` | `/api/settings` | 返回 `{ approvalModel }`。更新时提交同形对象，值为 `shadow`、`auto` 或 `off`，非法值返回 `400` |
+| `GET` / `PATCH` | `/api/settings` | `Settings`，可分别修改审批模式与巡检，见 v1.15 |
 | `GET` | `/api/approvals/stats` | `{ compared, agreed, agreementRate, deniedButInScope }`。仅统计同时有模型判断和用户决定的请求。一致率为 0–1，没有可对照样本时为 null |
 | `GET` | `/api/stats?range=7d` | `Stats`（v1.11）。需要登录，默认 `7d`。支持 `day`、`7d`、`30d`、`all`；非法、空值或重复参数返回 `400` |
 | `GET` | `/api/heartbeat` | 返回巡检开关、下次时间、自适应间隔、采纳率、当前需求信号及最近 50 条巡检记录，见下文 |
@@ -317,3 +317,29 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 主会话以 `watch({ brief, where: { channel, chatId?, contact? }, until, keywords?, thinking? })` 创建。渠道为 feishu 或 mail。飞书联系人建议使用发送者 open_id，邮件使用发件地址。`until` 接受未来 ISO 时间（无偏移时按用户时区）或从现在起的分钟数。默认 low。观察时段含起点、不含终点。关键词忽略大小写，任意一个子串命中即可。
 
 飞书长连接和收件箱新邮件可直接触发，用户身份飞书历史和 IMAP 收件箱每 60 秒补拉。创建时检查渠道授权。首次命中开启固定合并窗，`ALTER_WATCH_BATCH_MS` 默认为 30000。到期收尾包含尚未交付的批次。重启时已到期的记录直接收尾。主动预算用完时暂存待处理批次，到期仍无余额则失败并记账。统计按 `watch` 记录任务用量，每日主动预算计入实际 token 和每个唤醒批次一次。报告唤醒主会话时 `wakeSource` 为 `watch`。
+
+## 设置与插件（v1.15）
+
+以下接口沿用会话鉴权和 JSON 写入规则。字段类型见 `packages/web/src/types.ts`。
+
+| 方法 | 路径 | 响应 |
+|---|---|---|
+| GET | `/api/plugins` | `PluginView[]`，含四个插件，按 `id` 识别 |
+| PATCH | `/api/plugins/:id` | 提交 `{ enabled?, settings? }`，等待该插件重新初始化后返回完整 `PluginView` |
+| POST | `/api/plugins/:id/check` | 使用 JSON 请求头，重新检查并返回完整 `PluginView` |
+| GET | `/api/plugins/feishu/guide` | `{ permissionsJson, redirectUri, eventsMode: "long-connection", steps }`，权限 JSON 字符串可直接粘贴至开放平台 |
+| GET / PATCH | `/api/settings` | 返回 `{ approvalModel, heartbeat: { enabled, start, end } }`。PATCH 至少提交一个字段，heartbeat 支持部分修改 |
+
+插件视图含 `id, name, provides, settings, enabled, values, status`。三组 `provides.channels/capabilities/sources` 使用标识符数组。Web 为内置渠道。飞书、邮件、浏览器、日历的标识符依次为 `feishu, mail, browser, calendar`。每个表单字段含 `key, label, type, required, help`，select 附 `options`。提交示例：
+
+```json
+{"enabled":true,"settings":{"ALTER_FEISHU_APP_ID":"cli_example","ALTER_FEISHU_APP_SECRET":"example-only"}}
+```
+
+`values` 按字段 key 返回实际使用值。secret 只返回 `{"set":true}` 或 `{"set":false}`。App ID 等普通文本完整返回，未填且无默认值时为 `null`。PATCH 的 `null` 清除本地覆盖，回退到环境变量，再回退到字段默认值。保存的插件字段和开关逐值加密到数据目录的 `secrets.json`，与 32 字节的 `secret.key` 均为 0600。未知插件返回 404，未知字段、非法类型及空补丁返回 400。连接失败时配置仍保存，响应为 200，原因见 `status.detail`。
+
+`status.state` 为 `off | needs-config | connecting | ok | error`，可带 `detail` 和 `checks: { id, label, ok, detail? }[]`。缺少必填项时进入 needs-config。配置就绪后飞书报告凭证、WebSocket、机器人配对和用户授权，邮件分别验证 IMAP 登录与 SMTP，浏览器检查 ego-browser。飞书引导优先使用配置的回调地址，否则从当前 HTTP(S) 请求的访问地址推导；OAuth 授权和换取令牌使用同一地址。
+
+`plugins` SSE 事件携带与 GET 相同的完整数组，首次连接、重连或插件状态变化时发送。客户端整体替换。巡检保存后即时更新原有 `heartbeat` 视图和调度事件。时间使用服务配置的时区，格式为 `HH:MM`，支持跨午夜，起止必须不同；停用后 `nextAt` 为 null。审批模式支持 `shadow / auto / off`。影子一致率与误放次数沿用 `GET /api/approvals/stats` 的 `agreementRate` 与 `deniedButInScope`。
+
+活跃盯梢保留原任务 ID 和拉取进度。邮件或飞书插件重新配置后，下次补拉使用当前插件实例。停用期间拉取失败会记录 `pollError`；在观察期内重新启用并授权后，从上次成功拉取的位置继续。

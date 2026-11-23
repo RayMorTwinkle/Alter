@@ -33,10 +33,11 @@ function section(label: string, lines: string[], count = lines.length) {
 }
 
 export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>, main: () => Conversation,
-  memory: ReturnType<typeof createMemory>, calendar: AlterPlugin | undefined, budget: ProactiveBudget,
-  timeZone: string, config: { enabled: boolean; start: string; end: string }, now: () => number) {
+  memory: ReturnType<typeof createMemory>, calendar: () => AlterPlugin | undefined, budget: ProactiveBudget,
+  timeZone: string, settings: () => { enabled: boolean; start: string; end: string }, now: () => number) {
   const time = calendarTime(timeZone);
   function allowed(at: number) {
+    const config = settings();
     const clock = time.describe(at).label.slice(11, 16);
     const open = config.start < config.end ? clock >= config.start && clock < config.end : clock >= config.start || clock < config.end;
     return open ? at : time.nextDaily(at, config.start);
@@ -57,7 +58,7 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     const facts = items.filter(item => item.kind === "fact").slice(0, 8);
     const memories = Array.from({ length: Math.max(prefs.length, facts.length) }, (_, i) => [prefs[i], facts[i]])
       .flat().filter(item => item !== undefined);
-    const agenda = (calendar?.agenda?.(3) ?? []).filter(e => e.end > at && e.start < at + 24 * hour);
+    const agenda = (calendar()?.agenda?.(3) ?? []).filter(e => e.end > at && e.start < at + 24 * hour);
     const tasks = Object.entries((await tx.doc(Tasks, ROOT_CONVERSATION_ID)).byId).filter(([, t]) => t.status === "running");
     const chat = state.chat ?? [];
     const counts = { goals: goals.length, memories: memories.length, chat: chat.length, agenda: agenda.length,
@@ -73,7 +74,7 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     }
     const busy = (await tx.doc(LiveDoc, ROOT_CONVERSATION_ID)).run || (await tx.doc(InboxDoc, ROOT_CONVERSATION_ID)).items.length;
     if (manual && busy) return result("skipped", "busy");
-    if (!config.enabled || (manual && (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item.status !== "scheduled")) {
+    if (!settings().enabled || (manual && (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item.status !== "scheduled")) {
       return result("skipped", "disabled");
     }
     if (allowed(at) !== at) {
@@ -123,13 +124,18 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
   }
   scheduler.register("heartbeat", async (item, tx, at) => ({ nextAt: (await inspect(tx, at, item.at)).nextAt }));
   return {
-    start: (at: number) => scheduler.ensureAdaptive("heartbeat", "主会话巡检", config.enabled ? allowed(at + base) : undefined),
+    async start(at: number, reset = false) {
+      const config = settings();
+      const state = reset ? await main().commit(async tx => (await tx.doc(Heartbeat, ROOT_CONVERSATION_ID)).history.at(-1)?.intervalMs, context) : undefined;
+      await scheduler.ensureAdaptive("heartbeat", "主会话巡检", config.enabled ? allowed(at + (state ?? base)) : undefined,
+        config.start + "-" + config.end, reset);
+    },
     run: () => main().commit(async tx => (await inspect(tx, now())).run, context),
     feedback: (id: string, feedback: NonNullable<HeartbeatRun["feedback"]>) => main().commit(tx => rateRun(tx, id, feedback), context),
     view: () => main().commit(async tx => {
       const { state, signals } = await inputs(tx, now());
       const item = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item;
-      const enabled = config.enabled && item?.status === "scheduled";
+      const enabled = settings().enabled && item?.status === "scheduled";
       return { enabled, nextAt: enabled ? item.at : null,
         intervalMs: Math.max(2 * hour, Math.min(48 * hour, state.history.at(-1)?.intervalMs ?? base)),
         adoption: state.adoptionRate, signals, runs: await recentRuns(tx) };
