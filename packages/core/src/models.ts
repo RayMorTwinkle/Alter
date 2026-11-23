@@ -225,7 +225,7 @@ export async function createGatewayModels(config: Config) {
     const provider = `alter-${conversation}`;
     const catalog = Array.from(new Set(["chain", ...config[conversation]]), (id): Model<"openai-completions"> => ({
       id, name: id, provider, api: "openai-completions", baseUrl: config.baseUrl,
-      input: ["text"], reasoning: true, contextWindow: 65536, maxTokens: 4096,
+      input: ["text", "image"], reasoning: true, contextWindow: 65536, maxTokens: 4096,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: true, maxTokensField: "max_tokens" },
     }));

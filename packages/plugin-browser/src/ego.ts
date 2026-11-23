@@ -1,18 +1,19 @@
 import { spawn } from "node:child_process";
 
-export type EgoRunner = (script: string) => Promise<string>;
+type RunOptions = { timeoutMs?: number; signal?: AbortSignal };
+export type EgoRunner = (script: string, options?: RunOptions) => Promise<string>;
 
 // When spawned, ego-browser forwards the script's console output on stderr, so both streams carry frames.
 const outputLimit = 4 * 1024 * 1024;
-export const runEgo: EgoRunner = script => new Promise((resolve, reject) => {
-  const child = spawn("ego-browser", ["nodejs"], { stdio: "pipe" });
+export const runEgo: EgoRunner = (script, { timeoutMs = 90_000, signal } = {}) => new Promise((resolve, reject) => {
+  const child = spawn("ego-browser", ["nodejs"], { stdio: "pipe", signal });
   let stdout = "";
   let stderr = "";
   let stdinError: Error | undefined;
   const timeout = setTimeout(() => {
     child.kill("SIGKILL");
-    reject(new Error("ego-browser timed out after 90 seconds"));
-  }, 90_000);
+    reject(new Error(`ego-browser timed out after ${timeoutMs / 1000} seconds`));
+  }, timeoutMs);
   child.stdout.setEncoding("utf8").on("data", chunk => { stdout = (stdout + chunk).slice(-outputLimit); });
   child.stderr.setEncoding("utf8").on("data", chunk => { stderr = (stderr + chunk).slice(-outputLimit); });
   child.once("error", reject);
@@ -28,16 +29,22 @@ export const runEgo: EgoRunner = script => new Promise((resolve, reject) => {
 
 // The CLI can also print notices. Only our single-line JSON frame carries page data.
 const prelude = 'const report = value => console.log("ALTER_BROWSER " + JSON.stringify(value));';
-async function run(runner: EgoRunner, script: string) {
-  const stdout = await runner(prelude + "\n" + script);
+async function run(runner: EgoRunner, script: string, options?: RunOptions) {
+  const stdout = await runner(prelude + "\n" + script, options);
   const frame = stdout.split("\n").findLast(line => line.startsWith("ALTER_BROWSER "));
   if (!frame) throw new Error("Missing ego-browser response");
   return JSON.parse(frame.slice("ALTER_BROWSER ".length));
 }
 
-function existingSpace(id: number, name: string) {
-  return `(await listTaskSpaces()).some(s => s.id === ${JSON.stringify(id)} && s.name === ${JSON.stringify(name)})
-    ? await taskSpace(${JSON.stringify(id)}) : null`;
+function existingSpace(id: number, name: string, cleanup = false) {
+  return `await (async () => {
+    const entry = (await listTaskSpaces()).find(s => s.id === ${JSON.stringify(id)} && s.name === ${JSON.stringify(name)});
+    if (!entry) return null;
+    if (entry.ownership === "user" || entry.ownership === "agentDelegatedToUser") {
+      ${cleanup ? "return null;" : 'throw new Error("Browser control is with the user");'}
+    }
+    return taskSpace(entry.id);
+  })()`;
 }
 
 export async function createSpace(runner: EgoRunner, name: string): Promise<number> {
@@ -46,58 +53,112 @@ export async function createSpace(runner: EgoRunner, name: string): Promise<numb
   return id;
 }
 
+const literal = JSON.stringify;
+
+function historyStep(offset: number) {
+  return `
+    const history = await page().cdp("Page.getNavigationHistory");
+    const entry = history.entries[history.currentIndex + ${offset}];
+    if (!entry) throw new Error("No history entry in that direction");
+    await page().cdp("Page.navigateToHistoryEntry", { entryId: entry.id });
+    await page().waitForLoadState();`;
+}
+
 export const actions = {
   open(url: string) {
     const parsed = URL.parse(url);
     if (!parsed || !["http:", "https:"].includes(parsed.protocol)) throw new Error("Expected an HTTP or HTTPS URL");
-    return `await page.goto(${JSON.stringify(parsed.href)});\nawait page.waitForLoadState();`;
+    return `await page().goto(${literal(parsed.href)}); await page().waitForLoadState();`;
   },
   scroll(direction: "up" | "down") {
-    return `await page.evaluate(d => window.scrollBy(0, (d === "up" ? -1 : 1) * window.innerHeight), ${JSON.stringify(direction)});`;
+    return `await page().evaluate(d => window.scrollBy(0, (d === "up" ? -1 : 1) * window.innerHeight), ${literal(direction)});`;
   },
-  click: (target: string) => `await page.click(${JSON.stringify(target)});`,
-  fill: (target: string, text: string) => `await page.fill(${JSON.stringify(target)}, ${JSON.stringify(text)});`,
-  press: (key: string) => `await page.keyboard.press(${JSON.stringify(key)});`,
+  click: (target: string) => `receipt = await page().click(${literal(target)});`,
+  fill: (target: string, text: string) => `receipt = await page().fill(${literal(target)}, ${literal(text)});`,
+  press: (key: string) => `receipt = await page().keyboard.press(${literal(key)});`,
+  eval: (expression: string) => `
+    const json = JSON.stringify(await page().evaluate(${literal(expression)}));
+    if (json === undefined) throw new Error("Expression must return a JSON value");
+    if (json.length > limit) throw new Error("JSON result exceeds the browser output limit. Return a smaller value.");
+    return json;`,
+  fetch: (url: string, options: { method?: string; headers?: Record<string, string>; body?: string; credentials?: string }) =>
+    `return JSON.stringify(await page().fetch(${literal(url)}, ${literal(options)}));`,
+  screenshot: (path: string) => `await page().screenshot({ path: ${literal(path)} }); return "Viewport screenshot";`,
+  wait(condition: { kind: "selector"; selector: string } | { kind: "function"; expression: string } | { kind: "networkidle" }, timeout: number) {
+    const options = literal({ timeout });
+    switch (condition.kind) {
+      case "selector": return `await page().waitForSelector(${literal(condition.selector)}, { state: "visible", timeout: ${literal(timeout)} });`;
+      case "function": return `await page().waitForFunction(${literal(condition.expression)}, undefined, ${options});`;
+      case "networkidle": return `await page().waitForLoadState("networkidle", ${options});`;
+    }
+  },
+  handoff: (timeout: number) => `
+    await task.handOff();
+    if (await task.waitForControl({ timeout: ${literal(timeout)} }) === false) throw new Error("Timed out waiting for user control");
+    return "User returned control";`,
+  select: (target: string, options: unknown) => `receipt = await page().selectOption(${literal(target)}, ${literal(options)});`,
+  upload: (target: string, paths: string[]) => `receipt = await page().setInputFiles(${literal(target)}, ${literal(paths)});`,
+  dialog(action: "inspect" | "accept" | "dismiss", promptText?: string) {
+    switch (action) {
+      case "inspect": return "return JSON.stringify((await page().info()).dialog ?? null);";
+      case "accept": return `await page().acceptDialog(${literal(promptText)});`;
+      case "dismiss": return "await page().dismissDialog();";
+    }
+  },
+  tabs: `return JSON.stringify((await task.tabs()).map(({ label, targetId, title, url, active, openedBy }) =>
+    ({ label, targetId, title, url, active, openedBy, selected: label === selected })))`,
+  switch: (label: string) => `
+    const next = (await task.pages()).find(p => p.label === ${literal(label)});
+    if (!next) throw new Error("Unknown managed page label");
+    await next.cdp("Page.bringToFront");
+    selected = next.label;`,
+  adopt: (targetId: string) => `
+    const tab = (await task.tabs()).find(t => t.targetId === ${literal(targetId)});
+    if (!tab || tab.label) throw new Error("Expected an unmanaged tab from browser_tabs");
+    const next = await task.adopt(tab.page);
+    selected = next.label;
+    await next.cdp("Page.bringToFront");`,
+  back: historyStep(-1),
+  forward: historyStep(1),
 };
 
-export type View = { text: string; url: string; isError: boolean };
+export type View = { text: string; url: string; isError: boolean; selected: string };
 export function clip(text: string, limit: number) {
   return text.length > limit ? text.slice(0, limit) + "… [truncated]" : text;
 }
 
-export async function view(runner: EgoRunner, name: string, id: number, action: string, limit: number, close = false): Promise<View | null> {
+export async function view(runner: EgoRunner, name: string, id: number, action: string, limit: number,
+  { close = false, label = "p1", ...options }: RunOptions & { close?: boolean; label?: string } = {}): Promise<View | null> {
   const result = await run(runner, `
 const task = ${existingSpace(id, name)};
 if (!task) {
   report(null);
 } else {
-  const limit = ${JSON.stringify(limit)};
+  const limit = ${literal(limit)};
   const clip = text => text.length > limit ? text.slice(0, limit) + "… [truncated]" : text;
-  let url = "", text = "", isError = false;
+  let selected = ${literal(label)}, url = "", text = "", isError = false, receipt;
+  const page = () => task.page(selected);
   try {
-    const page = task.page("p1");
-    try {
-      ${action}
-    } finally {
-      url = clip(await page.url().catch(() => ""));
-    }
-    text = clip(await page.snapshot());
+    const output = await (async () => { ${action} })();
+    const observed = receipt?.dialog ? JSON.stringify({ dialog: receipt.dialog }) : undefined;
+    text = clip(output ?? observed ?? await page().snapshot());
+    try { url = clip(await page().url()); } catch {}
   } catch (error) {
     isError = true;
     text = clip(String(error));
   }
   ${close ? "await task.finish({ keep: [] });" : ""}
-  report({ url, text, isError });
-}`);
+  report({ url, text, isError, selected });
+}`, options);
   if (result === null) return null;
-  if (typeof result?.text !== "string" || typeof result.url !== "string" || typeof result.isError !== "boolean") {
+  if (typeof result?.text !== "string" || typeof result.url !== "string" || typeof result.isError !== "boolean" || typeof result.selected !== "string") {
     throw new Error("Invalid ego-browser page response");
   }
   return result;
 }
 
 export async function finishSpace(runner: EgoRunner, name: string, id: number) {
-  await run(runner, `const task = ${existingSpace(id, name)};
+  await run(runner, `const task = ${existingSpace(id, name, true)};
 if (task) await task.finish({ keep: [] });
 report(true);`);
 }
@@ -142,12 +203,12 @@ function elementAttributes({ selector, focused }: { selector: string; focused: b
   return attributes;
 }
 
-export async function describePage(runner: EgoRunner, name: string, id: number, target?: string, focused = false) {
+export async function describePage(runner: EgoRunner, name: string, id: number, target?: string, focused = false, label = "p1") {
   const result = await run(runner, `
 const task = ${existingSpace(id, name)};
 async function describe() {
   if (!task) return null;
-  const page = task.page("p1");
+  const page = task.page(${literal(label)});
   const { url, title } = await page.info();
   if (!/^https?:\\/\\//i.test(url)) return null;
   let selector = ${JSON.stringify(target ?? "")};
@@ -156,7 +217,7 @@ async function describe() {
     // The root line is generated by ego. Discard the rest of the subtree.
     const tree = await page.snapshot({ scope: "subtree", root: selector, includeStableLocator: true });
     const [header, line] = tree.split("\\n", 2);
-    const root = header.startsWith("[p1 " + JSON.stringify(title) + " | space ") && header.endsWith("]") ? line ?? "" : "";
+    const root = header.startsWith("[" + page.label + " " + JSON.stringify(title) + " | space ") && header.endsWith("]") ? line ?? "" : "";
     const locator = /^\\w+(?: "(?:[^"\\\\]|\\\\.)*")? \\[ref=(\\d+), loc=css:(.+)\\]$/.exec(root);
     selector = locator?.[1] === ref[1] ? locator[2] : "";
   } else if (ref) selector = "";
