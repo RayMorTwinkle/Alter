@@ -32,11 +32,11 @@ it("classifies each browser tool and can be leased by main", () => {
   const registry = createCapabilityRegistry([plugin]);
   expect(Object.fromEntries([...registry.toolActions].filter(([, a]) => a.capability === "browser")
     .map(([name, a]) => [name, a.effect]))).toEqual({
-    browser_open: "read", browser_snapshot: "read", browser_scroll: "read", browser_click: "write-local",
-    browser_fill: "external-send", browser_press: "external-send", browser_close: "read",
-    browser_eval: "external-send", browser_fetch: "external-send", browser_screenshot: "read", browser_wait: "external-send",
-    browser_handoff: "write-local", browser_select: "external-send", browser_upload: "external-send", browser_dialog: "external-send",
-    browser_tabs: "read", browser_switch: "read", browser_adopt: "write-local", browser_back: "write-local", browser_forward: "write-local",
+    browser_open: "write", browser_snapshot: "read", browser_scroll: "read", browser_click: "write",
+    browser_fill: "write", browser_press: "write", browser_close: "read",
+    browser_eval: "write", browser_fetch: "write", browser_screenshot: "read", browser_wait: "write",
+    browser_handoff: "write", browser_select: "write", browser_upload: "write", browser_dialog: "write",
+    browser_tabs: "read", browser_switch: "read", browser_adopt: "write", browser_back: "write", browser_forward: "write",
   });
 });
 

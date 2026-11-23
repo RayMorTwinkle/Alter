@@ -11,13 +11,13 @@
 | 后台任务 | `tx.createTask({ background: true })`、`tx.createConversation`、`tx.forkConversation` | 后台任务拥有子会话。fresh 只给任务说明，fork 在派单事务内用 `latestEntryId` 确定分支点。两种模式都显式配置任务工具。 |
 | 任务完成与回投 | `defineDoc`、`ConversationHandle.submit(tx, …)`、`control.terminate` | `finish` 校验摘要与引用，把账本、完成状态和主会话 follow-up 放入同一笔事务。回投使用稳定的请求 ID，重放时不会多生成一条报告。 |
 | 等待与恢复 | `SubmissionSettled`、`notify`、`Harness.resume()` | 派单工具立即返回任务 ID。后台任务提交 brief 后休眠，收到子会话结算信号再检查是否成功收尾。重开 SQLite 后，宿主重新安装同名扩展并调用 `resume()` 即可恢复。 |
-| 审批与审计 | `hook(ToolTask, { beforeTool })`、`defineSignal`、`tx.signal` | Broker 记录工具、动作、等级和裁决。需要审批时保存请求，再让工具调用在自己的信号上休眠。restricted 通知主会话；auto 的高风险调用等待宿主通过 `answerUserPermission` 答复。 |
+| 审批与审计 | `hook(ToolTask, { beforeTool })`、`defineSignal`、`tx.signal` | Broker 记录工具、动作、等级和裁决。需要审批时保存请求，再让工具调用在自己的信号上休眠。转问用户时等待宿主通过 `answerUserPermission` 答复。 |
 | 租约 | 会话 document、`beforeTool`、`afterRun`、`configure` | 日历任一工具被调用都会刷新整个日历租约。轮次按主会话完成的一次 run 计，同一 run 内的多次模型请求合算一轮。连续 30 轮未用后，下一轮请求中移除日历的全部 schema。 |
 
 ## 实现中影响设计的细节
 
 - `HookApi` 能读信号和快照，但没有通用的文档写事务。Broker 使用主会话的 `commit`，把待审批记录、挂起审计和发给主会话的通知一起提交。信号允许早于休眠到达。唤醒会重跑整个钩子，用持久化工具任务 ID 区分各次调用，也避免重复通知和审计。
-- restricted 下，直接调用未授权工具时，批准只放行那一次。显式调用 `request_capability` 获批后，将能力加入该任务的允许清单。auto 下的每个对外发送都单独问用户。主会话拿到用户审批的请求 ID 也无法代答。
+- 只读直接执行。写操作由审批模型对照权限说明判断，不可逆操作询问用户，全权限任务可执行不可逆操作。用户选择单次批准、本任务全权限或拒绝。
 - `beforeRequest` 只能改消息。主会话在启用能力时立即改写 `modelTools`，因此同一 run 的下一次模型请求就能使用日历。每轮结束时，由 `afterRun` 的子任务在一笔事务中推进轮次、清理租约并重算工具列表。运行时会等它完成，再处理排队的 follow-up。
 - pi 仅在同一批工具调用都要求终止时响应 `control.terminate`。因此 `finish` 须单独调用。`onYield` 遇到普通文字回答时启动持久化检查任务，最多提醒三次。超过次数后通知主会话任务失败，账本只收入通过 `finish` 校验的成功记录。每段工具循环另有 40 轮上限。
 - 安装包和本地源码示例有签名差异。例如安装版信号状态使用 `value` 或 `expired` 字段，事务内接纳输入使用 `submit(tx, draft)`。实现以安装包的 dist 类型和实际行为为准。pi-durable 的导入集中在 `src/runtime.ts`。
@@ -126,7 +126,7 @@ const app = await openAlter(storage, models, mainModel, taskModel, thinking, { p
 
 - 每条 IMAP 连接都在握手前设置 ImapFlow 的 `clientInfo`。2.12.2 在服务端声明支持 ID 时发送 RFC 2971 命令，可在认证前发送，也可在认证后补发。内存传输测试检查了线上协议格式，真实账号仍须确认能通过 163 的 Unsafe Login 检查。
 - 通过 IMAP 特殊用途标记寻找 Sent 与 Drafts。未提供标记时分别使用“已发送”和“草稿箱”。草稿通过带 `\\Draft` 标记的 APPEND 保存；搜索默认最多返回最新 20 条，可指定 1 至 50 条。
-- `mail_read` 按 INBOX UID 读取信封头和 MIME 结构，优先取纯文本，HTML 通过 mailparser 转成文本。正文最多取 64 KiB 解码数据，输出最多 16,000 个 UTF-16 码元。附件只取名称、类型、大小。搜索和读取结果逐封加上 `<external source="mail" uid="…">` 边界，转义邮件中的尖括号，并附 `details.untrusted` 与 `details.source` 供后续污点追踪使用。
+- `mail_read` 按 INBOX UID 读取信封头和 MIME 结构，优先取纯文本，HTML 通过 mailparser 转成文本。正文最多取 64 KiB 解码数据，输出最多 16,000 个 UTF-16 码元。附件只取名称、类型、大小。搜索和读取结果逐封加上 `<external source="mail" uid="…">` 边界，转义邮件中的尖括号，并附 `details.untrusted` 与 `details.source` 标明结果来源。
 - IDLE 使用独立的只读 INBOX 连接。首次打开以 UIDNEXT 为起点；收到 EXISTS 后按 UID 补取，每封邮件写一条带发件人、主题和 `INBOX/UIDVALIDITY/UID` 引用的事件。断线后按 1 至 60 秒退避，并使用内存中的游标补取。进程重启或 UIDVALIDITY 改变会重新建立起点；这两个间隔中的邮件可用 `mail_search` 查询。
 
 ### 发送恢复与风险
@@ -148,7 +148,7 @@ SMTP 接收、Sent 归档和本地事务无法原子提交。服务器延迟生�
 ### ego 浏览器插件（#5）
 
 Web 服务默认注册 `browser`，设置 `ALTER_BROWSER=off` 可关闭。主会话通过派单使用它。每个任务会话使用名为 `Alter <conversationId>` 的 ego TaskSpace 和页面 `p1`。`alter.browser-space` 文档保存空间编号。若空间已被关闭，下次操作会重新创建。
-打开、读取快照和滚动为 `read`，点击和关闭为 `write-local`，填写与按键为 `external-send`。打开页面后，即使任务为 full，填写与按键也须用户批准。点击本身可能触发表单提交，按 ADR-0008 的决定放行。
+读取快照、滚动和关闭为 `read`。打开网址、点击、填写和按键为 `write`，由审批模型核对权限说明。
 
 页面快照和错误消息均经过转义，默认保留前 12,000 个字符，带浏览器来源与不可信标记。`browser_close` 返回关闭前的最后一个视口。后台任务结束或中止时，宿主调用插件可选的 `onTaskEnd` 回收空间。进程正常停止时，插件也会尝试关闭仍在使用的空间。真机冒烟入口为 `pnpm -C packages/plugin-browser live`。
 
@@ -156,7 +156,7 @@ Web 服务默认注册 `browser`，设置 `ALTER_BROWSER=off` 可关闭。主会
 
 Web 服务默认加载 `@alter/plugin-calendar`。插件启动时打开 `<ALTER_DATA_DIR>/calendar.sqlite`，停止时关闭连接。同名插件整组替换示例能力的清单与工具。CLI 与租约评测沿用仅存标题的内存示例，评测仍可通过 `app.demo.calendar` 预置和检查日程。
 
-- 主会话可用 `enable_tool calendar` 租用日历。查询属于 `read`，创建、更新、软删除和恢复均属于 `write-local`。日程是用户本地数据。
+- 主会话可用 `enable_tool calendar` 租用日历。查询属于 `read`，创建、更新、软删除和恢复均属于 `write`。日程是用户本地数据。
 - 起止时间存为 UTC 毫秒，分别保留传入的偏移或解释时间时使用的时区。工具按 `ALTER_TZ` 返回本地时间、星期和带偏移的 ISO 时间。默认时区为 `Asia/Shanghai`。夏令时回拨出现两个相同钟面时间时默认取较早一次，显式偏移可指定另一次。输入落在向前拨钟跳过的时段时，工具会报错。
 - 查询返回与左闭右开区间重叠的日程，按开始时间排序。默认范围从本地今天零点至第七天后的零点。定时日程默认一小时，全天日程以本地日期为单位，结束日期为排他边界。更新只改提供的字段，移动至另一日期时同时传起止时间。新建或更新成功的结果含 `conflicts` 列表，已删除和首尾相接的日程均不计入冲突。
 - 用户消息在提交时、任务 brief 在派单时固定时间前缀。模型收到的内容带前缀，条目 `data.text` 保存原文。Web 的排队回显、历史时间线及任务转录读取原文，旧条目回退到已有正文。派单记录也保留原 brief。

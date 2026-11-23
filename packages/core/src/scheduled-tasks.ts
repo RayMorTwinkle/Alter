@@ -232,8 +232,8 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
     return async () => { stop?.(); await pending; };
   }
   const actions: Capability["actions"] = [
-    { name: "create", effect: "write-local", guarded: true }, { name: "list", effect: "write-local" },
-    { name: "set", effect: "write-local", guarded: true },
+    { name: "create", effect: "write" }, { name: "list", effect: "write" },
+    { name: "set", effect: "write" },
   ];
   const tools = [
     defineTool({ name: "schedule_create", description: "Create a reminder (notify directly), task (dispatch a worker), or wake (ask main). Only task accepts continue_from. Event offsets are signed minutes.",

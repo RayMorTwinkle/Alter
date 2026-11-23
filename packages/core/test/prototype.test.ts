@@ -19,7 +19,6 @@ import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
 import { stats } from "../src/stats.ts";
-import { Taint } from "../src/taint.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
 import { observeSurface, stopMainTurn } from "../src/observe.ts";
 import { unescapeNewlines } from "../src/tasks.ts";
@@ -44,9 +43,10 @@ function finish(summary: string) {
   return call("finish", { summary, refs: [] });
 }
 async function open(route: Route, storage: Storage = new MemoryStorage(), plugins: AlterPlugin[] = [], approvalTimeoutMs?: number,
-  clock: { timeZone?: string; now?: () => number } = {}, demos?: boolean) {
+  clock: { timeZone?: string; now?: () => number } = {}, demos?: boolean, judgeReply?: (text: string) => AssistantMessage) {
   const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
   faux.setResponses(Array.from({ length: 160 }, () => ({ messages }, options) => {
+    if (options?.metadata?.alterConversation === "judge") return judgeReply?.(contentText(messages.at(-1)!.content)) ?? say('{"inScope":true,"reason":"符合用户要求"}');
     const tools = new Set<string>();
     for (const msg of messages) {
       if (msg.role !== "system") continue;
@@ -66,6 +66,10 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
 async function input(app: Alter, content: string) {
   const submission = await app.main.submit({ type: "input", content }, context);
   expect((await submission.wait(context)).status).toBe("done");
+  await app.main.waitForIdle(context);
+}
+async function userInput(app: Alter, text: string) {
+  await submitMessage(app.main, text);
   await app.main.waitForIdle(context);
 }
 async function ledger(app: Alter) {
@@ -391,13 +395,13 @@ it("renews the calendar lease on use and expires it at thirty idle turns", async
     if (last.role === "toolResult" && last.toolName === "calendar_create") eventId = text;
     return say("OK");
   });
-  await input(app, "calendar please");
-  await input(app, "create");
+  await userInput(app, "calendar please");
+  await userInput(app, "create");
   for (let i = 1; i <= 29; i++) await input(app, `before update ${i}`);
-  await input(app, "update");
+  await userInput(app, "update");
   expect(app.demo.calendar.get(eventId)).toBe("review");
   for (let i = 1; i <= 30; i++) await input(app, `after update ${i}`);
-  await input(app, "outbox please");
+  await userInput(app, "outbox please");
   await input(app, "final");
   const withCalendar = [...controls, "calendar_create", "calendar_list", "calendar_update"].sort();
   expect(offers.get("calendar please")).toEqual(controls);
@@ -407,7 +411,7 @@ it("renews the calendar lease on use and expires it at thirty idle turns", async
   expect(offers.get("final")).toEqual([...controls, "outbox_send"].sort());
 });
 
-it("allows auto local writes and accepts only a host decision for an external send", async () => {
+it("parks local writes and accepts only a host decision for an external send", async () => {
   let requestId = "";
   let mainResult = "";
   let status = "";
@@ -423,6 +427,9 @@ it("allows auto local writes and accepts only a host decision for an external se
     return say("OK");
   });
   await input(app, "delegate");
+  const create = await parked(app);
+  expect(create.tool).toBe("calendar_create");
+  await answerUserPermission(app.main, { requestId: create.id, decision: "once" });
   const request = await parked(app);
   requestId = request.id;
   expect(request.audience).toBe("user");
@@ -439,8 +446,8 @@ it("allows auto local writes and accepts only a host decision for an external se
   expect(app.demo.outbox).toEqual(["invitation"]);
   const audit = (await app.harness.snapshot(Audit, app.main.id, context))!.entries;
   expect(audit.map(({ action, effect, decision }) => [action, effect, decision])).toEqual([
-    ["create", "write-local", "allow"], ["send", "external-send", "park"],
-    ["send", "external-send", "allow"], ["finish", "write-local", "allow"],
+    ["create", "write", "park"], ["create", "write", "allow"], ["send", "write", "park"],
+    ["send", "write", "allow"], ["finish", "write", "allow"],
   ]);
 });
 
@@ -538,10 +545,10 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
   expect([...mail.sent.keys()]).toEqual([(await ledger(app))[0]!.summary]);
   expect(mail.clients.smtp).toHaveBeenCalledTimes(1);
   expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries.filter(e => e.tool === "mail_send")
-    .map(e => [e.effect, e.decision])).toEqual([["external-send", "park"], ["external-send", "allow"]]);
+    .map(e => [e.effect, e.decision])).toEqual([["write", "park"], ["write", "allow"]]);
 });
 
-it.each(["restricted", "full"] as const)("opens and clicks, then parks a tainted browser fill in %s mode", async permission => {
+it.each(["restricted", "full"] as const)("requires approval before opening, clicking and filling in %s mode", async permission => {
   const ego = fakeEgo();
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("browse", permission);
@@ -554,20 +561,26 @@ it.each(["restricted", "full"] as const)("opens and clicks, then parks a tainted
     return say("OK");
   }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
   await input(app, "delegate");
+  const navigation = await parked(app);
+  expect(navigation).toMatchObject({ audience: "user", tool: "browser_open" });
+  expect(ego.page.goto).not.toHaveBeenCalled();
+  await answerUserPermission(app.main, { requestId: navigation.id, decision: "once" });
   const request = await parked(app);
-  expect(request).toMatchObject({ audience: "user", tool: "browser_fill", tainted: true,
-    taint: { capability: "browser", source: "browser_open" } });
+  expect(request.tool).toBe("browser_click");
+  await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
+  const fill = await parked(app);
+  expect(fill).toMatchObject({ audience: "user", tool: "browser_fill" });
   expect(ego.page.goto).toHaveBeenCalledOnce();
   expect(ego.page.click).toHaveBeenCalledOnce();
   expect(ego.page.fill).not.toHaveBeenCalled();
-  await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
+  await answerUserPermission(app.main, { requestId: fill.id, decision: "once" });
   await expect.poll(() => ego.finish.mock.calls.length).toBe(1);
   expect(ego.page.fill).toHaveBeenCalledWith("@22", "hello");
   expect(ego.spaces.size).toBe(0);
   expect((await ledger(app))[0]?.summary).toBe("browsed");
 });
 
-it.each(["eval", "fetch"] as const)("requires approval before browser_%s executes on a tainted full-permission task", async action => {
+it.each(["eval", "fetch"] as const)("requires approval before browser_%s executes on a full-permission task", async action => {
   const ego = fakeEgo();
   const tool = "browser_" + action;
   const app = await open((text, last) => {
@@ -581,7 +594,7 @@ it.each(["eval", "fetch"] as const)("requires approval before browser_%s execute
   }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
   await input(app, "delegate");
   const request = await parked(app);
-  expect(request).toMatchObject({ tool, audience: "user", tainted: true, taint: { source: "browser_snapshot" } });
+  expect(request).toMatchObject({ tool, audience: "user" });
   await answerUserPermission(app.main, { requestId: request.id, decision: "deny" });
   await expect.poll(() => ego.finish.mock.calls.length).toBe(1);
   expect(ego.page[action === "eval" ? "evaluate" : "fetch"]).not.toHaveBeenCalled();
@@ -614,8 +627,8 @@ it("closes the browser space when a parked task is aborted", async () => {
   const ego = fakeEgo();
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("browse", "restricted");
-    if (text === "browse") return call("browser_open", { url: "https://example.test/" });
-    if (last.role === "toolResult" && last.toolName === "browser_open") return call("browser_press", { key: "Enter" });
+    if (text === "browse") return call("browser_snapshot", {});
+    if (last.role === "toolResult" && last.toolName === "browser_snapshot") return call("browser_press", { key: "Enter" });
     return say("OK");
   }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
   await input(app, "delegate");
@@ -624,6 +637,8 @@ it("closes the browser space when a parked task is aborted", async () => {
     const task = (await tx.doc(Tasks, app.main.id)).byId[request.taskId]!;
     return (await tx.conversation(task.conversationId))!.owner!.taskId;
   }, context);
+  expect(request.tool).toBe("browser_press");
+  expect(ego.spaces.size).toBe(1);
   await app.harness.abortTask(owner, context);
   await app.harness.waitForTask(owner, context);
   expect(ego.spaces.size).toBe(0);
@@ -710,8 +725,8 @@ it("unescapes newlines only when a summary has none", () => {
 });
 
 function externalPlugin() {
-  const actions = [{ name: "send", effect: "external-send" }, { name: "delete", effect: "irreversible" },
-    { name: "run", effect: "unknown" }] as const;
+  const actions = [{ name: "send", effect: "write" }, { name: "delete", effect: "irreversible" },
+    { name: "run", effect: "irreversible" }] as const;
   const execute = vi.fn(async () => reply("executed"));
   const plugin: AlterPlugin = {
     capability: { id: "remote", mainLeasable: true, actions: [{ name: "read", effect: "read" }, ...actions] },
@@ -724,11 +739,11 @@ function externalPlugin() {
   return { plugin, execute };
 }
 
-it.each(["send", "delete", "run"])("requires user approval for a tainted full task's remote_%s", async action => {
+it.each(["send", "delete", "run"])("requires user approval for a restricted task's remote_%s", async action => {
   const { plugin, execute } = externalPlugin();
   const tool = "remote_" + action;
   const app = await open((text, last) => {
-    if (text === "delegate") return dispatch("read then act", "full");
+    if (text === "delegate") return dispatch("read then act", "restricted");
     if (text === "read then act") return call("remote_read", {});
     if (last.role === "toolResult") {
       if (last.toolName === "remote_read") return call(tool, {});
@@ -740,72 +755,31 @@ it.each(["send", "delete", "run"])("requires user approval for a tainted full ta
   cleanup.push(async () => surface.detach());
   await input(app, "delegate");
   const request = await parked(app);
-  expect(request).toMatchObject({ audience: "user", tool, tainted: true,
-    taint: { source: "remote_read", capability: "remote", at: expect.any(Number) } });
-  expect(surface.snapshot().pending).toMatchObject([{ id: request.id, tainted: true, taint: request.taint }]);
+  expect(request).toMatchObject({ audience: "user", tool });
+  expect(surface.snapshot().pending).toMatchObject([{ id: request.id }]);
   expect(surface.snapshot().tasks[0]?.pending).toEqual(surface.snapshot().pending);
   expect(execute).not.toHaveBeenCalled();
   expect((await app.harness.snapshot(Audit, app.main.id, context))?.entries).toContainEqual(
-    expect.objectContaining({ tool, decision: "park", tainted: true }));
+    expect.objectContaining({ tool, decision: "park" }));
   await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
   await expect.poll(async () => (await ledger(app)).map(e => e.summary)).toEqual(["executed"]);
   expect(execute).toHaveBeenCalledTimes(1);
 });
 
-it("propagates a mail report to main and into both fork and fresh tasks across SQLite reopens", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "alter-taint-"));
-  cleanup.push(() => rm(dir, { recursive: true, force: true }));
-  const storage = () => openNodeSqliteStorage(join(dir, "main.sqlite"));
-  const plugin = createMailPlugin(mailConfig, fakeMail().clients);
-  const route: Route = (text, last) => {
-    if (text === "read mail") return dispatch("search mail", "full");
-    if (text === "search mail") return call("mail_search", {});
-    if (last.role === "toolResult" && last.toolName === "mail_search") return finish("mail report");
-    if (text === "fork" || text === "fresh") return dispatch("send report", "full", text);
-    if (text === "send report") return call("outbox_send", { message: "report" });
-    if (last.role === "toolResult" && last.toolName === "outbox_send") return finish(text);
-    return say("OK");
-  };
-  const first = await open(route, await storage(), [plugin]);
-  await input(first, "read mail");
-  await expect.poll(async () => (await ledger(first)).length).toBe(1);
-  await first.main.waitForIdle(context);
-  const source = (await first.harness.snapshot(Taint, first.main.id, context))?.first;
-  expect(source).toEqual({ source: "mail_search", capability: "mail", at: expect.any(Number) });
-  await input(first, "fork");
-  const forked = await parked(first);
-  expect(forked).toMatchObject({ audience: "user", tainted: true, taint: source });
-  await first.close();
-  const app = await open(route, await storage(), [plugin]);
-  app.harness.resume();
-  const tasks = (await app.harness.snapshot(Tasks, app.main.id, context))!.byId;
-  for (const id of [app.main.id, ...Object.values(tasks).map(task => task.conversationId)]) {
-    expect((await app.harness.snapshot(Taint, id, context))?.first).toEqual(source);
-  }
-  expect(await parked(app)).toEqual(forked);
-  await answerUserPermission(app.main, { requestId: forked.id, decision: "deny" });
-  await expect.poll(async () => (await ledger(app)).length).toBe(2);
-  await input(app, "fresh");
-  expect(await parked(app)).toMatchObject({ audience: "user", tool: "outbox_send", tainted: true, taint: source });
-  expect(app.demo.outbox).toEqual([]);
-});
-
-it("gates a leased main tool after an external result, including when the user stops the turn", async () => {
+it("gates individual leased writes with the model off and withdraws a stopped turn", async () => {
   const { plugin, execute } = externalPlugin();
   const app = await open(text => {
-    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "use remote" });
-    if (text === "read") return call("remote_read", {});
+    if (text === "lease") return call("enable_tool", { capability: "remote", action: "send", reason: "use remote" });
     if (text === "send") return call("remote_send", {});
     return say("OK");
   }, new MemoryStorage(), [plugin]);
-  await input(app, "lease");
-  await input(app, "send");
+  await userInput(app, "lease");
+  await userInput(app, "send");
+  app.settings.set("off");
   expect(execute).toHaveBeenCalledTimes(1);
-  await input(app, "read");
   await app.main.submit({ type: "input", content: "send" }, context);
   const req = await parked(app);
-  expect(req).toMatchObject({ taskId: "main", audience: "user", tool: "remote_send", tainted: true,
-    taint: { source: "remote_read" } });
+  expect(req).toMatchObject({ taskId: "main", audience: "user", tool: "remote_send" });
   expect(execute).toHaveBeenCalledTimes(1);
   await answerUserPermission(app.main, { requestId: req.id, decision: "once" });
   await app.main.waitForIdle(context);
@@ -817,7 +791,7 @@ it("gates a leased main tool after an external result, including when the user s
   expect(execute).toHaveBeenCalledTimes(2);
 });
 
-it("leases read actions directly and gates both a tainted send lease and its concrete call", async () => {
+it("leases read actions directly and gates both a send lease and its concrete call", async () => {
   const { plugin, execute } = externalPlugin();
   plugin.capability.mainLeasable = false; // Pre-#95 manifest.
   const dir = await mkdtemp(join(tmpdir(), "alter-lease-stats-"));
@@ -830,16 +804,16 @@ it("leases read actions directly and gates both a tainted send lease and its con
     if (text === "child") return finish("done");
     return say("OK");
   }, new MemoryStorage(), [plugin]);
-  app.settings.set("auto");
+  app.settings.set("on");
   const query = async () => (await stats("all", "UTC", { app, dir })).leases;
-  expect(await query()).toEqual({ count: 0, taintedRate: null, dispatchAfterLeaseRate: null, byTool: {}, items: [] });
+  expect(await query()).toEqual({ count: 0, dispatchAfterLeaseRate: null, byTool: {}, items: [] });
   await input(app, "rent read");
   await input(app, "read");
   await input(app, "rent read");
   async function decide(input: string, tool: string, decision: "once" | "deny") {
     await app.main.submit({ type: "input", content: input }, context);
     const request = await parked(app);
-    expect(request).toMatchObject({ taskId: "main", tool, reason: "rent send", tainted: true, taint: { source: "remote_read" } });
+    expect(request).toMatchObject({ taskId: "main", tool, reason: "rent send" });
     if (tool === "enable_tool") expect(JSON.parse(request.argumentsJson)).toMatchObject({ capability: "remote", action: "send" });
     expect((await answerUserPermission(app.main, { requestId: request.id, decision })).isError).toBe(false);
     await app.main.waitForIdle(context);
@@ -855,39 +829,16 @@ it("leases read actions directly and gates both a tainted send lease and its con
   expect(execute).toHaveBeenCalledTimes(1);
   await input(app, "delegate");
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
-  await expect.poll(async () => (await stats("all", "UTC", { app, dir })).approvals.shadow.compared).toBe(2);
+  await expect.poll(async () => (await stats("all", "UTC", { app, dir })).approvals.askedUser).toBe(4);
   const result = await query();
   expect(result.items.find(item => item.approved)?.useWakeIds).toHaveLength(1);
-  expect(result).toMatchObject({ count: 3, taintedRate: 2 / 3, dispatchAfterLeaseRate: 2 / 3,
+  expect(result).toMatchObject({ count: 3, dispatchAfterLeaseRate: 2 / 3,
     byTool: { remote_read: 2, remote_send: 1 } });
   expect(result.items).toEqual(expect.arrayContaining([
-    expect.objectContaining({ reason: "rent read", tainted: false, approved: false, calls: 1, succeeded: 1, dispatched: false }),
-    expect.objectContaining({ reason: "rent read", tainted: true, approved: false, calls: 0, dispatched: true }),
+    expect.objectContaining({ reason: "rent read", approved: false, calls: 1, succeeded: 1, dispatched: false }),
+    expect.objectContaining({ reason: "rent read", approved: false, calls: 0, dispatched: true }),
     expect.objectContaining({ tools: ["remote_send"], approved: true, calls: 1, succeeded: 1, failed: 0, dispatched: true }),
   ]));
-});
-
-it("withholds an external result if its taint cannot be persisted", async () => {
-  const observed: string[] = [];
-  const plugin: AlterPlugin = {
-    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "read", effect: "read" }] },
-    tools: [defineTool({ name: "fixture_read", description: "Read external data", parameters: obj({}), execute: async () => {
-      vi.spyOn(app.main, "commit").mockRejectedValueOnce(new Error("storage unavailable"));
-      return { ...reply("untracked content"), details: { untrusted: true } };
-    } })],
-  };
-  const app: Alter = await open((text, last) => {
-    if (text === "delegate") return dispatch("read", "full");
-    if (text === "read") return call("fixture_read", {});
-    if (last.role === "toolResult" && last.toolName === "fixture_read") {
-      observed.push(text);
-      return finish(text);
-    }
-    return say("OK");
-  }, new MemoryStorage(), [plugin]);
-  await input(app, "delegate");
-  await expect.poll(async () => (await ledger(app)).length).toBe(1);
-  expect(observed).toEqual(["External content withheld because its source could not be recorded"]);
 });
 
 it("leases only the installed calendar tools and creates a timed event in the same main turn", async () => {
@@ -1018,18 +969,18 @@ it("validates model-written titles and reserves pending status for automatic goa
     if (last.role === "toolResult") errors.push(last.isError);
     return say("OK");
   });
-  await input(app, "long");
-  await input(app, "expired");
-  await input(app, "completed");
+  await userInput(app, "long");
+  await userInput(app, "expired");
+  await userInput(app, "completed");
   expect(errors).toEqual([true, true, false]);
   expect(app.memory.store.view().entries).toMatchObject([{ title: "考研", status: "done" }]);
 });
 
-it("lets a tainted main search memory but requires a separate user decision for each write", async () => {
+it("lets a main search memory but requires a separate user decision for each write", async () => {
   let id = "";
   const app = await open((text, last) => {
     if (last.role !== "user") return say("OK");
-    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "read" });
+    if (text === "lease") return call("enable_tool", { capability: "remote", action: "read", reason: "read" });
     if (text === "read") return call("remote_read", {});
     if (text === "search") return call("memory_search", { query: "考试" });
     if (text.endsWith("write")) return call("memory_write", { op: "add", type: "goal", title: "考试", body: "考试" });
@@ -1042,8 +993,7 @@ it("lets a tainted main search memory but requires a separate user decision for 
   for (const action of ["write", "update", "delete"]) {
     await app.main.submit({ type: "input", content: action }, context);
     const request = await parked(app);
-    expect(request).toMatchObject({ taskId: "main", audience: "user", tool: action === "delete" ? "memory_delete" : "memory_write",
-      tainted: true, taint: { source: "remote_read" } });
+    expect(request).toMatchObject({ taskId: "main", audience: "user", tool: action === "delete" ? "memory_delete" : "memory_write" });
     expect(app.memory.list().map(item => item.text)).toEqual(action === "write" ? [] : [action === "update" ? "考试" : "参加考试"]);
     await answerUserPermission(app.main, { requestId: request.id, decision: action === "delete" ? "deny" : "once" });
     await app.main.waitForIdle(context);
@@ -1052,12 +1002,12 @@ it("lets a tainted main search memory but requires a separate user decision for 
   expect(app.memory.list()).toMatchObject([{ id, text: "参加考试" }]);
 });
 
-it("offers schedules without leases and parks tainted reminder creation and cancellation for the user", async () => {
+it("offers schedules without leases and parks reminder creation and cancellation for the user", async () => {
   let id = "";
   const at = Date.parse("2026-11-22T03:00Z");
   const app = await open((text, last) => {
     if (last.role !== "user") return say("OK");
-    if (text === "lease") return call("enable_tool", { capability: "remote", reason: "read" });
+    if (text === "lease") return call("enable_tool", { capability: "remote", action: "read", reason: "read" });
     if (text === "read") return call("remote_read", {});
     if (text === "list") return call("schedule_list", {});
     if (text === "create") return call("schedule_create", { type: "reminder", brief: "回电话", trigger: { kind: "daily", time: "11:30" } });
@@ -1065,12 +1015,13 @@ it("offers schedules without leases and parks tainted reminder creation and canc
   }, new MemoryStorage(), [externalPlugin().plugin], undefined, { now: () => at }, false);
   await input(app, "lease");
   await input(app, "read");
-  await input(app, "list");
+  await userInput(app, "list");
+  app.settings.set("off");
   const reminders = async () => app.schedules.list();
   for (const action of ["create", "set"]) {
     await app.main.submit({ type: "input", content: action }, context);
     const request = await parked(app);
-    expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action, tainted: true });
+    expect(request).toMatchObject({ audience: "user", taskId: "main", tool: "schedule_" + action });
     expect((await reminders()).map(item => item.type)).toEqual(action === "create" ? [] : ["reminder"]);
     await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
     await app.main.waitForIdle(context);
@@ -1079,7 +1030,7 @@ it("offers schedules without leases and parks tainted reminder creation and canc
   expect(await reminders()).toEqual([]);
 });
 
-it("continues an ended conversation with its history and taint", async () => {
+it("continues an ended conversation with its history", async () => {
   let original = "";
   let sawHistory = false;
   let conflict = "";
@@ -1108,7 +1059,7 @@ it("continues an ended conversation with its history and taint", async () => {
   expect(conflict).toContain("omit");
   await input(app, "resume");
   const req = await parked(app);
-  expect(req).toMatchObject({ tool: "remote_send", tainted: true, taint: { source: "remote_read" } });
+  expect(req).toMatchObject({ tool: "remote_send" });
   expect(sawHistory).toBe(true);
   const tasks = (await app.harness.snapshot(Tasks, app.main.id, context))!.byId;
   expect(tasks[original]).toMatchObject({ status: "completed", thinking: "high" });
@@ -1277,23 +1228,24 @@ it.each(["exact limit", "over limit", "failed"])("keeps the review usable with p
     return { title: scenario === "exact limit" ? title : title + "!" };
   });
   const plugin: AlterPlugin = {
-    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "send", effect: "external-send" }] },
+    capability: { id: "fixture", mainLeasable: false, actions: [{ name: "send", effect: "write" }] },
     tools: [defineTool({ name: tool, description: "send", parameters: obj({ message: str() }), execute: executed })], describe,
   };
+  const statement = [{ tool, target: "team", purpose: "update" }];
   const payloads: unknown[] = [];
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("send");
-    if (text === "send") return call(tool, args);
-    if (text.startsWith('{"statement":')) {
-      payloads.push(JSON.parse(text));
-      return say('{"inScope":false,"reason":"请核对"}');
-    }
+    if (text === "send") return call("declare_permissions", { items: statement });
+    if (last.role === "toolResult" && last.toolName === "declare_permissions") return call(tool, args);
     if (last.role === "toolResult" && last.toolName === tool) return finish("done");
     return say("ok");
-  }, new MemoryStorage(), [plugin]);
+  }, new MemoryStorage(), [plugin], undefined, {}, undefined, text => {
+    payloads.push(JSON.parse(text));
+    return say('{"inScope":false,"reason":"请核对"}');
+  });
   await input(app, "delegate");
   const request = await parked(app);
-  await expect.poll(() => payloads).toEqual([{ statement: [], call: { tool, arguments: args },
+  await expect.poll(() => payloads).toEqual([{ statement, call: { tool, arguments: args },
     ...(scenario === "exact limit" && { context: { title } }) }]);
   expect(describe).toHaveBeenCalledOnce();
   const tasks = await app.harness.snapshot(Tasks, app.main.id, context);

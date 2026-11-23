@@ -12,7 +12,6 @@ import { Notifications } from "../src/notifications.ts";
 import { AgentDoc, context, openNodeSqliteStorage } from "../src/runtime.ts";
 import { Ledger, Tasks } from "../src/state.ts";
 import { stats } from "../src/stats.ts";
-import { Taint } from "../src/taint.ts";
 import { submitMessage } from "../src/timeline.ts";
 import { budgetExhausted, readUsage } from "../src/usage.ts";
 import { matchesWatch } from "../src/watch.ts";
@@ -62,7 +61,7 @@ it("filters channel, conversation, sender, half-open interval and case-insensiti
   }
 });
 
-it("creates through main, batches for 30s, sleeps, then finishes in the same tainted conversation", async () => {
+it("creates through main, batches for 30s, sleeps, then finishes in the same conversation", async () => {
   const f = await setup();
   f.main.setResponses([call("watch", args), say("开始观察"), say("收到报告")]);
   await submitMessage(f.app.main, "观察");
@@ -91,7 +90,6 @@ it("creates through main, batches for 30s, sleeps, then finishes in the same tai
   expect(inputs[0]?.at(-1)).toContain("m2");
   expect(inputs[0]?.at(-1)?.match(/m1/g)).toHaveLength(1);
   expect(inputs[0]?.at(-1)).toContain("\\u003c/untrusted\\u003e");
-  expect((await f.app.harness.snapshot(Taint, childId, context))?.first?.capability).toBe("feishu");
   expect(await f.app.watches.list()).toMatchObject([{ wakes: 1, status: "running" }]);
   await f.app.watches.message(event("m3", f.clock.at));
   f.advance(30_000);
@@ -100,7 +98,6 @@ it("creates through main, batches for 30s, sleeps, then finishes in the same tai
   expect(inputs[1]?.join("\n")).toContain("m1");
   expect(inputs[1]?.at(-1)).toContain("m3");
   expect((await f.app.harness.snapshot(Ledger, f.app.main.id, context))?.entries).toMatchObject([{ taskId: id, summary: "已交付" }]);
-  expect((await f.app.harness.snapshot(Taint, f.app.main.id, context))?.first?.capability).toBe("feishu");
   expect(await stats("day", "UTC", { app: f.app, dir: f.dir })).toMatchObject({ watchWakeAccuracy: 0.5, wakes: { bySource: { watch: 1 } } });
   expect((await readUsage(f.dir)).filter(l => l.role === "watch")).toMatchObject([{ proactive: true, taskId: id }, { proactive: true, taskId: id }]);
 });
@@ -170,7 +167,7 @@ it("charges one unit per wake even for a zero-token provider and restores the sh
   expect(f.main.state.callCount).toBe(0);
 });
 
-it("keeps polling during a parked tainted send and task_stop withdraws the approval", async () => {
+it("keeps polling during a parked send and task_stop withdraws the approval", async () => {
   const f = await setup();
   vi.stubEnv("ALTER_WATCH_BATCH_MS", "7");
   await f.app.close();
@@ -181,11 +178,11 @@ it("keeps polling during a parked tainted send and task_stop withdraws the appro
   await g.due(start + 7);
   g.advance(7);
   const requests = async () => Object.values((await g.app.harness.snapshot(Requests, g.app.main.id, context))?.pending ?? {});
-  await expect.poll(requests).toMatchObject([{ taskId: id, tool: "outbox_send", tainted: true }]);
+  await expect.poll(requests).toMatchObject([{ taskId: id, tool: "outbox_send" }]);
   f.adapter.poll.mockResolvedValueOnce([event("during-approval", start + 10)]);
   g.advance(60_000 - 7);
   await expect.poll(() => g.app.notifications.isClaimed("during-approval")).toBe(true);
-  expect(await requests()).toMatchObject([{ taskId: id, tainted: true }]);
+  expect(await requests()).toMatchObject([{ taskId: id }]);
   expect(await g.app.watches.list()).toMatchObject([{ wakes: 1 }]);
   f.main.setResponses([call("task_stop", { taskId: id }), say("已停止")]);
   await submitMessage(g.app.main, "停止盯梢");

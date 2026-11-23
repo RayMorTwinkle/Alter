@@ -62,8 +62,11 @@ it("leases once and renames the same calendar event across three user turns", as
     () => call("calendar_update", { id, title: "晨会（10:00）" }), say("已修改"),
   ]);
   models.setProvider(faux.provider);
+  const reviewer = fauxProvider({ provider: "reviewer" });
+  reviewer.setResponses(Array(4).fill(say('{"inScope":true,"reason":"符合用户原话"}')));
+  models.setProvider(reviewer.provider);
   const start = performance.now();
-  const result = await runScenario({ dataDir, models, mainModel, scenario: "rename-twice", mode: "lease" });
+  const result = await runScenario({ dataDir, models, mainModel, taskModel: { provider: "reviewer", modelId: "faux-1" }, scenario: "rename-twice", mode: "lease" });
   expect(result).toMatchObject({ correct: true, failure: null, tools: { enable_tool: 1, dispatch_task: 0 } });
   expect(performance.now() - start - result.latencyMs).toBeGreaterThanOrEqual(2999);
 });

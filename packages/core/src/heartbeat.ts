@@ -10,7 +10,6 @@ import { dataLine, wakeNotifications } from "./notifications.ts";
 import { context, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID, type Conversation, type Tx } from "./runtime.ts";
 import { Schedules, type createScheduler } from "./scheduler.ts";
 import { Tasks } from "./state.ts";
-import { Taint } from "./taint.ts";
 import { submitWake } from "./timeline.ts";
 import type { ProactiveBudget } from "./usage.ts";
 
@@ -115,7 +114,6 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
       section("未来24小时日程", agenda.map(e => dataLine([e.id, e.title.slice(0, 160), time.describe(e.start).iso, time.describe(e.end).iso]))),
       section("运行中任务", tasks.map(([id, t]) => dataLine([id, t.brief.slice(0, 160)]))),
       section("摘要通知", notices.digest.lines.toReversed(), signals.backlog), "</untrusted>"].join("\n");
-    (await tx.doc(Taint, ROOT_CONVERSATION_ID)).first ??= { source: "heartbeat", capability: "heartbeat", at };
     notices.digest = { count: 0, lines: [] };
     state.fingerprint = fingerprint;
     await beginInspection(tx, state, at, id);

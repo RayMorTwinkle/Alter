@@ -102,7 +102,7 @@ it.each([
     capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason, statement: [], defaultAt: expect.any(Number), expiresAt: expect.any(Number) });
   expect(request.expiresAt).toBeGreaterThan(task.createdAt);
   expect(feed.events).toContainEqual({ event: "tasks", data: [task] });
-  const decide = () => web.post("/api/permissions/" + request.id, { decision: "statement", note: "OK" });
+  const decide = () => web.post("/api/permissions/" + request.id, { decision: "once", note: "OK" });
   const decisions = await Promise.all([decide(), decide()]);
   expect(decisions.map(r => r.status).sort()).toEqual([204, 409]);
   await feed.seen(e => e.event === "timeline" && e.data.kind === "report" && e.data.taskId === task.taskId);
@@ -113,15 +113,15 @@ it.each([
   expect(updated.pending).toEqual([]);
   expect(web.app.demo.outbox).toEqual(["hello"]);
   await web.app.main.waitForIdle(context);
-  await expect.poll(async () => (await (await web.read("/api/approvals/stats")).json()).compared).toBe(1);
+  await expect.poll(async () => (await (await web.read("/api/approvals/stats")).json()).userApproved).toBe(1);
   const stats = await (await web.read("/api/stats?range=day")).json();
-  expect(stats.approvals.shadow).toEqual(await (await web.read("/api/approvals/stats")).json());
+  expect(stats.approvals).toMatchObject(await (await web.read("/api/approvals/stats")).json());
   expect(stats).toMatchObject({
     tasks: { count: 1, successRate: 1, items: [{ taskId: task.taskId, thinking: "high", rounds: 2,
       models: ["offline/task"], tools: { outbox_send: 1, finish: 1 }, result: "sent invitation",
       approvals: [{ decision: "park" }, { decision: "allow" }, { decision: "allow" }],
-      reviews: [{ requestId: request.id, user: "statement", judgment: { inScope: true } }],
-      durationMs: expect.any(Number), usage: { calls: 3, tokens: 33, cacheHitRate: 0.25, costUsd: null } }] },
+      reviews: [{ requestId: request.id, user: "once" }],
+      durationMs: expect.any(Number), usage: { calls: 2, tokens: 22, cacheHitRate: 0.25, costUsd: null } }] },
     wakes: { count: 2, bySource: { "user-web": 1, report: 1 }, items: expect.arrayContaining([
       expect.objectContaining({ wakeId: stats.tasks.items[0].wakeId, wakeSource: "user-web", dispatchedTasks: 1,
         usage: expect.objectContaining({ calls: 2 }) }),
@@ -221,7 +221,8 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
 
 it("serves the calendar agenda and pushes it when a leased calendar call changes it", async () => {
   const start = new Date(Date.now() + 86_400_000).toISOString();
-  const web = await setup(({ messages }, res) => {
+  const web = await setup(({ messages, model }, res) => {
+    if (model === "offline/task") return say(res, '{"inScope":true,"reason":"符合说明"}');
     const tools = messages.filter(m => m.role === "tool").length;
     if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar", reason: "book" });
     if (tools === 1) return toolCall(res, "calendar_create", { title: "周会", start, location: "A" });
@@ -332,8 +333,7 @@ it("requires user approval before sending as a Feishu user after a full task rea
   }, false, feishu);
   await web.login();
   await web.post("/api/messages", { text: "delegate" });
-  await expect.poll(async () => (await web.state()).pending[0]).toMatchObject({ audience: "user", tool: "feishu_send", tainted: true,
-    taint: { source: "feishu_messages", capability: "feishu" } });
+  await expect.poll(async () => (await web.state()).pending[0]).toMatchObject({ audience: "user", tool: "feishu_send" });
   expect(api.send).not.toHaveBeenCalled();
   const [pending] = (await web.state()).pending;
   expect((await web.post("/api/permissions/" + pending!.id, { allow: true })).status).toBe(204);
@@ -343,7 +343,8 @@ it("requires user approval before sending as a Feishu user after a full task rea
 
 it("authenticates memory routes and streams full lists for tool writes, expiry and web edits", async () => {
   let at = 100;
-  const web = await setup(({ messages }, res) => {
+  const web = await setup(({ messages, model }, res) => {
+    if (model === "offline/task") return say(res, '{"inScope":true,"reason":"符合说明"}');
     if (messages.at(-1)?.content?.endsWith("\n记下")) return toolCall(res, "memory_write", {
       op: "add", type: "goal", title: "考试", body: "参加考试", dueAt: "1970-01-01T00:00:00.101Z",
     });
@@ -448,19 +449,19 @@ it.each([true, false])("serves a local-day funnel with Feishu configured=%s", as
   });
 });
 
-it("persists an authenticated approval mode and reports paired decisions", async () => {
+it("persists an authenticated approval mode and reports approval counts", async () => {
   const web = await setup();
   expect((await web.read("/api/settings")).status).toBe(401);
   expect((await web.read("/api/approvals/stats")).status).toBe(401);
   await web.login();
-  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "shadow", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
+  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "on", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
   const patch = (value: unknown) => fetch(web.base + "/api/settings", { method: "PATCH",
     headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value) });
-  for (const invalid of [{}, { approvalModel: true }, { approvalModel: "auto", extra: false }]) {
+  for (const invalid of [{}, { approvalModel: true }, { approvalModel: "auto" }, { approvalModel: "shadow" }, { approvalModel: "on", extra: false }]) {
     expect((await patch(invalid)).status).toBe(400);
   }
   expect(await (await patch({ approvalModel: "off" })).json()).toMatchObject({ approvalModel: "off" });
-  expect(await (await web.read("/api/approvals/stats")).json()).toEqual({ compared: 0, agreed: 0, agreementRate: null, deniedButInScope: 0 });
+  expect(await (await web.read("/api/approvals/stats")).json()).toEqual({ modelAllowed: 0, askedUser: 0, userApproved: 0, userDenied: 0 });
   await web.close();
   const reopened = await web.reopen();
   await reopened.login();
@@ -523,7 +524,8 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
 
 it("creates a schedule from main, lists, pauses and deletes it over HTTP and replaces the SSE list", async () => {
   const at = Date.parse("2026-11-27T00:00Z");
-  const web = await setup(({ messages }, res) => {
+  const web = await setup(({ messages, model }, res) => {
+    if (model === "offline/task") return say(res, '{"inScope":true,"reason":"符合说明"}');
     if (messages.at(-1)?.content?.endsWith("\n安排")) {
       return toolCall(res, "schedule_create", { brief: "看进展", type: "wake", trigger: { kind: "every", minutes: 5 } });
     }

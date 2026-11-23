@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 
-export type Effect = "read" | "write-local" | "external-send" | "irreversible";
+export type Effect = "read" | "write" | "irreversible";
 export type Schema = {
   type: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
   description?: string; properties?: Record<string, Schema>; required?: string[]; additionalProperties?: boolean;
@@ -43,7 +43,7 @@ function array(v: unknown, verify: (item: unknown) => void, key?: (item: unknown
 }
 const self = (v: unknown) => v;
 const nameOf = (v: unknown) => (v as { name: string }).name;
-const effects: Effect[] = ["read", "write-local", "external-send", "irreversible"];
+const effects: Effect[] = ["read", "write", "irreversible"];
 function schema(s: unknown, depth = 0) {
   check(depth <= 12 && record(s), "Invalid schema depth or type");
   const base = "type description enum";
@@ -76,13 +76,19 @@ export function matches(s: Schema, value: unknown): boolean {
   return s.type === "null" ? value === null : typeof value === s.type;
 }
 
-export function parseManifest(v: unknown): Manifest {
+export function storedEffect(effect: unknown): Effect {
+  if (effect === "write-local" || effect === "external-send") return "write";
+  return effect === "read" || effect === "write" ? effect : "irreversible";
+}
+
+export function parseManifest(v: unknown, stored = false): Manifest {
   fields(v, "schemaVersion id version displayName description tools sources network requires secrets borrows resources");
   check(v.schemaVersion === 1, "Unsupported schemaVersion");
   check(typeof v.id === "string" && /^[a-z][a-z0-9-]{0,39}$/.test(v.id) && !Object.hasOwn(Object.prototype, v.id), "Invalid plugin id");
   label(v.version); label(v.displayName); label(v.description);
   array(v.tools, t => {
     fields(t, "name description effect inputSchema outputSchema");
+    if (stored) t.effect = storedEffect(t.effect);
     identifier(t.name); label(t.description); check(effects.includes(t.effect as Effect), "Unsupported effect");
     schema(t.inputSchema); check(record(t.inputSchema) && t.inputSchema.type === "object", "Expected object input schema");
     if ("outputSchema" in t) schema(t.outputSchema);
@@ -105,7 +111,7 @@ export function parseManifest(v: unknown): Manifest {
   return m;
 }
 
-const effectLabels = { read: "读取数据", "write-local": "修改本地数据", "external-send": "对外发送", irreversible: "执行不可逆操作" };
+const effectLabels = { read: "读取数据", write: "写入数据", irreversible: "执行不可逆操作" };
 function toolPermission(t: Manifest["tools"][number]) {
   return "工具 " + t.name + " 可" + effectLabels[t.effect] + " (" + t.effect + ")";
 }
@@ -123,7 +129,7 @@ export function expanded(old: Manifest | undefined, next: Manifest) {
   const previous = new Set(old ? permissions(old) : []);
   for (const tool of next.tools) {
     const before = old?.tools.find(t => t.name === tool.name);
-    if (before && effects.indexOf(tool.effect) < effects.indexOf(before.effect) && tool.effect !== "external-send") {
+    if (before && effects.indexOf(tool.effect) < effects.indexOf(before.effect)) {
       previous.add(toolPermission(tool));
     }
   }

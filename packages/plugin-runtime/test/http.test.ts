@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { createProxy, NetworkViolation, publicAddress, type HttpAudit } from "../src/http.ts";
 import { manifest } from "./fixtures.ts";
 
-const context = { effect: "read" as const, tainted: async () => false, secrets: { token: "fixture_credential" }, signal: new AbortController().signal };
+const context = { effect: "read" as const, secrets: { token: "fixture_credential" }, signal: new AbortController().signal };
 const logs: HttpAudit[] = [];
 const stops: (() => Promise<void>)[] = [];
 afterEach(async () => { while (stops.length) await stops.pop()!(); logs.length = 0; });
@@ -26,8 +26,7 @@ it("checks every DNS answer, scheme, credentials, port, read method and query be
     ["https://user@example.com/feed", "GET"], ["https://example.com:8443/feed", "GET"],
     ["https://example.com/feed", "POST"], ["https://example.com/feed", "GET", ""], ["https://example.com/feed?q=fixture%5Fcredential", "GET"],
   ]) await expect(proxy(m, { url, method, body }, context)).rejects.toBeInstanceOf(NetworkViolation);
-  await expect(proxy(m, { method: "GET", url: "https://example.com/feed?q=test" }, { ...context, tainted: async () => true })).rejects.toThrow("Tainted");
-  expect(logs.map(l => l.decision)).toEqual(Array(8).fill("deny"));
+  expect(logs.map(l => l.decision)).toEqual(Array(7).fill("deny"));
   expect(JSON.stringify(logs)).not.toContain(context.secrets.token);
 });
 it.each(["https://10.1.2.3/", "https://127.0.0.1/"])("validates the redirect target %s", async target => {

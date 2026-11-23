@@ -10,11 +10,11 @@ export type TimelineItem = {
   source?: string;
 };
 
-export type ApprovalDecision = "once" | "statement" | "task-full" | "deny";
+export type ApprovalDecision = "once" | "task-full" | "deny";
 export type HeartbeatSettings = { enabled: boolean; start: string; end: string };
-export type Settings = { approvalModel: "shadow" | "auto" | "off"; heartbeat: HeartbeatSettings };
+export type Settings = { approvalModel: "on" | "off"; heartbeat: HeartbeatSettings };
 export type SettingsPatch = { approvalModel?: Settings["approvalModel"]; heartbeat?: Partial<HeartbeatSettings> };
-export type ApprovalStats = { compared: number; agreed: number; agreementRate: number | null; deniedButInScope: number };
+export type ApprovalStats = { modelAllowed: number; askedUser: number; userApproved: number; userDenied: number };
 export type PermissionItem = { tool: string; target: string; purpose: string; isNew: boolean };
 
 export type PermissionRequest = {
@@ -29,8 +29,6 @@ export type PermissionRequest = {
   defaultAt?: number;
   deferred?: true;
   statement?: PermissionItem[];
-  tainted?: true;
-  taint?: { source: string; capability: string; at: number };
 };
 
 export type Task = {
@@ -159,8 +157,8 @@ export type StatsUsage = {
 export type StatsAudit = {
   borrower?: string;
   taskId: string; tool: string; capability: string; action: string;
-  effect: "read" | "write-local" | "external-send" | "irreversible" | "unknown";
-  decision: "park" | "allow" | "deny"; at: number; tainted?: true;
+  effect: "read" | "write" | "irreversible";
+  decision: "park" | "allow" | "deny"; at: number;
 };
 
 export type StatsReview = {
@@ -187,18 +185,18 @@ export type Stats = {
   range: StatsRange; timeZone: string; at: number; total: StatsUsage;
   byRole: (StatsUsage & { role: string })[]; byModel: (StatsUsage & { model: string })[];
   leases: {
-    count: number; byTool: Record<string, number>; taintedRate: number | null; dispatchAfterLeaseRate: number | null;
+    count: number; byTool: Record<string, number>; dispatchAfterLeaseRate: number | null;
     items: { id: string; capability: string; tools: string[]; reason: string; at: number; wakeId?: string;
-      tainted: boolean; approved: boolean; useWakeIds: string[]; calls: number; succeeded: number; failed: number; dispatched: boolean }[];
+      approved: boolean; useWakeIds: string[]; calls: number; succeeded: number; failed: number; dispatched: boolean }[];
   };
   tasks: { count: number; completed: number; terminal: number; successRate: number | null; items: StatsTask[] };
   wakes: { count: number; bySource: Record<string, number>; items: StatsWake[] };
-  approvals: {
+  approvals: ApprovalStats & {
     decisions: { park: number; allow: number; deny: number };
     pending: Pick<PermissionRequest, "id" | "taskId" | "audience" | "tool" | "expiresAt">[];
     byApprover: { approver: "user" | "judge" | "timeout"; count: number }[];
     userDecisions: Record<ApprovalDecision, number>; judgments: { inScope: number; outOfScope: number };
-    timeouts: number; expired: number; shadow: ApprovalStats; shadowAgreementRate: number | null;
+    timeouts: number; expired: number;
   };
   funnel: Funnel; watchWakeAccuracy: number | null; latency: { firstToken: StatsLatency; total: StatsLatency };
   topTasks: { taskId: string; costUsd: number }[];
@@ -257,15 +255,18 @@ export type SourcePreviewResult = { samples: SourceItem[] };
 export type SourceCreateResult = SourcePreviewResult & { source: SourceView };
 export type SourcesEvent = { event: "sources"; data: SourceView[] };
 
-export type ExtPluginEffect = "read" | "write-local" | "external-send" | "irreversible";
+export type ExtPluginEffect = "read" | "write" | "irreversible";
 export type ExtPluginSchema = {
   type: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
   description?: string; properties?: Record<string, ExtPluginSchema>; required?: string[]; additionalProperties?: boolean;
   items?: ExtPluginSchema; enum?: (string | number | boolean | null)[];
 };
+export type ExtPluginTool = {
+  name: string; description: string; effect: ExtPluginEffect; inputSchema: ExtPluginSchema; outputSchema?: ExtPluginSchema;
+};
 export type ExtPluginManifest = {
   schemaVersion: 1; id: string; version: string; displayName: string; description: string;
-  tools: { name: string; description: string; effect: ExtPluginEffect; inputSchema: ExtPluginSchema; outputSchema?: ExtPluginSchema }[];
+  tools: ExtPluginTool[];
   sources: { name: string; minIntervalSeconds: number }[];
   requires?: string[];
   network?: { host: string; methods: string[]; pathPrefixes: string[] }[];

@@ -185,8 +185,8 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
   expect(lines.filter(l => l.startsWith("[回投]"))).toEqual([expect.stringMatching(/finished: 已处理/)]);
   expect(lines.filter(l => l.startsWith("[用户审批]"))).toHaveLength(1);
   expect(runtime.demo.outbox).toEqual(allow ? ["hello"] : []);
-  await expect.poll(async () => (await app.logs()).some(line => line.conversation === "judge" && line.model === taskBackup)).toBe(true);
   const logs = await app.logs();
+  expect(logs.some(line => line.conversation === "judge")).toBe(false);
   for (const conversation of ["main", "task"] as const) {
     const uses = logs.filter(l => l.conversation === conversation);
     expect(uses.map(l => l.model)).toEqual(Array(conversation === "main" ? 3 : 2).fill([primary, conversation === "main" ? backup : taskBackup]).flat());

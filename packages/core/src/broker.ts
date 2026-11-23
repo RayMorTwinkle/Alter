@@ -4,26 +4,26 @@ import { interacted } from "./feedback-settings.ts";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import type { ApprovalCall, ApprovalContext, Judgment } from "./approval-model.ts";
 import type { ApprovalMode } from "./settings.ts";
-import { permitsBorrow, type CapabilityRegistry, type Effect, type ToolAction } from "./capabilities.ts";
+import { normalizeEffect, permitsBorrow, type CapabilityRegistry, type Effect, type ToolAction } from "./capabilities.ts";
 import {
   context, conversationDoc, defineExtension, defineSignal, defineTask, hook, reply, ToolTask,
   type Conversation, type ConversationId, type TaskId, type Tx,
 } from "./runtime.ts";
-import { isUntrusted, normalUrl, recordUntrusted, Taint, type TaintSource } from "./taint.ts";
+import { recentUserText } from "./timeline.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type PermissionItem } from "./state.ts";
 
-export const choices = ["once", "statement", "task-full", "deny"] as const;
+export const choices = ["once", "task-full", "deny"] as const;
 export type ApprovalDecision = typeof choices[number];
 export const isApprovalDecision = (value: unknown): value is ApprovalDecision => choices.some(choice => choice === value);
 type Request = {
   id: string; taskId: string; toolTask: TaskId; audience: "main" | "user"; capability: string; tool: string;
   reason: string; argumentsJson: string; expiresAt: number; defaultAt?: number;
   statement?: (PermissionItem & { isNew: boolean })[];
-  wakeKey?: string; checking?: true; deferred?: true; tainted?: true; taint?: TaintSource;
+  wakeKey?: string; checking?: true; deferred?: true;
 };
 type AuditEntry = {
   taskId: string; tool: string; capability: string; action: string; effect: Effect;
-  borrower?: string; decision: "park" | "allow" | "deny"; at: number; audience?: "user"; tainted?: true;
+  borrower?: string; decision: "park" | "allow" | "deny"; at: number; audience?: "user";
 };
 export type PermissionState = { pending: Record<string, Request> };
 export const Requests = conversationDoc<PermissionState>("permissions", () => ({ pending: {} }));
@@ -36,19 +36,21 @@ export type Review = {
 };
 export const Reviews = conversationDoc<{ byId: Record<string, Review> }>("approval-reviews", () => ({ byId: {} }));
 
-export function shadowAgreement(reviews: readonly Review[]) {
-  let compared = 0, agreed = 0, deniedButInScope = 0;
-  for (const { judgment, user } of reviews) {
-    if (!judgment || !user) continue;
-    compared++;
-    if (judgment.inScope === (user !== "deny")) agreed++;
-    else if (user === "deny") deniedButInScope++;
+export function approvalCounts(reviews: readonly Review[], askedUser: number, within: (at?: number) => boolean = () => true) {
+  const counts = { modelAllowed: 0, askedUser, userApproved: 0, userDenied: 0 };
+  for (const review of reviews) {
+    if (review.judgeAllowedAt !== undefined && within(review.judgeAllowedAt)) counts.modelAllowed++;
+    if (review.user && within(review.userAt)) counts[review.user === "deny" ? "userDenied" : "userApproved"]++;
   }
-  return { compared, agreed, agreementRate: compared ? agreed / compared : null, deniedButInScope };
+  return counts;
 }
 
 export async function approvalStats(main: Conversation) {
-  return main.commit(async tx => shadowAgreement(Object.values((await tx.doc(Reviews, main.id)).byId)), context);
+  return main.commit(async tx => {
+    const audit = await tx.doc(Audit, main.id);
+    const askedUser = audit.entries.filter(e => e.decision === "park" && e.audience === "user").length;
+    return approvalCounts(Object.values((await tx.doc(Reviews, main.id)).byId), askedUser);
+  }, context);
 }
 const Decision = defineSignal({ name: "alter.permission", version: 1, schema: obj({ allow: bool(), note: opt(str()) }) });
 const Reviewed = defineSignal({ name: "alter.reviewed", version: 1, schema: bool() });
@@ -66,7 +68,7 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
     const now = (approvalClocks.get(main) ?? Date.now)();
     if (now >= req.expiresAt) return reply(expiredMessage, true);
     const task = (await tx.doc(Tasks, main.id)).byId[req.taskId];
-    if (!task && (decision === "statement" || decision === "task-full")) return reply("Task decision requires a task", true);
+    if (!task && decision === "task-full") return reply("Task decision requires a task", true);
     if (!req.deferred) {
       const status = await tx.signal(req.toolTask, Decision, req.wakeKey ?? req.id, { allow: decision !== "deny", ...(note && { note }) });
       // At the soft deadline pi-durable closes the signal, but its gate is waking and reads the durable decision.
@@ -77,7 +79,6 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
     if (task && (await tx.doc(TaskIdentity, task.conversationId)).taskId === req.taskId) {
       const scope = await tx.doc(ScopeDoc, task.conversationId);
       if (decision === "task-full") scope.full = true;
-      if (decision === "statement") scope.approved = Math.max(scope.approved ?? 0, req.statement?.length ?? 0);
       if (decision === "deny") {
         const audit = await tx.doc(Audit, main.id);
         audit.refused ??= {};
@@ -93,6 +94,9 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
         }
       }
     }
+    if (req.taskId === "main" && req.deferred && decision === "once") {
+      (await tx.doc(ScopeDoc, main.id)).late.push({ tool: req.tool, argumentsJson: req.argumentsJson });
+    }
     delete pending[requestId];
     await interacted(tx, now);
     await onDelivered?.(tx);
@@ -102,7 +106,25 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
 
 export async function migrateRequests(tx: Tx, main: Conversation, at: number, timeout: number) {
   const { pending } = await tx.doc(Requests, main.id);
+  const tasks = (await tx.doc(Tasks, main.id)).byId;
+  for (const entry of (await tx.doc(Audit, main.id)).entries) {
+    if (entry.decision === "park" && !entry.audience && (Reflect.get(entry, "tainted") || tasks[entry.taskId]?.permission === "auto")) {
+      entry.audience = "user";
+    }
+    const effect = normalizeEffect(entry.effect);
+    if (entry.effect !== effect) entry.effect = effect;
+    Reflect.deleteProperty(entry, "tainted");
+  }
+  for (const lease of Object.values((await tx.doc(LeaseHistory, main.id)).byId)) Reflect.deleteProperty(lease, "tainted");
+  for (const review of Object.values((await tx.doc(Reviews, main.id)).byId)) {
+    if (review.timeoutAt !== undefined && review.judgment?.inScope && review.itemCount && !review.ended && !review.user) {
+      review.judgeAllowedAt ??= review.timeoutAt;
+    }
+    if ((review.user as string | undefined) === "statement") review.user = "once";
+  }
   for (const req of Object.values(pending)) {
+    Reflect.deleteProperty(req, "taint");
+    Reflect.deleteProperty(req, "tainted");
     if (req.audience === "main" || req.tool === "request_capability") {
       await tx.signal(req.toolTask, Decision, req.id, { allow: false });
       delete pending[req.id];
@@ -120,7 +142,7 @@ async function expire(tx: Tx, main: Conversation, req: Request, at: number) {
 }
 
 export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number, defaultMs: number,
-  mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }, context?: ApprovalContext) => Promise<Judgment>) {
+  mainControl: (name: string) => boolean, mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }, context?: ApprovalContext) => Promise<Judgment>) {
   const review = defineTask<{ id: string; conversationId?: ConversationId; taskId?: string; wakeId?: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
     { phase: "review" }, null>({
     name: "alter.approval-review", version: 1, initial: () => ({ phase: "review" }),
@@ -162,20 +184,20 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         const target = isMain && call.name === "enable_tool" && typeof call.arguments.reason === "string" && call.arguments.reason.trim()
           ? leaseTarget(registry, call.arguments.capability, call.arguments.action) : undefined;
         const descriptor: ToolAction | undefined = target ? { capability: target.capability, action: "lease", effect: target.effect }
-          : control ? { capability: "task", action: call.name, effect: "write-local" }
-          : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write-local" }
+          : control ? { capability: "task", action: call.name, effect: "write" }
+          : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write" }
           : registry.toolActions.get(call.name);
-        const borrowed = call.parent && /^ext:([a-z0-9-]+):(read|write-local|external-send|irreversible):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
+        const borrowed = call.parent && /^ext:([a-z0-9-]+):([^:]+):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
         const borrower = borrowed?.[1];
-        if (isMain && !descriptor && !borrower) return;
+        if (isMain && !descriptor && !borrower && mainControl(call.name)) return;
         const identity = isMain ? undefined : await api.snapshot(TaskIdentity, api.conversationId, ctx);
         const taskId = isMain ? "main" : identity?.taskId ?? "";
         const id = `permission-${api.taskId}`;
         const signal = await api.readSignal(Decision, id, ctx);
-        const { capability, action, effect } = descriptor ?? { capability: "unknown", action: call.name, effect: "unknown" };
+        const { capability, action } = descriptor ?? { capability: "unknown", action: call.name };
+        const effect = normalizeEffect(descriptor?.effect);
         return main.commit(async tx => {
           const task = (await tx.doc(Tasks, main.id)).byId[taskId];
-          const risky = effect === "external-send" || effect === "irreversible" || effect === "unknown";
           const leasedCall = isMain && !target && registry.toolActions.has(call.name) && capability !== "memory" && capability !== "schedule";
           const leases = leasedCall ? await tx.doc(Leases, main.id) : undefined;
           const key = leases && activeLease(leases.lastUsed, capability, action);
@@ -184,15 +206,13 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           const history = leaseId ? await tx.doc(LeaseHistory, main.id) : undefined;
           const lease = leaseId ? history?.byId[leaseId] : undefined;
           const wake = lease ? await activeWake(tx, main.id, api.now()) : undefined;
-          const state = risky || descriptor?.guarded || ((target || leasedCall) && effect !== "read") ? await tx.doc(Taint, api.conversationId) : undefined;
-          const taint = state?.first;
           const audit = await tx.doc(Audit, main.id);
           const { pending } = await tx.doc(Requests, main.id);
           const at = api.now();
           function record(decision: AuditEntry["decision"]) {
             if (audit.last[id] === decision) return;
             audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at, ...(borrower && { borrower }),
-              ...(decision === "park" && { audience: "user" as const }), ...(taint && { tainted: true as const }) });
+              ...(decision === "park" && { audience: "user" as const }) });
             audit.last[id] = decision;
             if (decision === "allow" && key && leases) {
               leases.lastUsed[key] = leases.turns + 1;
@@ -204,8 +224,8 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             }
           }
           function block(message: string) { record("deny"); return { block: message }; }
-          if ((!isMain && task?.status !== "running") || !descriptor) return block("Unknown capability or inactive task");
-          if (borrowed && !permitsBorrow(borrowed[2]!, effect)) return block("Borrow exceeds calling effect");
+          if (!isMain && task?.status !== "running") return block("Inactive task");
+          if (borrowed && (!descriptor || !permitsBorrow(borrowed[2]!, effect))) return block("Borrow exceeds calling effect");
           if (identity?.sourcePlugin && effect !== "read") return block("Message sources can only borrow read tools");
           if (task?.proactive && !control && (effect !== "read" || capability !== "browser")) return block("Proactive research is read-only");
           const { byId } = await tx.doc(Reviews, main.id);
@@ -230,51 +250,41 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             delete pending[id];
             return block(`The user already declined ${call.name} in this task. Do not retry it; finish and report that the user declined.`);
           }
-          const value = descriptor.seenArg && call.arguments[descriptor.seenArg];
-          const url = typeof value === "string" ? normalUrl(value) : undefined;
-          const seen = effect === "read" && url && state?.seen?.includes(url);
-          const sensitive = (taint && !seen) || (risky && task && task.permission !== "full");
-          if (task?.proactive && sensitive) return block("Proactive research cannot request approval");
+          const needsApproval = effect !== "read" && !control && !(isMain && call.name === "notify") &&
+            !(effect === "irreversible" && task?.permission === "full");
           if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
           const scope = await tx.doc(ScopeDoc, api.conversationId);
           const argumentsJson = JSON.stringify(call.arguments, (_, value) =>
             value && typeof value === "object" && !Array.isArray(value)
               ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
-          if ((!sensitive && !req) || scope.full || audit.last[id] === "allow") { delete pending[id]; record("allow"); return; }
+          if (!needsApproval || scope.full || audit.last[id] === "allow") { delete pending[id]; record("allow"); return; }
           const late = scope.late.findIndex(item => item.tool === call.name && item.argumentsJson === argumentsJson);
           if (late >= 0) { scope.late.splice(late, 1); delete pending[id]; record("allow"); return; }
           const setting = mode();
-          const eligible = !isMain && effect !== "irreversible" && effect !== "unknown";
           if (!req) {
             if (Object.values(pending).some(r => r.taskId === taskId && r.deferred && r.tool === call.name &&
               r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
-            const checking = eligible && setting === "auto" && scope.approved !== undefined;
-            const items = lease?.approved ? [{ tool: call.name, target: lease.capability, purpose: lease.reason }] : scope.items;
+            const items = isMain ? (await recentUserText(tx, main.id)).map(purpose => ({ tool: "", target: "", purpose })) : scope.items;
+            const checking = effect === "write" && setting === "on" && items.length > 0;
             const reason = target ? String(call.arguments.reason) : lease?.reason ?? task?.brief ?? "Main session tool call";
             pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
               argumentsJson, reason: (borrower ? "插件 " + borrower + " 借用：" : "") + reason, expiresAt: at + timeout,
               statement: items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
-              ...(!isMain && { defaultAt: at + Math.min(defaultMs, timeout) }), ...(checking && { checking: true }),
-              ...(taint && { tainted: true, taint: { ...taint } }) };
+              defaultAt: at + Math.min(defaultMs, timeout), ...(checking && { checking: true }) };
             req = pending[id]!;
-            if (setting !== "off" && (eligible || (lease?.approved && effect !== "irreversible" && effect !== "unknown"))) {
-              const statement = items.slice(0, scope.approved);
-              byId[id] = { taskId, tool: call.name, itemCount: statement.length };
-              await tx.createTask(review, { id, taskId, conversationId: api.conversationId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement,
+            if (checking) {
+              byId[id] = { taskId, tool: call.name, itemCount: items.length };
+              await tx.createTask(review, { id, taskId, conversationId: api.conversationId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement: items,
                 tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
             }
-            if (!checking) { scope.shown = scope.items.length; record("park"); }
           }
-          const due = req.defaultAt !== undefined && at >= req.defaultAt;
-          if (setting === "auto" && eligible && (req.checking || due)) {
+          if (setting === "on" && req.checking && effect === "write") {
             if (byId[id]?.itemCount !== undefined && !result?.judgment) {
               req.wakeKey = id + "-review";
               return { sleep: { until: req.expiresAt, signals: [Reviewed.key(id), Decision.key(req.wakeKey)] } };
             }
             if (result?.judgment?.inScope && result.itemCount) {
-              if (req.checking) result.judgeAllowedAt = at;
-              else result.timeoutAt = at;
-              scope.approved ??= req.statement?.length ?? 0;
+              result.judgeAllowedAt = at;
               delete pending[id];
               record("allow");
               (await tx.doc(Ledger, main.id)).entries.push({ taskId, at, summary: `审批模型放行：${call.name}（${result.judgment.reason}）`,
@@ -285,51 +295,41 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
           if (req.checking) {
             delete req.checking;
             req.defaultAt = Math.min(at + defaultMs, req.expiresAt);
+          }
+          if (audit.last[id] !== "park") {
             scope.shown = req.statement?.length ?? 0;
             record("park");
           }
           const defaultReached = req.defaultAt !== undefined && at >= req.defaultAt;
-          if (defaultReached && setting !== "shadow") {
-            if (setting === "auto") scope.approved ??= req.statement?.length ?? 0;
+          if (defaultReached) {
             if (!req.deferred) {
               req.deferred = true;
-              byId[id] = { ...byId[id], taskId, tool: call.name, ended: "deferred", ...(setting === "auto" && { timeoutAt: at }) };
+              byId[id] = { ...byId[id], taskId, tool: call.name, ended: "deferred", timeoutAt: at };
               await tx.createTask(expiry, { id }, { ownership: { kind: "conversation" }, background: true });
             }
             return block(deferredMessage);
           }
-          const until = defaultReached ? req.expiresAt : req.defaultAt ?? req.expiresAt;
-          if (defaultReached) req.wakeKey = id + "-final";
-          else delete req.wakeKey;
-          return { sleep: { until, signals: [Decision.key(req.wakeKey ?? id)] } };
+          delete req.wakeKey;
+          return { sleep: { until: req.defaultAt ?? req.expiresAt, signals: [Decision.key(id)] } };
         }, ctx);
       },
       async afterTool(call, result, api, ctx) {
         const action = registry.toolActions.get(call.name);
-        const untrusted = isUntrusted(result.details);
         const main = getMain();
-        if (!untrusted && (api.conversationId !== main.id || (!action && !result.isError))) return;
-        try {
-          await main.commit(async tx => {
-            if (untrusted) recordUntrusted(await tx.doc(Taint, api.conversationId), {
-              source: call.name, capability: action?.capability ?? "unknown", at: api.now(),
-            }, result.output);
-            if (api.conversationId === main.id) {
-              const id = `permission-${api.taskId}`;
-              const history = await tx.doc(LeaseHistory, main.id);
-              const leaseId = history.inFlight[id];
-              if (leaseId) {
-                history.byId[leaseId]![result.isError ? "failed" : "succeeded"]++;
-                delete history.inFlight[id];
-              }
-              if (result.isError) delete (await tx.doc(Requests, main.id)).pending[id];
-            }
-          }, ctx);
-        } catch (error) {
-          // pi-durable logs afterTool exceptions and keeps the original result. Withhold untracked content.
-          if (untrusted) return reply("External content withheld because its source could not be recorded", true);
-          throw error;
-        }
+        if (api.conversationId !== main.id || (!action && !result.isError)) return;
+        await main.commit(async tx => {
+          const id = `permission-${api.taskId}`;
+          const history = await tx.doc(LeaseHistory, main.id);
+          const leaseId = history.inFlight[id];
+          if (leaseId) {
+            history.byId[leaseId]![result.isError ? "failed" : "succeeded"]++;
+            delete history.inFlight[id];
+          }
+          if (result.isError) {
+            const { pending } = await tx.doc(Requests, main.id);
+            if (!pending[id]?.deferred) delete pending[id];
+          }
+        }, ctx);
       },
     })],
   });

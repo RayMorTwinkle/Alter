@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { pluginEnvironment } from "./environment.ts";
 import { check, parseManifest, PluginError, record } from "./manifest.ts";
 
-function snapshot(directory: string) {
+function snapshot(directory: string, stored = false) {
   check(isAbsolute(directory) && lstatSync(directory).isDirectory(), "Expected an absolute package directory");
   const root = realpathSync(directory);
   const files = new Map<string, Buffer>();
@@ -63,7 +63,7 @@ function snapshot(directory: string) {
     }
     check(!Object.keys(dependencies).length || locked, "npm dependencies require package-lock.json");
   }
-  const manifest = parseManifest(JSON.parse(bytes.toString()));
+  const manifest = parseManifest(JSON.parse(bytes.toString()), stored);
   const hash = createHash("sha256");
   for (const name of [...files.keys()].sort()) {
     const data = files.get(name)!;
@@ -76,7 +76,7 @@ export function inspect(dir: string) {
   return { manifest, sha, dependencies };
 }
 export function verify(directory: string, sha: string) {
-  check(inspect(directory).sha === sha, "Package SHA-256 mismatch");
+  check(snapshot(directory, true).sha === sha, "Package SHA-256 mismatch");
 }
 async function installDependencies(directory: string, secretNames: string[]) {
   const scratch = mkdtempSync(join(tmpdir(), "alter-npm-"));
@@ -136,8 +136,8 @@ function checkLocalDependencies(files: Map<string, Buffer>) {
   }
 }
 
-export async function preparePackage(root: string, source: string) {
-  const { files, locked, ...info } = snapshot(source);
+export async function preparePackage(root: string, source: string, stored = false) {
+  const { files, locked, ...info } = snapshot(source, stored);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const directory = realpathSync(mkdtempSync(join(root, "pending-")));
   try {

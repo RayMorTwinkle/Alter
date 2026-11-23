@@ -24,7 +24,7 @@ function permit(ok: unknown, message: string): asserts ok { if (!ok) throw new N
 export type HttpAudit = { plugin: string; method: string; host?: string; decision: "allow" | "deny" | "error"; reason?: string };
 type Options = { resolve?: (host: string) => Promise<{ address: string; family: number }[]>;
   testLoopback?: boolean; timeoutMs?: number };
-type Context = { effect: Effect; tainted: () => Promise<boolean>; secrets: Record<string, string>; signal: AbortSignal };
+type Context = { effect: Effect; secrets: Record<string, string>; signal: AbortSignal };
 type Response = { status: number; body: string; location?: string };
 const maxResponse = 2 * 1024 * 1024;
 function send(url: URL, method: string, address: string, headers: Record<string, string>, body: string | undefined, signal: AbortSignal) {
@@ -84,7 +84,7 @@ export function createProxy(audit: (e: HttpAudit) => void, options: Options = {}
       method = input.method;
       const body = input.body;
       permit(body === undefined || typeof body === "string" && Buffer.byteLength(body) <= 256 * 1024, "Invalid or oversized body");
-      const read = ctx.effect === "read" || ctx.effect === "write-local";
+      const read = ctx.effect === "read";
       permit(!read || (["GET", "HEAD"].includes(method) && body === undefined), "Read request requires GET/HEAD without a body");
       const ordinary = headers(input.headers, m), secret = headers(input.secretHeaders, m, ctx.secrets);
       let outgoing = { ...ordinary, ...secret };
@@ -98,7 +98,6 @@ export function createProxy(audit: (e: HttpAudit) => void, options: Options = {}
         if (url.search) {
           const query = [...url.searchParams].flat().join("\n");
           permit(!Object.values(ctx.secrets).some(v => v && (query.includes(v) || url.search.includes(v))), "Secret in query");
-          if (read) permit(!await Promise.race([ctx.tainted(), timeout]), "Tainted query");
         }
         const now = Date.now();
         const recent = (rates.get(m.id) ?? []).filter(t => t > now - 60_000);

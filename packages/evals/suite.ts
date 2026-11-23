@@ -8,10 +8,10 @@ import type { Task } from "./tasks.ts";
 export const cell = (value: string) => value.replaceAll("|", "\\|").replace(/\s*\n\s*/g, " ");
 export function runDetails(rows: Result[]) {
   const lines: string[] = [];
-  lines.push("", "## 每次运行", "", "| 任务 | 轮次 | 结果 / 原因 | token（主 / 任务） | 模型调用 | 延迟（ms） | 租用 / 派单 | 审批（工具 / audience / 决定 / 污点） |",
+  lines.push("", "## 每次运行", "", "| 任务 | 轮次 | 结果 / 原因 | token（主 / 任务） | 模型调用 | 延迟（ms） | 租用 / 派单 | 审批（工具 / audience / 决定） |",
     "| --- | ---: | --- | ---: | ---: | ---: | ---: | --- |");
   for (const r of rows) {
-    const approvals = r.approvals.map(a => `${a.tool} / ${a.audience} / ${a.decision} / ${a.tainted ? "有" : "无"}`).join("，");
+    const approvals = r.approvals.map(a => `${a.tool} / ${a.audience} / ${a.decision}`).join("，");
     lines.push(`| ${r.id} | ${r.repeat} | ${r.status} ${cell(r.reason ?? "")} | ${r.usage.main.tokens} / ${r.usage.task.tokens} | ${r.usage.total.calls} | ${r.latencyMs} | ${r.tools.enable_tool} / ${r.tools.dispatch_task} | ${approvals || "—"} |`);
   }
   const warnings = rows.flatMap(r => r.cleanup.map(note => `- ${r.id}（第 ${r.repeat} 次） ${cell(note)}`));

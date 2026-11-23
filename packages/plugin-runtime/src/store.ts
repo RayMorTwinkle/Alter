@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import { check, expanded, permissions, PluginError, type Manifest } from "./manifest.ts";
+import { check, expanded, storedEffect, permissions, PluginError, type Manifest } from "./manifest.ts";
 import { activatePackage, preparePackage, verify } from "./packages.ts";
 
 export type Status = "enabled" | "disabled" | "paused" | "quarantined";
@@ -20,6 +20,15 @@ export function openStore(data: string) {
   // An approval granted for the old isolated runtime does not grant user permissions.
   let migrated = false;
   for (const entry of Object.values(entries)) {
+    for (const version of [...entry.versions, ...(entry.pending ? [entry.pending] : [])]) {
+      for (const tool of version.manifest.tools) {
+        const effect = storedEffect(tool.effect);
+        if (tool.effect !== effect) {
+          tool.effect = effect;
+          migrated = true;
+        }
+      }
+    }
     const last = entry.versions.at(-1);
     const offerApproval = last && last.userApproved === undefined && last.status !== "quarantined";
     for (const version of entry.versions) {
@@ -79,7 +88,7 @@ export function openStore(data: string) {
       const proposal = get(id).pending;
       check(proposal && proposal.sha === sha, "Pending hash does not match");
       verify(proposal.path, proposal.sha);
-      const p = proposal.staged ? proposal : await preparePackage(root, proposal.path);
+      const p = proposal.staged ? proposal : await preparePackage(root, proposal.path, true);
       try {
         change(id, e => {
           check(e.pending?.sha === p.sha && p.sha === sha, "Pending hash does not match");

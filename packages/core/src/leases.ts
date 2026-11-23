@@ -1,4 +1,4 @@
-import type { CapabilityRegistry, Effect } from "./capabilities.ts";
+import { normalizeEffect, type CapabilityRegistry, type Effect } from "./capabilities.ts";
 import { conversationDoc } from "./runtime.ts";
 
 export const leaseWindow = 30;
@@ -8,7 +8,7 @@ export const Leases = conversationDoc<{
 
 export type LeaseRecord = {
   capability: string; tools: string[]; reason: string; at: number; wakeId?: string;
-  tainted: boolean; approved: boolean; useWakeIds: string[]; calls: number; succeeded: number; failed: number; dispatched: boolean;
+  approved: boolean; useWakeIds: string[]; calls: number; succeeded: number; failed: number; dispatched: boolean;
 };
 export const LeaseHistory = conversationDoc<{
   byId: Record<string, LeaseRecord>; inFlight: Record<string, string>;
@@ -19,10 +19,10 @@ export function leaseTarget(registry: CapabilityRegistry, capability: unknown, a
   if (!cap || cap.id === "memory" || cap.id === "schedule") return;
   const actions = cap.actions.filter(item => action === undefined || item.name === action);
   if (!actions.length) return;
-  const effects: Effect[] = ["unknown", "irreversible", "external-send", "write-local", "read"];
+  const effects: Effect[] = ["irreversible", "write", "read"];
   return { key: action === undefined ? cap.id : cap.id + "/" + action, capability: cap.id,
     tools: actions.map(item => cap.id + "_" + item.name),
-    effect: effects.find(effect => actions.some(item => item.effect === effect))! };
+    effect: effects.find(effect => actions.some(item => normalizeEffect(item.effect) === effect))! };
 }
 
 export function activeLease(lastUsed: Record<string, number>, capability: string, action: string) {
@@ -38,6 +38,5 @@ export function leaseStats(records: Record<string, LeaseRecord>, includes: (at: 
   for (const item of items) for (const tool of item.tools) byTool.set(tool, (byTool.get(tool) ?? 0) + 1);
   const count = items.length;
   return { count, byTool: Object.fromEntries(byTool), items,
-    taintedRate: count ? items.filter(item => item.tainted).length / count : null,
     dispatchAfterLeaseRate: count ? items.filter(item => item.dispatched).length / count : null };
 }

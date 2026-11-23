@@ -1,4 +1,4 @@
-import { Audit, Requests, Reviews, shadowAgreement, type Review } from "./broker.ts";
+import { Audit, Requests, Reviews, approvalCounts, type Review } from "./broker.ts";
 import { calendarTime } from "./calendar-time.ts";
 import { LeaseHistory, leaseStats } from "./leases.ts";
 import { funnel } from "./funnel.ts";
@@ -82,11 +82,10 @@ async function* recordedResponses(app: AlterApp, taskId: string, task: TaskRecor
   } while (cursor);
 }
 
-function reviewStats(reviews: Record<string, Review>, start: number, end: number) {
+function reviewStats(reviews: Record<string, Review>, askedUser: number, start: number, end: number) {
   const within = (at?: number) => at === undefined ? start === -Infinity : at >= start && at <= end;
-  const userDecisions = { once: 0, statement: 0, "task-full": 0, deny: 0 };
+  const userDecisions = { once: 0, "task-full": 0, deny: 0 };
   const judgments = { inScope: 0, outOfScope: 0 };
-  const paired: Review[] = [];
   const counts = { user: 0, judge: 0, timeout: 0 };
   let expired = 0;
   for (const review of Object.values(reviews)) {
@@ -98,11 +97,8 @@ function reviewStats(reviews: Record<string, Review>, start: number, end: number
     if (review.judgeAllowedAt !== undefined && within(review.judgeAllowedAt)) counts.judge++;
     if (review.timeoutAt !== undefined && within(review.timeoutAt)) counts.timeout++;
     if (review.ended === "expired" && within(review.expiredAt)) expired++;
-    const pairedAt = Math.max(review.userAt ?? -Infinity, review.judgedAt ?? -Infinity);
-    if (review.user && review.judgment && within(pairedAt)) paired.push(review);
   }
-  const shadow = shadowAgreement(paired);
-  return { userDecisions, judgments, shadow, shadowAgreementRate: shadow.agreementRate, expired, timeouts: counts.timeout,
+  return { userDecisions, judgments, ...approvalCounts(Object.values(reviews), askedUser, within), expired, timeouts: counts.timeout,
     byApprover: (["user", "judge", "timeout"] as const).map(approver => ({ approver, count: counts[approver] })) };
 }
 
@@ -214,11 +210,16 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
     }
   }
 
+  let askedUser = 0;
   const decisions = { park: 0, allow: 0, deny: 0 };
   for (const entry of entries) {
     if (entry.at > at) continue;
     taskDetails.get(entry.taskId)?.approvals.push(entry);
-    if (includes(entry.at)) { decisions[entry.decision]++; earliest = Math.min(earliest, entry.at); }
+    if (includes(entry.at)) {
+      decisions[entry.decision]++;
+      if (entry.decision === "park" && entry.audience === "user") askedUser++;
+      earliest = Math.min(earliest, entry.at);
+    }
   }
   const approvalReviews = reviews?.byId ?? {};
   for (const [requestId, { note, itemCount, ...review }] of Object.entries(approvalReviews)) {
@@ -251,7 +252,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
     tasks: { count: taskRows.length, completed, terminal, successRate: terminal ? completed / terminal : null,
       items: taskRows.sort((a, b) => b.createdAt - a.createdAt) },
     wakes: { count: wakeRows.length, bySource: Object.fromEntries(sources), items: wakeRows },
-    approvals: { decisions, pending, ...reviewStats(approvalReviews, start, at) },
+    approvals: { decisions, pending, ...reviewStats(approvalReviews, askedUser, start, at) },
     funnel: proactive, watchWakeAccuracy: watchWakes ? watchFinishes / watchWakes : null,
     latency: { firstToken: firstToken.result(), total: latency.result() },
     topTasks: taskRows.flatMap(task => task.usage.costUsd === null ? [] : [{ taskId: task.taskId, costUsd: task.usage.costUsd }])

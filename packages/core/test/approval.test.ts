@@ -1,13 +1,15 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { contentText } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, expect, it } from "vitest";
-import { answerUserPermission, approvalStats, stats, judge, readUsage, observeSurface, openAlter, type ApprovalDecision } from "../src/index.ts";
+import { answerUserPermission, approvalStats, Audit, isApprovalDecision, submitMessage, stats, judge, readUsage, observeSurface, openAlter, type ApprovalDecision } from "../src/index.ts";
 import { context, defineTool, MemoryStorage, openNodeSqliteStorage, reply, type Storage } from "../src/runtime.ts";
 import { obj } from "@earendil-works/pi-schema";
+
+import { Reviews } from "../src/broker.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
@@ -52,7 +54,7 @@ async function setup(steps: FauxResponseStep[], verdict: FauxResponseStep = posi
     cleanup.push(close);
     return { app, surface, close, async park(tool = "outbox_send", message?: string) {
       const get = () => surface.snapshot().pending.find(r => r.tool === tool && (!message || JSON.stringify(r.arguments).includes(message)));
-      await expect.poll(get).toBeDefined();
+      await expect.poll(get, { timeout: 4000 }).toBeDefined();
       return get()!;
     }, async decide(requestId: string, decision: ApprovalDecision) {
       const answer = await answerUserPermission(app.main, { requestId, decision });
@@ -61,7 +63,7 @@ async function setup(steps: FauxResponseStep[], verdict: FauxResponseStep = posi
   }
   const reopen = async () => open(dir ? await openNodeSqliteStorage(join(dir, "main.sqlite")) : new MemoryStorage());
   const f = await reopen();
-  return { ...f, dir, clock, judged, deletes: () => deletes, reopen,
+  return { ...f, mainModel: main, dir, clock, judged, deletes: () => deletes, reopen,
     start: () => f.app.main.submit({ type: "input", content: "start" }, context) };
 }
 
@@ -84,18 +86,15 @@ it("judges with only the statement and call, low reasoning and no tools, and fai
   expect(mock.state.callCount).toBe(4);
 });
 
-it("checks only the approved snapshot and marks appended items until the user expands it", async () => {
+it("checks writes against the latest declaration, then asks for out-of-scope and irreversible calls", async () => {
   const f = await setup([declare(), send(), declare(extra), send(), send("other"), call("fixture_delete", {}), finish],
     ctx => JSON.parse(contentText(ctx.messages.at(-1)!.content)).call.arguments.message === "team"
       ? positive() : say('{"inScope":false,"reason":"对象不同"}'), true);
-  f.app.settings.set("auto");
+  f.app.settings.set("on");
   await f.start();
-  const initial = await f.park();
-  expect(initial.statement).toEqual([{ ...first, isNew: false }]);
-  await f.decide(initial.id, "statement");
   const outside = await f.park("outbox_send", "other");
-  expect(outside.statement).toEqual([{ ...first, isNew: false }, { ...extra, isNew: true }]);
-  expect(f.judged.map(j => j.statement)).toEqual([[first], [first], [first]]);
+  expect(outside.statement).toEqual([{ ...first, isNew: false }, { ...extra, isNew: false }]);
+  expect(f.judged.map(j => j.statement)).toEqual([[first], [first, extra], [first, extra]]);
   expect(f.app.demo.outbox).toEqual(["team", "team"]);
   expect(f.surface.snapshot().ledger[0]?.summary).toContain("审批模型放行");
   await f.decide(outside.id, "once");
@@ -106,8 +105,8 @@ it("checks only the approved snapshot and marks appended items until the user ex
   await expect.poll(() => f.surface.snapshot().tasks[0]?.status).toBe("completed");
   expect(f.deletes()).toBe(0);
   const { approvals } = await stats("day", f.app.timeZone, { app: f.app, dir: f.dir! });
-  expect(approvals).toMatchObject({ userDecisions: { statement: 1, once: 1, deny: 1, "task-full": 0 },
-    byApprover: [{ approver: "user", count: 3 }, { approver: "judge", count: 1 }, { approver: "timeout", count: 0 }] });
+  expect(approvals).toMatchObject({ userDecisions: { once: 1, deny: 1, "task-full": 0 },
+    byApprover: [{ approver: "user", count: 2 }, { approver: "judge", count: 2 }, { approver: "timeout", count: 0 }] });
 });
 
 it("honors task-full for subsequent irreversible operations even with the model off", async () => {
@@ -119,28 +118,13 @@ it("honors task-full for subsequent irreversible operations even with the model 
   expect(f.judged).toEqual([]);
 });
 
-it("uses a scoped default at the soft deadline and leaves no pending approval", async () => {
-  const f = await setup([declare(), send(), finish], positive, true);
-  f.app.settings.set("auto");
-  await f.start();
-  const req = await f.park();
-  f.clock.now = req.defaultAt!;
-  f.app.harness.resume();
-  await expect.poll(() => f.app.demo.outbox).toEqual(["team"]);
-  expect(f.surface.snapshot().pending).toEqual([]);
-  expect(f.surface.snapshot().ledger[0]?.summary).toContain("审批模型放行");
-  const { approvals } = await stats("all", f.app.timeZone, { app: f.app, dir: f.dir! });
-  expect(approvals).toMatchObject({ timeouts: 1, expired: 0, judgments: { inScope: 1, outOfScope: 0 },
-    byApprover: [{ approver: "user", count: 0 }, { approver: "judge", count: 0 }, { approver: "timeout", count: 1 }] });
-});
-
 it("keeps a deferred approval across restart and consumes it once for matching arguments", async () => {
   const results: string[] = [];
   const f = await setup([declare(), send(), ctx => {
     results.push(contentText(ctx.messages.at(-1)!.content));
     return call("fixture_delete", {});
   }, send("other"), send(), send(), finish], say('{"inScope":false,"reason":"待确认"}'), true);
-  f.app.settings.set("auto");
+  f.app.settings.set("on");
   await f.start();
   const req = await f.park();
   f.clock.now = req.defaultAt!;
@@ -154,7 +138,7 @@ it("keeps a deferred approval across restart and consumes it once for matching a
   await f.close();
   const g = await f.reopen();
   g.app.harness.resume();
-  expect(g.app.settings.approvalModel).toBe("auto");
+  expect(g.app.settings.approvalModel).toBe("on");
   await g.decide(req.id, "once");
   await g.decide((await g.park("fixture_delete")).id, "once");
   await g.decide((await g.park("outbox_send", "other")).id, "once");
@@ -164,28 +148,13 @@ it("keeps a deferred approval across restart and consumes it once for matching a
   await expect.poll(() => g.surface.snapshot().tasks[0]?.status).toBe("completed");
 });
 
-it("keeps shadow approvals parked and pairs a slow judgment with the winning user decision", async () => {
-  let release!: () => void;
-  const wait = new Promise<void>(resolve => { release = resolve; });
-  const f = await setup([declare(), send(), finish], async () => { await wait; return positive(); });
-  expect(f.app.settings.approvalModel).toBe("shadow");
-  await f.start();
-  const req = await f.park();
-  f.clock.now = req.defaultAt! + 1;
-  f.app.harness.resume();
-  await f.decide(req.id, "deny");
-  release();
-  await expect.poll(() => approvalStats(f.app.main)).toEqual({ compared: 1, agreed: 0, agreementRate: 0, deniedButInScope: 1 });
-  expect(f.app.demo.outbox).toEqual([]);
-});
-
 it("defers an irreversible call without a judge and expires its detached card once at the final deadline", async () => {
   let message = "";
   const f = await setup([call("fixture_delete", {}), ctx => {
     message = contentText(ctx.messages.at(-1)!.content);
     return finish;
   }], positive, true);
-  f.app.settings.set("auto");
+  f.app.settings.set("on");
   await f.start();
   const req = await f.park("fixture_delete");
   f.clock.now = req.defaultAt!;
@@ -203,23 +172,10 @@ it("defers an irreversible call without a judge and expires its detached card on
   expect(f.deletes()).toBe(0);
 });
 
-it("records shadow agreement without using a positive judgment after statement approval", async () => {
-  const f = await setup([declare(), send(), send("next"), finish]);
-  await f.start();
-  await f.decide((await f.park()).id, "statement");
-  const next = await f.park("outbox_send", "next");
-  f.clock.now = next.defaultAt!;
-  f.app.harness.resume();
-  await expect.poll(() => f.judged.length).toBe(2);
-  expect(f.app.demo.outbox).toEqual(["team"]);
-  await f.decide(next.id, "once");
-  await expect.poll(() => approvalStats(f.app.main)).toEqual({ compared: 2, agreed: 2, agreementRate: 1, deniedButInScope: 0 });
-});
-
-it("keeps an empty statement out of automatic authorization even when the judge returns true", async () => {
+it("asks directly when the worker has no statement", async () => {
   let result = "";
   const f = await setup([send(), ctx => { result = contentText(ctx.messages.at(-1)!.content); return finish; }]);
-  f.app.settings.set("auto");
+  f.app.settings.set("on");
   await f.start();
   const req = await f.park();
   f.clock.now = req.defaultAt!;
@@ -227,17 +183,15 @@ it("keeps an empty statement out of automatic authorization even when the judge 
   await expect.poll(() => result).toContain("暂未获批");
   expect(f.app.demo.outbox).toEqual([]);
   await f.decide(req.id, "deny");
-  expect((await approvalStats(f.app.main)).deniedButInScope).toBe(1);
+  expect(f.judged).toHaveLength(0);
+  expect((await approvalStats(f.app.main)).userDenied).toBe(1);
 });
 
 it("resumes statement authorizations from SQLite without asking again for an in-scope call", async () => {
   const f = await setup([declare(), send(), call("fixture_delete", {}), send(), finish], positive, true);
-  f.app.settings.set("auto");
+  f.app.settings.set("on");
   await f.start();
-  await f.decide((await f.park()).id, "statement");
   const held = await f.park("fixture_delete");
-  // An unfinished background review replays on reopen. Wait for its judgment to commit.
-  await expect.poll(() => approvalStats(f.app.main)).toMatchObject({ compared: 1 });
   await f.close();
   const g = await f.reopen();
   g.app.harness.resume();
@@ -245,5 +199,68 @@ it("resumes statement authorizations from SQLite without asking again for an in-
   await expect.poll(() => g.surface.snapshot().tasks[0]?.status).toBe("completed");
   expect(g.app.demo.outbox).toEqual(["team"]);
   expect(f.judged.map(j => j.statement)).toEqual([[first], [first]]);
-  expect(g.surface.snapshot().ledger.map(row => row.summary)).toEqual([expect.stringContaining("审批模型放行"), "done"]);
+  expect(g.surface.snapshot().ledger.map(row => row.summary)).toEqual([expect.stringContaining("审批模型放行"), expect.stringContaining("审批模型放行"), "done"]);
+});
+
+it("uses only the last three original user inputs for both the lease and its write", async () => {
+  const f = await setup([]);
+  const texts = ["旧指示", "给团队写更新", "只发本周进度", "现在发送"];
+  f.mainModel.setResponses([say("模型回复"), say("模型回复"), say("模型回复"), say("系统唤醒"),
+    call("enable_tool", { capability: "outbox", reason: "模型写的理由" }), send(), say("完成")]);
+  for (const text of texts.slice(0, 3)) {
+    await submitMessage(f.app.main, text);
+    await f.app.main.waitForIdle(context);
+  }
+  await submitMessage(f.app.main, "内部调度内容", "schedule");
+  await f.app.main.waitForIdle(context);
+  await f.app.main.commit(tx => tx.appendEntry(f.app.main.id, {
+    kind: "alter.task-report", data: { source: "web", text: "工具执行结果和任务报告" },
+  }), context);
+  await submitMessage(f.app.main, texts[3]!);
+  await f.app.main.waitForIdle(context);
+  expect(f.app.demo.outbox).toEqual(["team"]);
+  expect(f.judged.map(j => j.call.tool)).toEqual(["enable_tool", "outbox_send"]);
+  for (const { statement } of f.judged) {
+    expect(statement).toEqual(texts.slice(1).map(purpose => ({ tool: "", target: "", purpose })));
+  }
+  expect(await approvalStats(f.app.main)).toEqual({ modelAllowed: 2, askedUser: 0, userApproved: 0, userDenied: 0 });
+});
+
+it("migrates stored approval modes, audit effects and statement decisions on reopen", async () => {
+  const f = await setup([], positive, true);
+  const effects = ["write-local", "external-send", "unknown"];
+  await f.app.main.commit(async tx => {
+    const audit = await tx.doc(Audit, f.app.main.id);
+    for (const effect of effects) {
+      audit.entries.push(JSON.parse(JSON.stringify({ taskId: "legacy", tool: "legacy_tool", capability: "legacy", action: "tool",
+        effect, decision: "allow", at: 1, tainted: true })));
+    }
+    (await tx.doc(Reviews, f.app.main.id)).byId.legacy = JSON.parse('{"user":"statement"}');
+  }, context);
+  await f.close();
+  const path = join(f.dir!, "settings.json");
+  await writeFile(path, JSON.stringify({ approvalModel: "shadow" }));
+  const g = await f.reopen();
+  expect(g.app.settings.approvalModel).toBe("on");
+  expect(JSON.parse(await readFile(path, "utf8")).approvalModel).toBe("on");
+  const audit = await g.app.harness.snapshot(Audit, g.app.main.id, context);
+  expect(audit?.entries.map(e => e.effect)).toEqual(["write", "write", "irreversible"]);
+  for (const entry of audit!.entries) expect(entry).not.toHaveProperty("tainted");
+  expect((await approvalStats(g.app.main)).userApproved).toBe(1);
+  expect(isApprovalDecision("statement")).toBe(false);
+});
+
+it("requires a user decision for an unrecognized runtime effect even with an in-scope statement", async () => {
+  const tool = "fixture_delete";
+  const f = await setup([declare({ tool, target: "fixture", purpose: "remove" }), call(tool, {}), finish]);
+  // Simulate a stale runtime descriptor after registration of a valid manifest.
+  Object.assign(f.app.capabilities.toolActions.get(tool)!, { effect: "future-effect" });
+  await f.start();
+  const request = await f.park(tool);
+  expect(f.judged).toEqual([]);
+  expect(f.deletes()).toBe(0);
+  await f.decide(request.id, "deny");
+  await expect.poll(() => f.surface.snapshot().tasks[0]?.status).toBe("completed");
+  const audit = await f.app.harness.snapshot(Audit, f.app.main.id, context);
+  expect(audit?.entries.filter(row => row.tool === tool).map(row => row.effect)).toEqual(["irreversible", "irreversible"]);
 });

@@ -404,7 +404,7 @@ it("records effective quiet-hour notification levels and the ID of a created sch
 it("extracts a watch ID from a successful tool result and recovers a placed run after restart", async () => {
   const watch = defineTool({ name: "watch_create", description: "Offline watch fixture", parameters: obj({}),
     execute: async () => reply(JSON.stringify({ watchId: "watch-17" })) });
-  const f = await setup([{ capability: { id: "watch", mainLeasable: true, actions: [{ name: "create", effect: "write-local" }] },
+  const f = await setup([{ capability: { id: "watch", mainLeasable: true, actions: [{ name: "create", effect: "write" }] },
     tools: [watch] }]);
   const run = await f.app.heartbeat.run();
   expect(run.finishedAt).toBeNull();
@@ -415,7 +415,7 @@ it("extracts a watch ID from a successful tool result and recovers a placed run 
   g.app.harness.resume();
   const pending = async () => Object.values((await g.app.harness.snapshot(Requests, g.app.main.id, context))?.pending ?? {})[0];
   for (const tool of ["enable_tool", "watch_create"]) {
-    await expect.poll(pending).toMatchObject({ tool, tainted: true });
+    await expect.poll(pending).toMatchObject({ tool });
     await answerUserPermission(g.app.main, { requestId: (await pending())!.id, decision: "once" });
   }
   await expect.poll(async () => (await g.app.heartbeat.view()).runs[0]?.finalReply).toBe("准备好了");

@@ -5,7 +5,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage as say, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createMailPlugin } from "../../../plugin-mail/src/index.ts";
 import { config, fakeMail, outgoing } from "../../../plugin-mail/test/fake.ts";
-import { context, openAlter, openNodeSqliteStorage } from "../../src/index.ts";
+import { answerUserPermission, observeSurface, context, openAlter, openNodeSqliteStorage } from "../../src/index.ts";
 
 const faux = fauxProvider();
 faux.setResponses(Array.from({ length: 8 }, () => ({ messages }) => {
@@ -26,4 +26,9 @@ const models = createModels();
 models.setProvider(faux.provider);
 const app = await openAlter(await openNodeSqliteStorage(process.argv[2]!), models, { provider: "faux", modelId: "faux-1" },
   undefined, {}, { plugins: [createMailPlugin(config, mail.clients)] });
+await observeSurface(app, event => {
+  if (event.event === "pending" && event.data[0]) {
+    void answerUserPermission(app.main, { requestId: event.data[0].id, decision: "once" });
+  }
+});
 await app.main.submit({ type: "input", content: "delegate" }, context);

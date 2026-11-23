@@ -14,7 +14,6 @@ import { funnel } from "../src/funnel.ts";
 import { Events, openAlter } from "../src/main.ts";
 import { Notifications, reportDigests, type Notification } from "../src/notifications.ts";
 import { Ledger, Tasks } from "../src/state.ts";
-import { Taint } from "../src/taint.ts";
 import { submitMessage } from "../src/timeline.ts";
 import { context, openNodeSqliteStorage, type TaskId } from "../src/runtime.ts";
 import { appendUsage, readUsage, usageSummary, usageTotals } from "../src/usage.ts";
@@ -102,7 +101,6 @@ it("isolates untrusted input, rejects malformed output and never executes a tool
   expect(data).toContain("secret-ref-0");
   expect(data).toContain("原文里的截止时间");
   expect(data).toContain("\\u003c/untrusted\\u003e");
-  expect((await f.app.harness.snapshot(Taint, f.app.main.id, context))?.first?.source).toBe("triage");
   expect(Object.values((await f.app.harness.snapshot(Wakes, f.app.main.id, context))!.byId)).toMatchObject([{ wakeSource: "triage" }]);
   expect((await usageSummary(f.dir, "triage"))[0]).toMatchObject({ calls: 8 });
 });

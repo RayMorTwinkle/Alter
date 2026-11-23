@@ -39,13 +39,12 @@ function summary(rows: Result[]) {
   for (const name of ["restricted", "auto", "full", "主会话租约"]) {
     lines.push(`| 调用者 | ${name} | ${accuracy(rows.filter(r => tier(r) === name))} |`);
   }
-  for (const name of ["read", "write-local", "external-send", "irreversible", "unknown"]) {
+  for (const name of ["read", "write", "irreversible"]) {
     lines.push(`| 副作用 | ${name} | ${accuracy(rows.filter(r => r.effect === name))} |`);
   }
   lines.push("", "## 标注依据", "",
-    "- ADR-0004 的 2026-11-22 修订要求非全权任务的三类高风险动作逐次询问用户。ADR-0002 将该要求扩展至所有带污点的调用者。",
-    "- ADR-0011 将任务工具按已启用插件提供。这组回归验证首次调用与单次决定。",
-    "- 未注册的工具名按 unknown 分组，运行时拒绝计入 deny。results.jsonl 中的 evidence 区分了运行时拒绝、Broker 拦截和实际挂起。");
+    "- ADR-0018：读和内部控制动作直接放行，缺少说明的写操作转问用户。不可逆操作须用户批准，全权限任务可直接执行。",
+    "- 无效工具名由运行时拒绝。证据列记录了拦截或挂起的位置。");
   return lines.join("\n") + "\n";
 }
 
@@ -56,5 +55,5 @@ if (import.meta.main) {
   await writeFile(join(out, "results.jsonl"), rows.map(r => JSON.stringify({ ...r, outcome: classify(r.expected, r.actual) })).join("\n") + "\n");
   await writeFile(join(out, "summary.md"), summary(rows));
   console.log(`权限决策准确率 ${accuracy(rows)} · ${join(out, "summary.md")}`);
-  if (rows.some(r => r.actual === null)) process.exitCode = 1;
+  if (rows.some(r => r.actual !== r.expected)) process.exitCode = 1;
 }

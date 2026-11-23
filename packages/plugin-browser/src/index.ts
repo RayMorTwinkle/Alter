@@ -105,14 +105,14 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
 
   return {
     capability: { id: "browser", mainLeasable: true, actions: [
-      { name: "open", effect: "read", guarded: true, seenArg: "url" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
-      { name: "click", effect: "write-local" }, { name: "fill", effect: "external-send" },
-      { name: "press", effect: "external-send" }, { name: "close", effect: "read" },
-      { name: "eval", effect: "external-send" }, { name: "fetch", effect: "external-send" },
-      { name: "screenshot", effect: "read" }, { name: "wait", effect: "external-send" }, { name: "handoff", effect: "write-local" },
-      { name: "select", effect: "external-send" }, { name: "upload", effect: "external-send" }, { name: "dialog", effect: "external-send" },
-      { name: "tabs", effect: "read" }, { name: "switch", effect: "read" }, { name: "adopt", effect: "write-local" },
-      { name: "back", effect: "write-local" }, { name: "forward", effect: "write-local" },
+      { name: "open", effect: "write" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
+      { name: "click", effect: "write" }, { name: "fill", effect: "write" },
+      { name: "press", effect: "write" }, { name: "close", effect: "read" },
+      { name: "eval", effect: "write" }, { name: "fetch", effect: "write" },
+      { name: "screenshot", effect: "read" }, { name: "wait", effect: "write" }, { name: "handoff", effect: "write" },
+      { name: "select", effect: "write" }, { name: "upload", effect: "write" }, { name: "dialog", effect: "write" },
+      { name: "tabs", effect: "read" }, { name: "switch", effect: "read" }, { name: "adopt", effect: "write" },
+      { name: "back", effect: "write" }, { name: "forward", effect: "write" },
     ] },
     async describe({ tool, arguments: args }, state) {
       const name = `Alter ${state.conversationId}`;

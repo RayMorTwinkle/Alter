@@ -171,7 +171,7 @@ function setupApproval() {
   });
 }
 
-it.each(["once", "statement", "task-full", "deny", "web", "cancel"] as const)("restores the pending card and resolves it once via %s", async via => {
+it.each(["once", "task-full", "deny", "web", "cancel"] as const)("restores the pending card and resolves it once via %s", async via => {
   const f = await setupApproval();
   await submitMessage(f.app.main, "delegate");
   await expect.poll(() => f.feed.snapshot().pending.length).toBe(1);
@@ -181,7 +181,7 @@ it.each(["once", "statement", "task-full", "deny", "web", "cancel"] as const)("r
   const req = f.feed.snapshot().pending[0]!;
   const [chatId, card, uuid] = f.transport.sendCard.mock.calls[0]!;
   expect(chatId).toBe("private");
-  for (const field of [req.id, req.taskId, req.tool, "允许这一次", "按说明允许", "本任务全权限", "拒绝", "…"]) expect(JSON.stringify(card)).toContain(field);
+  for (const field of [req.id, req.taskId, req.tool, "允许这一次", "本任务全权限", "拒绝", "…"]) expect(JSON.stringify(card)).toContain(field);
   expect(JSON.stringify(card)).not.toContain("x".repeat(501));
   await f.close();
   const g = await f.reopen();

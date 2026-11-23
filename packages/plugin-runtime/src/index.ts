@@ -15,7 +15,7 @@ type Host = {
   notify(id: string, reason: string): Promise<void>;
   changed(): void;
 };
-type Caller = { signal?: AbortSignal; mark(): Promise<void>; tainted(): Promise<boolean>; borrow(name: string, args: Record<string, unknown>, effect: Effect, signal: AbortSignal): Promise<unknown> };
+type Caller = { signal?: AbortSignal; borrow(name: string, args: Record<string, unknown>, effect: Effect, signal: AbortSignal): Promise<unknown> };
 const fresh = (): Progress => ({ invalid: 0, paused: false, next: 0 });
 class InvalidItems extends Error {}
 function items(value: unknown) {
@@ -87,20 +87,17 @@ export function openRuntime(data: string, host: Host, adapters: { run?: typeof r
       catch { await trip("quarantined", "代码包哈希校验失败"); throw new Error("Package integrity failure"); }
       const effect = source ? "read" : tool!.effect;
       const secrets = host.secrets(id, m.secrets.map(s => s.name));
-      let observed = false;
       async function request(method: string, p: unknown) {
         signal.throwIfAborted();
         if (method === "http.request") {
-          const response = await proxy(m, p, { effect, secrets, signal, tainted: async () => observed || (await caller?.tainted() ?? false) });
-          observed = true; await caller?.mark(); return response;
+          return proxy(m, p, { effect, secrets, signal });
         }
         if (method === "borrow") {
           fields(p, "tool args");
           check(typeof p.tool === "string" && m.borrows.includes(p.tool) && record(p.args), "Undeclared or unavailable borrow");
           audit({ plugin: id, borrow: p.tool, caller: call.name });
           check(caller || source && host.borrowSource, "No broker context");
-          const result = caller ? await caller.borrow(p.tool, p.args, effect, signal) : await host.borrowSource!(id, p.tool, p.args, signal);
-          observed = true; return result;
+          return caller ? await caller.borrow(p.tool, p.args, effect, signal) : await host.borrowSource!(id, p.tool, p.args, signal);
         }
         if (method === "log") {
           fields(p, "message"); check(typeof p.message === "string", "Invalid log");
@@ -108,10 +105,10 @@ export function openRuntime(data: string, host: Host, adapters: { run?: typeof r
         }
         fields(p, method === "kv.list" ? "" : method === "kv.set" ? "key value" : "key");
         const kv = store.active(id)!.kv;
-        if (method === "kv.list") { observed = true; await caller?.mark(); return Object.keys(kv); }
+        if (method === "kv.list") return Object.keys(kv);
         const key = p.key;
         check(typeof key === "string" && key && key.length <= 256 && !Object.hasOwn(Object.prototype, key), "Invalid KV key");
-        if (method === "kv.get") { observed = true; await caller?.mark(); return Object.hasOwn(kv, key) ? kv[key] : null; }
+        if (method === "kv.get") return Object.hasOwn(kv, key) ? kv[key] : null;
         check(method === "kv.delete" || method === "kv.set" && Object.hasOwn(p, "value"), "Unknown host request");
         update(v => {
           if (method === "kv.delete") delete v.kv[key];

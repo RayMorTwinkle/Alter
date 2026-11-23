@@ -1,4 +1,4 @@
-import { CaretRight, Link as LinkIcon, Warning } from "@phosphor-icons/react";
+import { CaretRight, Link as LinkIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { clock, pretty, remaining } from "../format.ts";
 import { useT } from "../i18n.tsx";
@@ -116,7 +116,6 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
         <span className="approval-tool">{request.capability} · <code>{request.tool}</code></span>
         <span className={mine ? "badge" : "chip"}>{mine ? t.needsYou : t.handledByMain}</span>
       </header>
-      {request.taint && <p className="approval-taint"><Warning weight="fill" /> {t.tainted(request.taint.source)}</p>}
       <dl>
         <dt>{t.reason}</dt>
         <dd>{request.reason}</dd>
@@ -142,8 +141,7 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
           <div className="approval-buttons">
             <button className="btn" disabled={busy} onClick={() => void answer("deny")}>{t.decisions.deny}</button>
             {!lease && <button className="btn quiet" disabled={busy} onClick={() => void answer("task-full")}>{t.decisions.full}</button>}
-            <button className={`btn ${lease || !statement.length ? "primary" : ""}`} disabled={busy} onClick={() => void answer("once")}>{t.decisions.once}</button>
-            {!lease && statement.length > 0 && <button className="btn primary" disabled={busy} onClick={() => void answer("statement")}>{t.decisions.statement}</button>}
+            <button className="btn primary" disabled={busy} onClick={() => void answer("once")}>{t.decisions.once}</button>
           </div>
           <span className="approval-expiry">
             {request.deferred ? t.deferred : fallback ? t.defaultIn(fallback.n, fallback.unit) : t.expiresIn(left.n, left.unit)}

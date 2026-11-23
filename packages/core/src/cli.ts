@@ -15,7 +15,7 @@ export async function observeChat(app: AlterApp, print: (text: string) => void) 
   function permissions(requests: PermissionRequest[]) {
     const pending = requests.filter(req => req.audience === "user");
     for (const req of pending) {
-      if (!shown.has(req.id)) print(`[用户审批] ${req.id} · ${req.taskId} · ${req.tool} ${JSON.stringify(req.arguments)}\n原因：${req.reason}${req.taint ? `（已读取外部内容：${req.taint.source}）` : ""}\n/approve ${req.id} 或 /deny ${req.id}`);
+      if (!shown.has(req.id)) print(`[用户审批] ${req.id} · ${req.taskId} · ${req.tool} ${JSON.stringify(req.arguments)}\n原因：${req.reason}\n/approve ${req.id} 或 /deny ${req.id}`);
     }
     shown = new Set(pending.map(req => req.id));
   }

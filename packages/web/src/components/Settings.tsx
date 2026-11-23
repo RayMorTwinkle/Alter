@@ -4,7 +4,7 @@ import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
 import { clock } from "../format.ts";
 import { ExtPlugins } from "./ExtPlugins.tsx";
-import type { ExtPluginView, ApprovalStats, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
+import type { ApprovalStats, ExtPluginView, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
 
 type Draft = Record<string, string | boolean>;
@@ -321,7 +321,7 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
         <section className="settings-block">
           <h3>{t.approval}</h3>
           <div className="seg" role="radiogroup" aria-label={t.approval}>
-            {(["shadow", "auto", "off"] as const).map(mode => (
+            {(["on", "off"] as const).map(mode => (
               <button key={mode} role="radio" aria-checked={settings.approvalModel === mode}
                 className={settings.approvalModel === mode ? "active" : ""} onClick={() => void patch({ approvalModel: mode })}>
                 {t.approvalModes[mode]}
@@ -329,13 +329,8 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
             ))}
           </div>
           <p className="settings-hint">{t.approvalHints[settings.approvalModel]}</p>
-          {stats && stats.compared > 0 && (
-            <dl className="stat-list">
-              <div><dt>{t.agreement}</dt><dd>{stats.agreementRate === null ? "—" : `${Math.round(stats.agreementRate * 100)}%`}</dd></div>
-              <div><dt>{t.compared}</dt><dd>{stats.compared}</dd></div>
-              <div><dt>{t.wouldMisallow}</dt><dd>{stats.deniedButInScope}</dd></div>
-            </dl>
-          )}
+          {stats && stats.modelAllowed + stats.askedUser > 0 &&
+            <p className="settings-hint">{t.approvalCounts(stats.modelAllowed, stats.askedUser, stats.userApproved, stats.userDenied)}</p>}
         </section>
 
         <section className="settings-block">

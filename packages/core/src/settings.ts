@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import type { FeedbackSettings } from "./feedback-settings.ts";
 
-export type ApprovalMode = "shadow" | "auto" | "off";
+export type ApprovalMode = "on" | "off";
 export const isApprovalMode = (value: unknown): value is ApprovalMode =>
-  value === "shadow" || value === "auto" || value === "off";
+  value === "on" || value === "off";
 
 export type HeartbeatSettings = { enabled: boolean; start: string; end: string };
 export function isHeartbeatSettings(value: unknown): value is HeartbeatSettings {
@@ -24,12 +24,13 @@ export function openSettings(dir: string | undefined, defaults: HeartbeatSetting
     try { saved = JSON.parse(readFileSync(path, "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
-  const mode = saved.approvalModel === undefined ? process.env.ALTER_APPROVAL_MODEL ?? "shadow" : saved.approvalModel;
-  if (!isApprovalMode(mode)) throw new Error("approvalModel must be shadow, auto or off");
+  const stored = saved.approvalModel === undefined ? process.env.ALTER_APPROVAL_MODEL ?? "on" : saved.approvalModel;
+  const mode = stored === "shadow" || stored === "auto" ? "on" : stored;
+  if (!isApprovalMode(mode)) throw new Error("approvalModel must be on or off");
   if (saved.heartbeat !== undefined && !isHeartbeatSettings(saved.heartbeat)) throw new Error("Invalid saved heartbeat settings");
   let approvalModel = mode;
   let heartbeat = saved.heartbeat;
-  return {
+  const settings = {
     feedback,
     get approvalModel() { return approvalModel; },
     get heartbeat() { return heartbeat ?? defaults; },
@@ -45,4 +46,6 @@ export function openSettings(dir: string | undefined, defaults: HeartbeatSetting
       heartbeat = window;
     },
   };
+  if (saved.approvalModel !== undefined && saved.approvalModel !== mode) settings.set(mode);
+  return settings;
 }

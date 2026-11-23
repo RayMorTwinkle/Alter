@@ -9,7 +9,7 @@ const plain = (content: string) => ({ tag: "plain_text", content });
 function card(request: PermissionRequest) {
   const args = JSON.stringify(request.arguments);
   const summary = args.length > 500 ? args.slice(0, 499) + "…" : args;
-  const labels = { once: "允许这一次", statement: "按说明允许", "task-full": "本任务全权限（含不可逆）", deny: "拒绝" };
+  const labels = { once: "允许这一次", "task-full": "本任务全权限（含不可逆）", deny: "拒绝" };
   const items = request.statement?.map(item => `${item.isNew ? "【新增】" : ""}${item.tool} · ${item.target} · ${item.purpose}`) ?? [];
   return {
     config: { update_multi: true },
