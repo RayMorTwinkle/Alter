@@ -21,7 +21,7 @@ it.each(["restricted", "auto", "full"] as const)("requires user approval for a t
   for (const tainted of [false, true]) {
     const result = await runCase({
       id: "guarded", note: "", caller: { kind: "task", permission, context: "fresh" },
-      taint: tainted ? "task-read" : "clean", tool: "memory_save", args: { kind: "fact", text: "重要事实" },
+      taint: tainted ? "task-read" : "clean", tool: "memory_write", args: { op: "add", type: "reference", title: "资料库", body: "课程资料放在学校网盘。" },
       effect: "write-local", expected: tainted ? "user" : "allow",
     });
     expect(result.actual).toBe(result.expected);
@@ -32,7 +32,7 @@ it.each(["restricted", "auto", "full"] as const)("requires user approval for a t
 it("allows a clean restricted task to use memory", async () => {
   const result = await runCase({
     id: "unlisted-memory", note: "", caller: { kind: "task", permission: "restricted", context: "fresh" },
-    taint: "clean", tool: "memory_save", args: { kind: "profile", text: "偏好" }, effect: "write-local", expected: "allow",
+    taint: "clean", tool: "memory_write", args: { op: "add", type: "preference", title: "回复语言", body: "请用中文回答。" }, effect: "write-local", expected: "allow",
   });
   expect(result.actual).toBe("allow");
 });

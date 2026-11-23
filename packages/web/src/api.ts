@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryItem, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -58,11 +58,13 @@ export const api = {
   calendar: () => request<Agenda>("/api/calendar"),
   feishu: () => request<FeishuPairing>("/api/feishu"),
   disconnectFeishu: () => request<void>("/api/feishu/account/disconnect", { method: "POST", body: {} }),
-  memory: () => request<MemoryItem[]>("/api/memory"),
+  memory: () => request<MemoryView>("/api/memory?memory=entries"),
+  memoryChanges: () => request<MemoryChange[]>("/api/memory/changes"),
+  undoMemoryChange: (id: string) => request<void>(`/api/memory/changes/${encodeURIComponent(id)}/undo`, { body: {} }),
   funnel: (days = 7) => request<Funnel>(`/api/funnel?days=${days}`),
   updateNotification: (id: string, patch: { status?: "read"; feedback?: "useful" | "useless" }) =>
     request<void>(`/api/notifications/${encodeURIComponent(id)}`, { body: patch }),
-  updateMemory: (id: string, patch: Partial<Pick<MemoryItem, "text" | "status">>) =>
+  updateMemory: (id: string, patch: MemoryPatch) =>
     request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
@@ -71,7 +73,7 @@ const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
-  const source = new EventSource("/api/events");
+  const source = new EventSource("/api/events?memory=entries");
   source.onopen = () => {
     dispatch({ type: "connection", connection: "open" });
     // Changes made while disconnected are not replayed; a 404 means this server has no calendar.

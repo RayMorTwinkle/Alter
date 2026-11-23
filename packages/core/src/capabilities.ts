@@ -26,7 +26,7 @@ export const demoManifests: Capability[] = [
 
 export type ExternalEvent = {
   source: string; kind: string; summary: string; ref: string; at: number; untrusted: true;
-  author?: "external"; chatId?: string; contact?: string; contactName?: string; text?: string;
+  author?: "external" | "user"; chatId?: string; contact?: string; contactName?: string; text?: string;
 };
 export type WatchWhere = { channel: "feishu" | "mail"; chatId?: string; contact?: string };
 export type WatchSource = {
@@ -43,6 +43,7 @@ export type AlterPlugin = {
   tools: ToolRegistration[];
   // Return identifying metadata only. Never pass message bodies, snapshots or tool output.
   describe?(call: ApprovalCall, state: DescribeState): ApprovalContext | undefined | Promise<ApprovalContext | undefined>;
+  ownMessages?(since: number, until: number): Promise<{ id: string; text: string; at: number }[]>;
   watchSource?: WatchSource;
   agenda?(days?: number): { id: string; title: string; start: number; end: number }[];
   calendarEvents?: {

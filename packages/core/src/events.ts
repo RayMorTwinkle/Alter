@@ -1,6 +1,7 @@
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import type { calendarTime } from "./calendar-time.ts";
 import type { ExternalEvent } from "./capabilities.ts";
+import { recordOwnEvent } from "./memory-inbox.ts";
 import { addNotification, isClaimed } from "./notifications.ts";
 import { context, conversationDoc, type Conversation, type Harness, type Tx } from "./runtime.ts";
 import type { Decision } from "./triage.ts";
@@ -14,6 +15,7 @@ const Seen = defineDocFamily<{ seen: boolean }, null>({ kind: "alter.event-ref",
 export function emitEvent(main: Conversation, event: ExternalEvent, receive?: (tx: Tx, event: ExternalEvent) => Promise<void>) {
   return main.commit(async tx => {
     await receive?.(tx, event);
+    await recordOwnEvent(tx, event);
     const log = await tx.doc(Events, main.id);
     const { text: _body, ...summary } = event;
     log.entries.push({ ...summary, untrusted: true });

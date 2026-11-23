@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, approvalStats, isApprovalDecision, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
+  MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
 import { templates, SourceError } from "@alter/plugin-sources";
@@ -23,6 +23,12 @@ const digest = (value: string) => createHash("sha256").update(value).digest();
 const notificationPatch = schema.compile(schema.obj({
   status: schema.opt(schema.lit("read")), feedback: schema.opt(schema.oneOf(["useful", "useless"])),
 }));
+
+function legacyMemory(req: IncomingMessage) {
+  const format = new URL(req.url!, "http://localhost").searchParams.get("memory");
+  if (format) return format === "legacy";
+  return req.headers["sec-fetch-dest"] === "empty" && req.headers.accept === "*/*";
+}
 
 function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" }).end(JSON.stringify(data));
@@ -176,8 +182,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "GET" && path === "/api/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" });
       clients.set(res, token!);
+      const entryStream = new URL(req.url!, "http://localhost").searchParams.get("memory") === "entries";
       const stopMemory = app.memory.subscribe(items => {
-        if (clients.has(res)) write(res, frame("memory", items));
+        if (clients.has(res)) write(res, frame("memory", entryStream ? app.memory.store.view() : items));
       });
       res.on("close", () => { clients.delete(res); stopMemory(); });
       const snapshot = surface.snapshot();
@@ -216,7 +223,16 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (!notificationPatch.check(patch) || !Object.keys(patch).length) throw new HttpError(400, "Expected read status or useful/useless feedback");
       if (!await updateNotification(app.main, path.split("/")[3]!, patch)) throw new HttpError(404, "Unknown notification");
     } else if (method === "GET" && path === "/api/memory") {
-      return json(res, 200, app.memory.list());
+      return json(res, 200, legacyMemory(req) ? app.memory.list() : app.memory.store.view());
+    } else if (method === "GET" && path === "/api/memory/changes") {
+      return json(res, 200, app.memory.store.changes());
+    } else if (method === "POST" && /^\/api\/memory\/changes\/[^/]+\/undo$/.test(path)) {
+      if (!app.memory.store.undo(path.split("/")[4]!)) throw new HttpError(404, "Unknown memory change");
+    } else if (method === "GET" && /^\/api\/memory\/[^/]+$/.test(path)) {
+      app.memory.store.refresh();
+      const entry = app.memory.store.read(path.split("/")[3]!);
+      if (!entry) throw new HttpError(404, "Unknown memory");
+      return json(res, 200, entry);
     } else if ((method === "PATCH" || method === "DELETE") && /^\/api\/memory\/[^/]+$/.test(path)) {
       const id = path.split("/")[3]!;
       const found = method === "PATCH" ? app.memory.update(id, await body(req)) : app.memory.delete(id);
@@ -318,7 +334,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
 
   const server = createServer((req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message) : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
+      const error = cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message)
+        : cause instanceof MemoryConflict ? new HttpError(409, cause.message)
+        : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);
       if (res.headersSent) { res.destroy(); return; }
       if (error instanceof HttpError) json(res, error.status, { error: error.message });

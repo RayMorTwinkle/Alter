@@ -44,7 +44,7 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
     const heartbeat = attribution?.wakeSource === "heartbeat" || options?.sessionId?.startsWith("heartbeat-");
     const scheduled = attribution?.role === "schedule" || attribution?.wakeSource === "schedule";
     const proactiveRole = attribution?.role === "watch" ? "watch" : scheduled ? "schedule" : heartbeat ? "heartbeat"
-      : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
+      : options?.sessionId === "proactive-memory" ? "memory" : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
     const proactive = proactiveRole !== undefined;
     if (scheduled && attribution?.thinking) {
       const level = clampThinkingLevel(model, attribution.thinking);

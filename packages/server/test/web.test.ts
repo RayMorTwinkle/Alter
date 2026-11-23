@@ -344,26 +344,33 @@ it("requires user approval before sending as a Feishu user after a full task rea
 it("authenticates memory routes and streams full lists for tool writes, expiry and web edits", async () => {
   let at = 100;
   const web = await setup(({ messages }, res) => {
-    if (messages.at(-1)?.content?.endsWith("\n记下")) return toolCall(res, "memory_save", { kind: "goal", text: "考试", due: "1970-01-01T00:00:00.101Z" });
+    if (messages.at(-1)?.content?.endsWith("\n记下")) return toolCall(res, "memory_write", {
+      op: "add", type: "goal", title: "考试", body: "参加考试", dueAt: "1970-01-01T00:00:00.101Z",
+    });
     say(res, "已记录");
   }, false, undefined, () => at);
   const edit = (method: string, id: string, value?: unknown) => fetch(web.base + "/api/memory/" + id, {
     method, headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value),
   });
-  expect((await web.read("/api/memory")).status).toBe(401);
+  expect((await web.read("/api/memory?memory=legacy")).status).toBe(401);
   expect((await edit("PATCH", "1", { text: "test" })).status).toBe(401);
   expect((await edit("DELETE", "1")).status).toBe(401);
   await web.login();
-  expect(await (await web.read("/api/memory")).json()).toEqual([]);
+  expect(await (await web.read("/api/memory?memory=legacy")).json()).toEqual([]);
+  expect(await (await web.read("/api/memory")).json()).toEqual({ index: "", entries: [], needsConsolidation: false });
   const feed = await stream(web.read);
+  const indexed = await stream<ReturnType<typeof web.app.memory.store.view>>(path => web.read(path + "?memory=entries"));
   const profile = web.app.memory.save({ kind: "profile", text: "用中文回答" });
+  await indexed.seen(e => e.event === "memory" && e.data.entries[0]?.id === profile && e.data.index.includes("用中文回答"));
+  const browser = await fetch(web.base + "/api/memory", { headers: { cookie: web.sessionCookie(), "Sec-Fetch-Dest": "empty", Accept: "*/*" } });
+  expect(await browser.json()).toMatchObject([{ id: profile, text: "用中文回答" }]);
   await web.post("/api/messages", { text: "记下" });
   await feed.seen(e => e.event === "memory" && e.data.length === 2 && e.data[0]?.status === "active");
-  const [goal, other] = await (await web.read("/api/memory")).json() as MemoryItem[];
+  const [goal, other] = await (await web.read("/api/memory?memory=legacy")).json() as MemoryItem[];
   expect(other?.id).toBe(profile);
-  expect(goal).toMatchObject({ kind: "goal", text: "考试", due: 101 });
+  expect(goal).toMatchObject({ kind: "goal", text: "参加考试", due: 101 });
   at = 102;
-  const expired = await (await web.read("/api/memory")).json();
+  const expired = await (await web.read("/api/memory?memory=legacy")).json();
   expect(expired[0]).toMatchObject({ id: goal!.id, status: "pending", updatedAt: at });
   await feed.seen(e => e.event === "memory" && e.data[0]?.status === "pending");
   for (const invalid of [{}, { text: " " }, { status: "bad" }, { due: "123" }, { kind: "fact" }]) {
@@ -376,11 +383,19 @@ it("authenticates memory routes and streams full lists for tool writes, expiry a
   await feed.seen(e => e.event === "memory" && e.data.length === 1 && e.data[0]?.id === goal!.id);
   expect((await edit("PATCH", profile, { text: "已删除" })).status).toBe(404);
   expect((await edit("DELETE", profile)).status).toBe(404);
+  const history = await (await web.read("/api/memory/changes")).json();
+  expect(history[0]).toMatchObject({ operations: [{ op: "delete", ids: [profile] }] });
+  expect((await edit("POST", "changes/" + history[0].id + "/undo")).status).toBe(204);
+  expect((await edit("POST", "changes/" + history[0].id + "/undo")).status).toBe(409);
+  expect((await edit("PATCH", profile, { guess: true })).status).toBe(204);
+  expect((await edit("PATCH", profile, { guess: false })).status).toBe(204);
+  expect(await (await web.read("/api/memory/" + profile)).json()).toMatchObject({ type: "user", body: "用中文回答", guess: false });
+  expect((await edit("DELETE", profile)).status).toBe(204);
   await web.app.main.waitForIdle(context);
   await web.close();
   const reopened = await web.reopen();
   await reopened.login();
-  expect(await (await reopened.read("/api/memory")).json()).toEqual([{ ...goal, text: "期末考试", status: "active", due: 200, updatedAt: at }]);
+  expect(await (await reopened.read("/api/memory?memory=legacy")).json()).toEqual([{ ...goal, text: "期末考试", status: "active", due: 200, updatedAt: at }]);
 });
 
 it("publishes the notification list and persists independent read and feedback updates", async () => {

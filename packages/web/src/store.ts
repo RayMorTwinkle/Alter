@@ -1,10 +1,10 @@
-import type { ExtPluginView, Agenda, LedgerEntry, MemoryItem, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
+import type { ExtPluginView, Agenda, LedgerEntry, MemoryView, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
 
 export type State = Snapshot & {
   draft: { id: string; text: string } | null;
   connection: "connecting" | "open" | "lost";
   agenda: Agenda | null; // null until loaded, and when the server has no calendar
-  memory: MemoryItem[];
+  memory: MemoryView | null;
   heartbeatTick: number;
   extPlugins: ExtPluginView[];
 };
@@ -19,7 +19,7 @@ export type Action =
   | { type: "busy"; busy: boolean }
   | { type: "connection"; connection: State["connection"] }
   | { type: "agenda"; agenda: Agenda }
-  | { type: "memory"; memory: MemoryItem[] }
+  | { type: "memory"; memory: MemoryView }
   | { type: "notifications"; notifications: Notification[] }
   | { type: "heartbeat" }
   | { type: "schedules"; schedules: ScheduledTask[] }
@@ -27,7 +27,7 @@ export type Action =
   | { type: "extPlugins"; extPlugins: ExtPluginView[] };
 
 export const initialState: State = {
-  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: [], heartbeatTick: 0, extPlugins: [],
+  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: null, heartbeatTick: 0, extPlugins: [],
 };
 
 function upsert(timeline: TimelineItem[], item: TimelineItem) {

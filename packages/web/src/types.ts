@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.18).
+// Mirrors docs/architecture/web-api.md (v1.19).
 
 export type TimelineItem = {
   id: string;
@@ -74,6 +74,20 @@ export type Funnel = {
   days: { date: string; triggered: number; passed: number; pushed: number; read: number;
     useful: number; useless: number; digests: number; reminders: number }[];
   precision: number | null;
+};
+
+export type MemoryEntry = {
+  id: string; title: string; type: "user" | "preference" | "goal" | "reference"; body: string; source: string;
+  guess: boolean; dueAt?: number; status: "active" | "done" | "pending"; createdAt: number; updatedAt: number; supersededBy?: string;
+};
+export type MemoryPatch = Partial<Pick<MemoryEntry, "title" | "type" | "body" | "source" | "guess" | "status">> & {
+  dueAt?: number | null; text?: string; due?: number | null;
+};
+export type MemoryView = { index: string; entries: MemoryEntry[]; needsConsolidation: boolean };
+export type MemoryChange = {
+  id: string; at: number; kind: "write" | "consolidate" | "undo" | "expire"; undoneBy?: string;
+  operations: { op: "add" | "modify" | "supersede" | "keep" | "delete" | "restore"; ids: string[] }[];
+  snapshots: { id: string; before: MemoryEntry | null; after: MemoryEntry | null }[];
 };
 
 export type MemoryItem = {

@@ -1,4 +1,4 @@
-# Web API 契约（v1.18）
+# Web API 契约（v1.19）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -184,9 +184,12 @@ type TranscriptItem =
 | `DELETE` | `/api/schedules/:id` | 删除后返回 `204`，未知或已删除返回 `404` |
 | `GET` | `/api/calendar` | `Agenda`（v1.3）；未加载日历插件时 `404` |
 | `POST` | `/api/notifications/:id` | 更新已读或反馈 → `204`。请求至少含 `status`（仅 `read`）或 `feedback`（`useful` 或 `useless`）之一。无效字段返回 `400`，未知或已淘汰的 ID 返回 `404` |
-| `GET` | `/api/memory` | `MemoryItem[]`，按 `updatedAt` 倒序。读取时将已过期的 active 目标转为 pending |
-| `PATCH` | `/api/memory/:id` | 请求至少含 `text`、`status`、`due` 之一 → `204`。期限仅适用于目标，使用 Unix 毫秒，传 `null` 可清除。字段无效返回 `400`，记忆不存在返回 `404` |
-| `DELETE` | `/api/memory/:id` | 删除记忆 → `204`；记忆不存在返回 `404` |
+| `GET` | `/api/memory` | `MemoryView`，包含字符串索引 `index`、当前条目 `entries`（更新时间倒序）和 `needsConsolidation` |
+| `GET` | `/api/memory/:id` | `MemoryEntry`，含已取代的历史条目。找不到返回 `404` |
+| `PATCH` | `/api/memory/:id` | 编辑当前条目的 title、type、body、source、guess、dueAt 或 status，至少一项。确认推测传 `{"guess":false}`。目标期限为 Unix 毫秒，传 null 清除。成功 204，非法 400，缺失或已取代 404 |
+| `DELETE` | `/api/memory/:id` | 删除当前条目 → 204，缺失或已取代 404 |
+| `GET` | `/api/memory/changes` | `MemoryChange[]`，最新在前，含操作、受影响 ID 和逐条前后快照 |
+| `POST` | `/api/memory/changes/:id/undo` | 原子恢复该次变更的快照 → 204。变更缺失 404，已撤销、撤销记录本身或所涉条目有后续冲突时 409 |
 | `GET` | `/api/events` | SSE，见下 |
 
 v1.10 中，`once` 批准卡片上的具体调用。`statement` 批准本次调用并保存卡片上的说明快照，后续追加项需再次获批。`task-full` 对当前任务放行所有后续调用，包括不可逆操作。`deny` 拒绝当前调用，并阻止同任务重试该工具。主会话租约支持 `once` 和 `deny`。
@@ -197,7 +200,7 @@ v1.10 中，`once` 批准卡片上的具体调用。`statement` 批准本次调�
 
 v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际投递到通知中心的 Unix 毫秒时间。按用户本地时间，23:00（含）至次日 08:00（不含）触发的提醒记为 `digest`，其余记为 `now`。已配对的飞书私聊推送新的未读 `now` 通知。读状态和反馈可独立更新，重复提交同一值仍返回 `204`。
 
-v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直接执行。
+记忆接口使用登录会话。v1.19 保留旧 PATCH 字段 text、due 和 status。旧列表可以用 `?memory=legacy` 读取。现有浏览器页面发出的 `Sec-Fetch-Dest: empty`、`Accept: */*` 请求也使用旧列表。新客户端可显式请求 `?memory=entries`。读取时已过期的 active 目标转为 pending。条目 ID 为字符串，时间戳为 Unix 毫秒。后台整理允许通过 `ALTER_MEMORY_CONSOLIDATION_TURNS` 选择 200–300 轮，默认 250 轮，用户空闲满 30 分钟触发。
 
 `timeline` 返回最近 200 条；更早的用 `GET /api/state?before=<id>` 分页（v1 可不实现）。
 
@@ -276,7 +279,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | `schedules` | `ScheduledTask[]` | v1.13：创建、暂停、恢复、改期、触发或删除后整体替换。首次连接与重连由 snapshot 提供 |
 | `notifications` | `Notification[]` | v1.7 新增。提醒触发、已读或反馈更新时整体替换，首次连接与重连由 snapshot 提供 |
 | `heartbeat` | `{ type: "start" 或 "end", id }`、`{ type: "feedback", id, feedback }` 或 `{ type: "schedule", nextAt }` | 巡检开始、结束（含跳过或顺延）、反馈或下次时间变化。收到事件及重连后读取 `GET /api/heartbeat` |
-| `memory` | `MemoryItem[]` | v1.5：工具写入、网页修改或删除、读取触发过期转换后推送全量列表。首次连接与重连后请求 `GET /api/memory` 获取当前列表 |
+| `memory` | `MemoryItem[]` 或 `MemoryView` | 工具、网页、整理、撤销或目标过期后推送全量列表。`/api/events?memory=entries` 的同名事件返回 `MemoryView`。连接或重连后 GET 同格式列表初始化 |
 | `calendar` | `Agenda` | v1.3：日程变化时整体替换。不包含在 `snapshot` 中，重连后前端重新请求 `/api/calendar` |
 
 每 20 秒发一次注释行 `: ping` 保活。前端断线后用 `EventSource` 自动重连，并以收到的 `snapshot` 为准重建状态。

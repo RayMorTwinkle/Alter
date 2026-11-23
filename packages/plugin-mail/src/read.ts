@@ -2,7 +2,7 @@ import { buffer } from "node:stream/consumers";
 import type { FetchMessageObject, MessageAddressObject, MessageStructureObject, SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
 import { reply } from "@alter/core";
-import { uids, type MailConnection } from "./client.ts";
+import { folderPath, uids, type MailConnection } from "./client.ts";
 
 type Query = { from?: string; subject?: string; since?: string; unseen?: boolean; limit?: number };
 export function addresses(items?: MessageAddressObject[]) {
@@ -56,8 +56,12 @@ function parts(root: MessageStructureObject) {
 
 export async function read(client: MailConnection, uid: number) {
   await client.mailboxOpen("INBOX", { readOnly: true });
+  return readSelected(client, uid);
+}
+
+async function readSelected(client: MailConnection, uid: number) {
   const msg = await client.fetchOne(uid, { bodyStructure: true, envelope: true, internalDate: true }, { uid: true });
-  if (!msg || !msg.bodyStructure) throw new Error(`Missing INBOX message or body structure for UID ${uid}`);
+  if (!msg || !msg.bodyStructure) throw new Error(`Missing message or body structure for UID ${uid}`);
   const { body, attachments } = parts(msg.bodyStructure);
   let text = "";
   let remainingBytes = 64 * 1024;
@@ -65,7 +69,7 @@ export async function read(client: MailConnection, uid: number) {
   for (const node of body) {
     if (remainingBytes <= 0 || text.length >= bodyLimit) { truncated = true; break; }
     const part = await client.download(uid, node.part || "1", { uid: true, maxBytes: remainingBytes, decodeText: true });
-    if (!part.content) throw new Error(`Missing INBOX body for UID ${uid}`);
+    if (!part.content) throw new Error(`Missing mail body for UID ${uid}`);
     const bytes = await buffer(part.content);
     remainingBytes -= bytes.length;
     let chunk = bytes.toString("utf8");
@@ -79,6 +83,29 @@ export async function read(client: MailConnection, uid: number) {
   return { ...summary(msg), to: addresses(msg.envelope?.to), cc: addresses(msg.envelope?.cc),
     replyTo: addresses(msg.envelope?.replyTo), messageId: msg.envelope?.messageId,
     text: text.slice(0, bodyLimit), truncated: truncated || text.length > bodyLimit || remainingBytes <= 0, attachments };
+}
+
+export async function ownSent(client: MailConnection, address: string, since: number, until: number) {
+  const sent = folderPath(await client.list(), "Sent");
+  const box = await client.mailboxOpen(sent, { readOnly: true });
+  const ids = await uids(client, { since: new Date(since - 86_400_000), before: new Date(until + 86_400_000) });
+  const messages = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const rows = await client.fetchAll(ids.slice(i, i + 50), { envelope: true, internalDate: true }, { uid: true });
+    for (const row of rows) {
+      const e = row.envelope;
+      const at = row.internalDate ? new Date(row.internalDate).getTime() : NaN;
+      if (!(at >= since && at <= until) || e?.from?.length !== 1 || e.from[0]?.address?.toLowerCase() !== address.toLowerCase()) continue;
+      if (e.messageId?.startsWith("<alter.")) continue;
+      const { text } = await readSelected(client, row.uid);
+      const quote = text.search(/^\s*(?:>|-{2,}\s*(?:Original Message|Forwarded message|原始邮件|转发)|Begin forwarded message:|On .+ wrote:|在.+写道[：:]|(?:From|发件人)[:：])/im);
+      const threaded = e.inReplyTo || /^(re|fw|fwd|回复|转发)[:：]/i.test(e.subject ?? "");
+      if (threaded && quote < 0) continue;
+      const own = (quote < 0 ? text : text.slice(0, quote)).trim();
+      if (own) messages.push({ at, text: own, id: e.messageId ?? `Sent/${box.uidValidity}/${row.uid}` });
+    }
+  }
+  return messages;
 }
 
 export function external(items: { uid: number }[]) {

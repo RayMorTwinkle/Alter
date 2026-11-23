@@ -27,17 +27,26 @@ const mainModel = { provider: "faux", modelId: "faux-1" };
 
 it("removes only the lease tool and lease instruction when leasing is disabled", async () => {
   const models = createModels();
-  models.setProvider(fauxProvider().provider);
+  const faux = fauxProvider();
+  faux.setResponses([say("ok"), say("ok")]);
+  models.setProvider(faux.provider);
   async function agent(leasing: boolean) {
     const app = await openAlter(new MemoryStorage(), models, mainModel, undefined, {}, { leasing });
-    try { return await app.main.agent(context); }
+    try {
+      await app.main.submit({ type: "input", content: "test" }, context);
+      await app.main.waitForIdle(context);
+      const agent = await app.main.agent(context);
+      const messages = (await app.main.context(context)).messages;
+      const index = messages.find(m => m.role === "system")?.sections?.["memory-index"];
+      return { tools: agent.tools, instructions: agent.instructions + (index ?? "") };
+    }
     finally { await app.close(); }
   }
   const lease = await agent(true);
   const dispatch = await agent(false);
   expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_cancel", "schedule_task", "schedule_pause", "notify", "watch", "watch_list", "watch_cancel",
     "dispatch_task", "task_status", "task_message", "task_cancel",
-    "memory_search", "memory_save", "memory_update", "memory_delete"]);
+    "memory_read", "memory_search", "memory_write", "memory_delete"]);
   expect(dispatch.instructions).toBe(lease.instructions!.replace("简短、频繁的日程操作可用 enable_tool 租用 calendar。", ""));
 });
 

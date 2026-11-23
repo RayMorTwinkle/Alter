@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { contentText } from "@earendil-works/pi-ai";
 import { Heartbeat, heartbeatKind, userActivity } from "./heartbeat-state.ts";
 import { wakeNotifications } from "./notifications.ts";
+import { recordUserMessage } from "./memory-inbox.ts";
 import { Taint } from "./taint.ts";
 import { inputClock } from "./clock.ts";
 import { context, InboxDoc, LiveDoc, type TaskId, type ConversationId, type Conversation, type ConversationHandle, type Tx, type JsonObject, type Cursor, type EntryRecord, type InboxState } from "./runtime.ts";
@@ -46,6 +47,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   if (input.user) {
     await userActivity(tx, state, input.at);
     if (typeof input.data.text === "string") {
+      await recordUserMessage(tx, { id: input.id, at: input.at, text: input.data.text });
       state.chat = [{ id: input.id, text: input.data.text.slice(0, 200) }, ...(state.chat ?? []).slice(0, 7)];
     }
   }

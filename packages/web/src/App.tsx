@@ -118,7 +118,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
     agenda: state.agenda && <AgendaPanel agenda={state.agenda} schedules={state.schedules ?? []}
       onPause={(id, paused) => void guard(() => api.pauseSchedule(id, paused)).catch(() => {})}
       onDelete={id => void guard(() => api.deleteSchedule(id)).catch(() => {})} />,
-    memory: <MemoryPanel items={state.memory}
+    memory: <MemoryPanel view={state.memory}
       onUpdate={(id, patch) => guard(() => api.updateMemory(id, patch))} onDelete={id => guard(() => api.deleteMemory(id))} />,
     ledger: <LedgerPanel ledger={state.ledger} onOpen={setOpenTask} />,
   };
@@ -127,7 +127,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
     { id: "tasks", label: t.tasks, icon: ListChecks, count: state.tasks.filter(task => task.status === "running").length },
     { id: "approvals", label: t.approvals, icon: SealCheck, count: waiting },
     ...state.agenda ? [{ id: "agenda" as const, label: t.agenda, icon: CalendarBlank }] : [],
-    { id: "memory", label: t.memory, icon: Brain, count: state.memory.filter(item => item.status === "pending").length },
+    { id: "memory", label: t.memory, icon: Brain, count: (state.memory?.entries ?? []).filter(item => item.status === "pending" || item.guess).length },
     { id: "ledger", label: t.ledger, icon: Notebook },
   ];
 
