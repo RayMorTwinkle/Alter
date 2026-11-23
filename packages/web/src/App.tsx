@@ -1,4 +1,4 @@
-import { Bell, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
+import { Bell, Binoculars, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
 import { useCallback, useEffect, useReducer, useState } from "react";
 import { api, connect, Unauthorized } from "./api.ts";
 import { AgendaPanel } from "./components/Agenda.tsx";
@@ -7,10 +7,12 @@ import { Login } from "./components/Login.tsx";
 import { MemoryPanel } from "./components/Memory.tsx";
 import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx";
 import { NotificationsSheet, TaskSheet } from "./components/Sheets.tsx";
+import { clock } from "./format.ts";
 import { StatsSheet } from "./components/Stats.tsx";
+import { HeartbeatSheet } from "./components/Heartbeat.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
-import type { ApprovalDecision, FeishuPairing } from "./types.ts";
+import type { ApprovalDecision, FeishuPairing, HeartbeatView } from "./types.ts";
 import { defaultLocale, strings, type Locale } from "./strings.ts";
 
 type Auth = "checking" | "out" | "in";
@@ -49,10 +51,15 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [side, setSide] = useState<Exclude<Tab, "chat">>("tasks");
   const [openTask, setOpenTask] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
+  const [showHeartbeat, setShowHeartbeat] = useState(false);
+  const [heartbeat, setHeartbeat] = useState<HeartbeatView | null>(null);
+  const [heartbeatTick, setHeartbeatTick] = useState(0);
   const [showNotices, setShowNotices] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
+  // Refetched on every heartbeat SSE event and after the owner acts in the sheet; a 404 means no heartbeat on this server.
+  useEffect(() => { api.heartbeat().then(setHeartbeat, () => setHeartbeat(null)); }, [state.heartbeatTick, heartbeatTick]);
 
   // The code rotates every 10 minutes until the owner pairs; a 404 means Feishu is not configured.
   // Connecting the account leaves the page for Feishu and returns to "/", which refetches.
@@ -123,8 +130,13 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       <header className="topbar">
         <span className="wordmark">Alter</span>
         <span className={`status ${state.connection !== "open" ? "lost" : state.busy ? "busy" : ""}`}>
-          <i />{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}
+          <i /><span className="status-text">{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}</span>
         </span>
+        {heartbeat?.enabled && heartbeat.nextAt && (
+          <button className="next-heartbeat" onClick={() => setShowHeartbeat(true)} title={t.heartbeat.title}>
+            <Binoculars /><span className="label">{t.heartbeat.next}</span> {clock(heartbeat.nextAt)}
+          </button>
+        )}
         <div className="topbar-actions">
           {feishu && !feishu.paired && (
             <span className="pair-code" title={t.feishuPairHint}>
@@ -179,6 +191,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
       {showUsage && <StatsSheet onClose={() => setShowUsage(false)} />}
+      {showHeartbeat && <HeartbeatSheet view={heartbeat} onClose={() => setShowHeartbeat(false)} onChange={() => setHeartbeatTick(n => n + 1)} />}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>
   );

@@ -364,3 +364,38 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .stat-list dt { font-size: 12px; color: var(--muted); }
 .stat-list dd { margin: 0; font-size: 15px; font-weight: 550; font-variant-numeric: tabular-nums; }
 .stat-tasks li { display: grid; gap: 4px; }
+
+.next-heartbeat { border: 0; background: transparent; color: var(--muted); font-size: 13px; padding: 4px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.next-heartbeat:hover { background: var(--fill); color: var(--ink); }
+.hb-summary { background: var(--paper); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 6px; }
+.hb-next { display: flex; align-items: baseline; gap: 10px; }
+.hb-next span { font-size: 12px; color: var(--muted); }
+.hb-next b { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hb-next .btn { margin-left: auto; align-self: center; }
+.hb-why { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.hb-hint { margin: 0; font-size: 12px; color: var(--muted); }
+.hb-run-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.hb-run-head time { font-weight: 600; font-variant-numeric: tabular-nums; }
+.hb-run.skipped, .hb-run.deferred { opacity: .7; }
+.hb-told { font-size: 12px; color: var(--muted); }
+.hb-told.yes { color: var(--ink); font-weight: 550; }
+.hb-live { font-size: 12px; color: var(--accent); }
+.hb-actions { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.hb-actions li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.hb-actions code { font-size: 12px; color: var(--muted); }
+.hb-thought { margin-top: 6px; font-size: 13px; }
+.hb-thought summary { cursor: pointer; color: var(--muted); }
+.hb-thought p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.6; }
+.hb-tokens { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .next-heartbeat .label { display: none; } .next-heartbeat { padding: 4px; } }
+
+.hb-run { background: var(--paper); border-radius: var(--radius); padding: 10px 14px; }
+.hb-run .notice-feedback { margin-top: 6px; }
+.status, .pair-code, .pair-code b, .topbar .text-btn { white-space: nowrap; }
+@media (max-width: 640px) {
+  .topbar-actions { gap: 2px; }
+  .status:not(.lost) .status-text { display: none; }
+  .topbar { gap: 8px; }
+  .pair-code { margin-right: 0; }
+  .topbar-actions .icon-btn { width: 32px; min-width: 32px; }
+}

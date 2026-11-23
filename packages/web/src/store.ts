@@ -5,6 +5,7 @@ export type State = Snapshot & {
   connection: "connecting" | "open" | "lost";
   agenda: Agenda | null; // null until loaded, and when the server has no calendar
   memory: MemoryItem[];
+  heartbeatTick: number;
 };
 
 export type Action =
@@ -18,10 +19,11 @@ export type Action =
   | { type: "connection"; connection: State["connection"] }
   | { type: "agenda"; agenda: Agenda }
   | { type: "memory"; memory: MemoryItem[] }
-  | { type: "notifications"; notifications: Notification[] };
+  | { type: "notifications"; notifications: Notification[] }
+  | { type: "heartbeat" };
 
 export const initialState: State = {
-  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: [],
+  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: [], heartbeatTick: 0,
 };
 
 function upsert(timeline: TimelineItem[], item: TimelineItem) {
@@ -60,6 +62,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, memory: action.memory };
     case "notifications":
       return { ...state, notifications: action.notifications };
+    case "heartbeat":
+      return { ...state, heartbeatTick: state.heartbeatTick + 1 };
   }
 }
 

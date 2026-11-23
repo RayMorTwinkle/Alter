@@ -241,6 +241,24 @@ createServer(async (req, res) => {
     return json(res, 204);
   }
   if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000, account: { connected: false } });
+  if (path === "/api/heartbeat") {
+    const h = 3_600_000;
+    const counts = (d: number) => ({ goals: 2, memories: 6, chat: 4, agenda: 1, tasks: 0, digests: d });
+    return json(res, 200, {
+      enabled: true, nextAt: Date.now() + 3.2 * h, intervalMs: 4.4 * h, adoption: 0.62,
+      signals: { dueGoals: 2, backlog: 5, userMessages24h: 9 },
+      runs: [
+        { id: "hb-4", at: Date.now() - 1.3 * h, finishedAt: Date.now() - 1.28 * h, status: "ran", skipReason: null, counts: counts(5),
+          actions: [{ tool: "notify", id: "n-31", level: "digest" }, { tool: "dispatch_task", id: "task-171" }], notified: true,
+          finalReply: "看到你這週要投 3 家後端實習，還差 2 家；派了一個任務去整理本週新開的實習崗位，並把一場週六的黑客松放進摘要。", tokens: 8421, feedback: "useful" },
+        { id: "hb-3", at: Date.now() - 5.6 * h, finishedAt: Date.now() - 5.59 * h, status: "ran", skipReason: null, counts: counts(1),
+          actions: [], notified: false, finalReply: "郵件只有兩封廣告，目標和日程都沒有變化，暫時不打擾。", tokens: 3120, feedback: null },
+        { id: "hb-2", at: Date.now() - 9 * h, finishedAt: Date.now() - 9 * h, status: "skipped", skipReason: "recent-activity", counts: counts(0), actions: [], notified: false, finalReply: "", tokens: 0, feedback: null },
+        { id: "hb-1", at: Date.now() - 26 * h, finishedAt: Date.now() - 26 * h, status: "skipped", skipReason: "outside-hours", counts: counts(0), actions: [], notified: false, finalReply: "", tokens: 0, feedback: null },
+      ],
+    });
+  }
+  if (path === "/api/heartbeat/run") return json(res, 409, { error: "主會話正忙", id: "hb-5" });
   if (path === "/api/stats") return json(res, 200, mockStats(url.searchParams.get("range") ?? "7d"));
   if (path === "/api/usage") {
     return json(res, 200, [
