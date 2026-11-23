@@ -1,5 +1,5 @@
 import { context, conversationDoc, defineTool, reply, schema, type AlterPlugin, type ToolRegistration } from "@alter/core";
-import { actions, clip, createSpace, finishSpace, runEgo, view, type EgoRunner } from "./ego.ts";
+import { actions, clip, createSpace, describePage, finishSpace, runEgo, view, type EgoRunner } from "./ego.ts";
 
 export type { EgoRunner } from "./ego.ts";
 
@@ -77,6 +77,15 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
       { name: "click", effect: "write-local" }, { name: "fill", effect: "external-send" },
       { name: "press", effect: "external-send" }, { name: "close", effect: "write-local" },
     ] },
+    async describe({ tool, arguments: args }, state) {
+      const name = `Alter ${state.conversationId}`;
+      return serial(name, async () => {
+        const id = opened.get(name) ?? (await state.snapshot(Space))?.id;
+        if (id == null) return;
+        const target = (tool === "browser_fill" || tool === "browser_click") && typeof args.target === "string" ? args.target : undefined;
+        return describePage(runner, name, id, target, tool === "browser_press");
+      });
+    },
     tools: [
       defineTool({ name: "browser_open", description: "Navigate p1 to an HTTP(S) URL and read the viewport.", parameters: obj({ url: str() }),
         execute: ({ url }, api, ctx) => operate(api, ctx, () => actions.open(url)) }),

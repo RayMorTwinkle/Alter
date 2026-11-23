@@ -28,6 +28,11 @@ export function createFeishuConnector(options: { config: FeishuUserConfig; dataD
     capability: { id: "feishu", mainLeasable: false, actions: [
       { name: "chats", effect: "read" }, { name: "messages", effect: "read" }, { name: "send", effect: "external-send" },
     ] },
+    async describe({ tool, arguments: { chat_id } }) {
+      if ((tool !== "feishu_send" && tool !== "feishu_messages") || typeof chat_id !== "string") return;
+      const chat = (await api.chats(await userToken())).find(chat => chat.chat_id === chat_id);
+      if (chat?.name) return { chat_id, name: chat.name, type: chat.type };
+    },
     start: account.watch,
     watchSource: {
       async authorize({ chatId }) {

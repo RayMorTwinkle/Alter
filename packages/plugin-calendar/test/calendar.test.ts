@@ -180,3 +180,13 @@ it("lists the next seven local days for the web agenda and notifies subscribers 
     end: Date.parse("2026-11-23T03:00Z"), allDay: false, location: "A" });
   expect(agenda[1]).toMatchObject({ allDay: true, start: Date.parse("2026-11-24T16:00Z") });
 });
+
+it("uses stored event identity and times even when the call supplies a different title", async () => {
+  const { plugin, call } = await setup();
+  const { event } = await call("create", { title: "组会", start: "2026-11-23T09:00", notes: "private", location: "private" });
+  const { id, title, start, end } = event;
+  const state = { conversationId: 1 as Parameters<ToolRegistration["execute"]>[1]["conversationId"], snapshot: async () => undefined };
+  const describe = (id: string) => plugin.describe!({ tool: "calendar_update", arguments: { id, title: "another event" } }, state);
+  expect(await describe(id)).toEqual({ id, title, start, end });
+  expect(await describe("missing")).toBeUndefined();
+});

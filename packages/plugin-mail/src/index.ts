@@ -1,6 +1,6 @@
 import { defineTool, reply, schema, type AlterPlugin } from "@alter/core";
 import { append, compose, defaultClients, folderPath, withImap, type MailClients } from "./client.ts";
-import type { MailConfig } from "./config.ts";
+import { validAddress, type MailConfig } from "./config.ts";
 import { external, read, search } from "./read.ts";
 import { send, toolAttempt } from "./send.ts";
 import { mailWatchSource, watchInbox } from "./watch.ts";
@@ -16,6 +16,11 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
       { name: "search", effect: "read" }, { name: "read", effect: "read" },
       { name: "draft", effect: "write-local" }, { name: "send", effect: "external-send" },
     ] },
+    describe({ tool, arguments: { to } }) {
+      if ((tool !== "mail_send" && tool !== "mail_draft") || typeof to !== "string" || !validAddress(to)) return;
+      const at = to.indexOf("@");
+      return { to: to.slice(0, at + 1) + to.slice(at + 1).toLowerCase() };
+    },
     tools: [
       defineTool({
         name: "mail_search", description: "Search INBOX, newest first. from and subject are case-insensitive substrings matched within the newest 500 messages that satisfy since and unseen.", replay: "safe",

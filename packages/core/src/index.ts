@@ -20,7 +20,7 @@ export { funnel } from "./funnel.ts";
 export { Notifications, updateNotification, type Notification } from "./notifications.ts";
 export type { ScheduleItem } from "./scheduler.ts";
 export { calendarTime } from "./calendar-time.ts";
-export { judge, type ApprovalCall, type Judgment } from "./approval-model.ts";
+export { judge, type ApprovalCall, type ApprovalContext, type Judgment } from "./approval-model.ts";
 export { isApprovalMode, type ApprovalMode } from "./settings.ts";
 export { stats, type StatsRange } from "./stats.ts";
 export { subscribeHeartbeat, type HeartbeatEvent, type HeartbeatRun } from "./heartbeat-runs.ts";

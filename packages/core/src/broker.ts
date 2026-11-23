@@ -1,11 +1,11 @@
 import { submitWake } from "./timeline.ts";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
-import type { ApprovalCall, Judgment } from "./approval-model.ts";
+import type { ApprovalCall, ApprovalContext, Judgment } from "./approval-model.ts";
 import type { ApprovalMode } from "./settings.ts";
 import type { CapabilityRegistry, Effect, ToolAction } from "./capabilities.ts";
 import {
   context, conversationDoc, defineExtension, defineSignal, defineTask, hook, reply, ToolTask,
-  type Conversation, type TaskId, type Tx,
+  type Conversation, type ConversationId, type TaskId, type Tx,
 } from "./runtime.ts";
 import { isUntrusted, normalUrl, recordUntrusted, Taint, type TaintSource } from "./taint.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type PermissionItem } from "./state.ts";
@@ -119,14 +119,18 @@ async function expire(tx: Tx, main: Conversation, req: Request, at: number) {
 }
 
 export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number, defaultMs: number,
-  mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }) => Promise<Judgment>) {
-  const review = defineTask<{ id: string; taskId?: string; wakeId?: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
+  mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }, context?: ApprovalContext) => Promise<Judgment>) {
+  const review = defineTask<{ id: string; conversationId?: ConversationId; taskId?: string; wakeId?: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
     { phase: "review" }, null>({
     name: "alter.approval-review", version: 1, initial: () => ({ phase: "review" }),
     phases: { async review({ input }, api, ctx) {
       const main = getMain();
-      const judgment = await judge(input.statement, { tool: input.tool, arguments: JSON.parse(input.argumentsJson) },
-        { taskId: input.taskId, wakeId: input.wakeId });
+      const call = { tool: input.tool, arguments: JSON.parse(input.argumentsJson) };
+      const { conversationId } = input;
+      const metadata = conversationId === undefined ? undefined : await registry.describe(call, {
+        conversationId, snapshot: doc => api.snapshot(doc, conversationId, ctx),
+      });
+      const judgment = await judge(input.statement, call, { taskId: input.taskId, wakeId: input.wakeId }, metadata);
       await api.commit(async tx => {
         const reviews = await tx.doc(Reviews, main.id);
         reviews.byId[input.id] = { ...reviews.byId[input.id], judgment, judgedAt: api.now() };
@@ -229,7 +233,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             if (eligible && setting !== "off") {
               const statement = scope.items.slice(0, scope.approved);
               byId[id] = { taskId, tool: call.name, itemCount: statement.length };
-              await tx.createTask(review, { id, taskId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement,
+              await tx.createTask(review, { id, taskId, conversationId: api.conversationId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement,
                 tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
             }
             if (!checking) { scope.shown = scope.items.length; record("park"); }
