@@ -4,13 +4,13 @@ import { join } from "node:path";
 import type { FeishuUserConfig } from "./config.ts";
 import type { FeishuUserApi } from "./user-api.ts";
 
-const scopes = ["offline_access", "im:chat:read", "im:message", "im:message.p2p_msg:get_as_user",
+export const scopes = ["offline_access", "im:chat:read", "im:message", "im:message.p2p_msg:get_as_user",
   "im:message.group_msg:get_as_user", "im:message.send_as_user"];
 type Tokens = { accessToken: string; refreshToken: string; expiresAt: number; refreshAt: number; name?: string };
 
-export function openAccount(config: FeishuUserConfig, dataDir: string, api: FeishuUserApi, now: () => number) {
+export function openAccount(config: FeishuUserConfig, dataDir: string, api: FeishuUserApi, now: () => number, changed?: () => void) {
   const path = join(dataDir, "feishu-user.json");
-  const states = new Map<string, { expiresAt: number; verifier: string }>();
+  const states = new Map<string, { expiresAt: number; verifier: string; redirectUri: string }>();
   let tokens: Tokens | undefined;
   try {
     tokens = JSON.parse(readFileSync(path, "utf8"));
@@ -41,6 +41,7 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
   function clear() {
     rmSync(path, { force: true });
     tokens = undefined;
+    changed?.();
     clearTimeout(timer);
   }
   function save(result: Awaited<ReturnType<FeishuUserApi["exchange"]>>, name?: string) {
@@ -56,6 +57,7 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
       writeFileSync(temp, JSON.stringify(next), { flag: "wx", mode: 0o600 });
       renameSync(temp, path);
       tokens = next;
+      changed?.();
       schedule();
     } finally { rmSync(temp, { force: true }); }
   }
@@ -72,22 +74,22 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
     async watch() {
       running = true;
       schedule();
-      return async () => { running = false; clearTimeout(timer); await pending; };
+      return async () => { running = false; states.clear(); clearTimeout(timer); await pending; };
     },
     async accessToken() { return (await current())?.accessToken; },
     async status() {
       const value = await current();
       return value ? { connected: true, name: value.name } : { connected: false };
     },
-    start() {
+    start(redirectUri = config.redirectUri) {
       const at = now();
       for (const [key, entry] of states) if (entry.expiresAt <= at) states.delete(key);
       const state = randomBytes(32).toString("base64url");
       const verifier = randomBytes(32).toString("base64url");
-      states.set(state, { expiresAt: at + 600_000, verifier });
+      states.set(state, { expiresAt: at + 600_000, verifier, redirectUri });
       const host = config.domain === "lark" ? "accounts.larksuite.com" : "accounts.feishu.cn";
       const url = new URL(`https://${host}/open-apis/authen/v1/authorize`);
-      url.search = new URLSearchParams({ client_id: config.appId, response_type: "code", redirect_uri: config.redirectUri,
+      url.search = new URLSearchParams({ client_id: config.appId, response_type: "code", redirect_uri: redirectUri,
         scope: scopes.join(" "), state, code_challenge_method: "S256",
         code_challenge: createHash("sha256").update(verifier).digest("base64url") }).toString();
       return url.href;
@@ -98,7 +100,7 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
       states.delete(state);
       if (!entry || entry.expiresAt <= now() || !code) return false;
       await ordered(async () => {
-        const result = await api.exchange(code, config.redirectUri, entry.verifier);
+        const result = await api.exchange(code, entry.redirectUri, entry.verifier);
         const name = await api.name(result.accessToken).catch(() => undefined);
         save(result, name);
       });

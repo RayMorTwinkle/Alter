@@ -1,94 +1,15 @@
-import { once } from "node:events";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { get, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
-  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Notifications, Tasks, type HeartbeatEvent, type HeartbeatRun, type MemoryItem, type SurfaceEvent, type SurfaceState,
+  context, Leases, Notifications, Tasks, type HeartbeatRun, type MemoryItem, type SurfaceState,
 } from "@alter/core";
-import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
+import { delta, say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import { createFeishuConnector, type FeishuPairing } from "@alter/plugin-feishu";
 import { createWebServer } from "../src/server.ts";
-import { createCalendarPlugin } from "@alter/plugin-calendar";
-
-const cleanup: (() => void | Promise<void>)[] = [];
-afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
-
-async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false, feishu?: { pairing(): FeishuPairing; connector?: ReturnType<typeof createFeishuConnector> }, now = Date.now) {
-  const gateway = await fakeGateway(route);
-  cleanup.push(gateway.close);
-  const dir = await mkdtemp(join(tmpdir(), "alter-web-"));
-  cleanup.push(() => rm(dir, { recursive: true, force: true }));
-  const dist = join(dir, "dist");
-  const config = gatewayConfig({ ALTER_LLM_BASE_URL: gateway.baseUrl, ALTER_LLM_API_KEY: "offline-key",
-    ALTER_MAIN_MODEL: "offline/main", ALTER_TASK_MODEL: "offline/task", ALTER_DATA_DIR: dir });
-  const { models, mainModel, taskModel } = await createGatewayModels(config);
-  async function open() {
-    const calendar = withCalendar ? createCalendarPlugin({ dataDir: dir, timeZone: "Asia/Shanghai" }) : undefined;
-    const plugins = calendar ? [calendar] : [];
-    const connector = feishu?.connector;
-    const app = await openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), models, mainModel, taskModel, {},
-      { plugins: connector ? [...plugins, connector.plugin] : plugins, now });
-    cleanup.push(app.close);
-    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, calendar, feishu, feishuAccount: connector?.account });
-    cleanup.push(web.close);
-    web.server.listen(0, "127.0.0.1");
-    await once(web.server, "listening");
-    app.harness.resume();
-    const base = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
-    let cookie = "";
-    function post(path: string, value?: unknown, type = "application/json") {
-      return fetch(base + path, { method: "POST", headers: { "Content-Type": type, cookie }, body: JSON.stringify(value) });
-    }
-    async function login() {
-      const response = await post("/api/login", { password: "offline secret" });
-      expect(response.status).toBe(204);
-      const header = response.headers.get("set-cookie")!;
-      expect(header).toContain("HttpOnly");
-      expect(header).toContain("SameSite=Strict");
-      cookie = header.split(";")[0]!;
-    }
-    const read = (path: string) => fetch(base + path, { headers: { cookie } });
-    return {
-      app, post, read, login, base, dist, dir, sessionCookie: () => cookie,
-      async close() { await web.close(); await app.close(); },
-      async state(): Promise<SurfaceState> { return (await read("/api/state")).json(); },
-    };
-  }
-  return { ...await open(), reopen: open };
-}
-
-type Event = SurfaceEvent | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
-
-async function stream(read: (path: string) => Promise<Response>) {
-  const response = await read("/api/events");
-  expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/);
-  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  const events: Event[] = [];
-  const ended = (async () => {
-    let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      buffer += value;
-      let index: number;
-      while ((index = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, index);
-        buffer = buffer.slice(index + 2);
-        if (frame.startsWith(":")) continue;
-        const [event, data] = frame.split("\n");
-        events.push({ event: event!.slice(7) as Event["event"], data: JSON.parse(data!.slice(6)) });
-      }
-    }
-  })();
-  cleanup.push(async () => { await reader.cancel(); await ended; });
-  const seen = async (match: (e: Event) => boolean) => { await expect.poll(() => events.some(match)).toBe(true); };
-  await seen(e => e.event === "snapshot");
-  expect(events[0]?.event).toBe("snapshot");
-  return { events, seen, ended };
-}
+import { cleanup, setup, stream } from "./web-fixture.ts";
 
 it("authenticates API requests, enforces JSON writes, and revokes the session including its open streams", async () => {
   const web = await setup();
@@ -517,18 +438,18 @@ it("persists an authenticated approval mode and reports paired decisions", async
   expect((await web.read("/api/settings")).status).toBe(401);
   expect((await web.read("/api/approvals/stats")).status).toBe(401);
   await web.login();
-  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "shadow" });
+  expect(await (await web.read("/api/settings")).json()).toEqual({ approvalModel: "shadow", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
   const patch = (value: unknown) => fetch(web.base + "/api/settings", { method: "PATCH",
     headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value) });
   for (const invalid of [{}, { approvalModel: true }, { approvalModel: "auto", extra: false }]) {
     expect((await patch(invalid)).status).toBe(400);
   }
-  expect(await (await patch({ approvalModel: "off" })).json()).toEqual({ approvalModel: "off" });
+  expect(await (await patch({ approvalModel: "off" })).json()).toMatchObject({ approvalModel: "off" });
   expect(await (await web.read("/api/approvals/stats")).json()).toEqual({ compared: 0, agreed: 0, agreementRate: null, deniedButInScope: 0 });
   await web.close();
   const reopened = await web.reopen();
   await reopened.login();
-  expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "off" });
+  expect(await (await reopened.read("/api/settings")).json()).toMatchObject({ approvalModel: "off" });
 });
 
 it("publishes heartbeat starts, finishes and schedule changes and serves direct run feedback", async () => {

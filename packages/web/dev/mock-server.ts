@@ -149,6 +149,32 @@ async function decide(requestId: string, allow: boolean, note?: string) {
 function cookie(req: IncomingMessage) {
   return /alter_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
 }
+const mockPlugins = [
+  { id: "feishu", name: "飛書", enabled: true,
+    provides: { channels: ["機器人"], capabilities: ["讀寫消息", "日曆"], sources: ["他人發給你的消息"] },
+    settings: [
+      { key: "appId", label: "App ID", type: "text", required: true, help: "開放平台 → 憑證與基礎信息" },
+      { key: "appSecret", label: "App Secret", type: "secret", required: true, help: "只保存在本機，加密存儲" },
+      { key: "domain", label: "版本", type: "select", required: false, help: "", options: ["feishu", "lark"] },
+    ],
+    values: { appId: "cli_a8f2c1d3e4b5", appSecret: { set: true }, domain: "feishu" },
+    status: { state: "ok", checks: [
+      { id: "credentials", label: "憑證有效", ok: true }, { id: "socket", label: "長連接已連上", ok: true },
+      { id: "paired", label: "機器人已配對", ok: true }, { id: "account", label: "用戶賬號已授權", ok: false, detail: "授權已過期，請重新授權" },
+    ] } },
+  { id: "mail", name: "郵件", enabled: true,
+    provides: { channels: [], capabilities: ["讀郵件", "發郵件"], sources: ["新郵件"] },
+    settings: [
+      { key: "address", label: "郵箱地址", type: "text", required: true, help: "" },
+      { key: "password", label: "授權碼", type: "secret", required: true, help: "不是登錄密碼，在郵箱設置裡開啟 IMAP 後生成" },
+    ],
+    values: { address: "", password: { set: false } }, status: { state: "needs-config", detail: "還沒填郵箱地址和授權碼" } },
+  { id: "browser", name: "瀏覽器", enabled: false, provides: { channels: [], capabilities: ["打開網頁", "填寫與點擊"], sources: [] },
+    settings: [], values: {}, status: { state: "off" } },
+  { id: "calendar", name: "本地日曆", enabled: true, provides: { channels: [], capabilities: ["讀寫日程"], sources: [] },
+    settings: [], values: {}, status: { state: "ok" } },
+];
+
 function mockStats(range: string) {
   const usage = (calls: number, input: number, cacheRead: number, output: number, cost: number | null) => ({
     calls, input, cacheRead, cacheWrite: 0, output, tokens: input + cacheRead + output,
@@ -251,6 +277,15 @@ createServer(async (req, res) => {
     return json(res, 204);
   }
   if (path === "/api/feishu") return json(res, 200, { paired: false, code: "482915", expiresAt: Date.now() + 600_000, account: { connected: false } });
+  if (path === "/api/plugins") return json(res, 200, mockPlugins);
+  if (path.startsWith("/api/plugins/feishu/guide")) return json(res, 200, {
+    permissionsJson: JSON.stringify({ scopes: { tenant: ["im:message", "im:message:send_as_bot", "im:chat:readonly"], user: ["im:message:readonly", "calendar:calendar"] } }),
+    redirectUri: "http://127.0.0.1:4317/api/feishu/oauth/callback", eventsMode: "long-connection",
+    steps: ["在飛書開放平台創建企業自建應用，開啟機器人能力", "權限管理中批量導入下面的權限 JSON", "事件訂閱選擇「長連接」，添加接收消息事件", "安全設置中添加下面的回調地址", "把 App ID 和 App Secret 填到下面並保存", "在飛書裡給機器人發配對碼，再授權你的賬號"],
+  });
+  if (path.startsWith("/api/plugins/")) return json(res, 200, mockPlugins.find(p => path.includes(p.id)));
+  if (path === "/api/settings") return json(res, 200, { approvalModel: "shadow", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
+  if (path === "/api/approvals/stats") return json(res, 200, { compared: 23, agreed: 19, agreementRate: 19 / 23, deniedButInScope: 0 });
   if (path.startsWith("/api/watches/")) return json(res, 204);
   if (path.startsWith("/api/schedules/")) return json(res, 204);
   if (path === "/api/heartbeat") {

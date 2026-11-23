@@ -1,10 +1,8 @@
 import { once } from "node:events";
 import { join } from "node:path";
-import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage, type AlterPlugin } from "@alter/core";
-import { createBrowserPlugin } from "@alter/plugin-browser";
-import { createCalendarPlugin } from "@alter/plugin-calendar";
-import { createFeishuConnector, createFeishuSurface, feishuConfigFromEnv } from "@alter/plugin-feishu";
-import { createMailPlugin, mailConfigFromEnv } from "@alter/plugin-mail";
+import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage } from "@alter/core";
+import { mkdir } from "node:fs/promises";
+import { installedPlugins } from "./plugins.ts";
 import { createWebServer } from "./server.ts";
 
 async function start() {
@@ -16,27 +14,18 @@ async function start() {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid ALTER_WEB_PORT");
   const config = gatewayConfig();
   const { models, mainModel, taskModel, thinking } = await createGatewayModels(config);
-  const mail = mailConfigFromEnv(process.env);
-  const feishuConfig = feishuConfigFromEnv(process.env);
-  const feishu = feishuConfig && createFeishuSurface({ config: feishuConfig, dataDir: config.dataDir });
-  const connector = feishuConfig && createFeishuConnector({ config: feishuConfig, dataDir: config.dataDir });
-  const calendar = createCalendarPlugin({ dataDir: config.dataDir, timeZone: config.timeZone });
-  const plugins: AlterPlugin[] = [calendar];
-  if (connector) plugins.push(connector.plugin);
-  if (mail) plugins.push(createMailPlugin(mail));
-  if (process.env.ALTER_BROWSER !== "off") plugins.push(createBrowserPlugin());
+  await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
   const app = await openAlter(
     await openNodeSqliteStorage(join(config.dataDir, "main.sqlite")), models, mainModel, taskModel, thinking,
-    { plugins, demos: false, timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
+    { demos: false, deferredLeases: ["calendar"], timeZone: config.timeZone, approvalTimeoutMs: config.approvalTimeoutMs },
   );
-  console.log("Alter plugins:", plugins.map(plugin => plugin.capability.id).join(", ") || "none");
-  let stopFeishu: (() => Promise<void>) | undefined;
   try {
-    stopFeishu = await feishu?.start(app);
-    const web = await createWebServer(app, { password, dataDir: config.dataDir, calendar, feishu, feishuAccount: connector?.account });
+    const plugins = installedPlugins(app, config.dataDir);
+    const web = await createWebServer(app, { password, dataDir: config.dataDir, plugins });
     try {
       web.server.listen(port, host);
       await once(web.server, "listening");
+      await plugins.start();
       app.harness.resume();
       console.log("Alter web listening on", web.server.address());
       await new Promise<void>(resolve => {
@@ -48,10 +37,8 @@ async function start() {
         process.once("SIGINT", shutdown);
         process.once("SIGTERM", shutdown);
       });
-    } finally { await web.close(); }
-  } finally {
-    try { await stopFeishu?.(); } finally { await app.close(); }
-  }
+    } finally { try { await web.close(); } finally { await plugins.close(); } }
+  } finally { await app.close(); }
 }
 
 if (import.meta.main) await start();

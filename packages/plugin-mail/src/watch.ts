@@ -45,7 +45,7 @@ export function mailWatchSource(config: MailConfig, clients: MailClients): Watch
 }
 
 // Servers without IDLE (163) get a search every pollMs instead of push wake-ups.
-export async function watchInbox(config: MailConfig, clients: MailClients, host: PluginHost, pollMs = 60_000) {
+export async function watchInbox(config: MailConfig, clients: MailClients, host: PluginHost, pollMs = 60_000, connection?: (ok: boolean) => void) {
   const controller = new AbortController();
   const { signal } = controller;
   let connected!: () => void;
@@ -73,6 +73,7 @@ export async function watchInbox(config: MailConfig, clients: MailClients, host:
           cursor = { validity: box.uidValidity, next: box.uidNext ?? ((await uids(client, { all: true })).at(-1) ?? 0) + 1 };
         }
         if (!client.capabilities.has("IDLE")) poll = setInterval(changed, pollMs);
+        connection?.(true);
         connected();
         // ImapFlow automatically enters IDLE when the command queue is empty. An
         // EXISTS count is only a wake-up: UIDs survive expunges and reconnects.
@@ -101,6 +102,7 @@ export async function watchInbox(config: MailConfig, clients: MailClients, host:
       } catch (error) {
         if (!signal.aborted) console.warn("Alter mail INBOX watch interrupted:", error instanceof Error ? error.message : "IMAP error");
       } finally {
+        connection?.(false);
         clearInterval(poll);
         connected();
         signal.removeEventListener("abort", stop);

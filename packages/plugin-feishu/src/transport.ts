@@ -51,10 +51,11 @@ export function dispatcher(handlers: FeishuHandlers) {
   });
 }
 
-export function sdkTransport(config: FeishuConfig): FeishuTransport {
+export function sdkTransport(config: FeishuConfig, changed?: () => void): FeishuTransport & { connection(): ReturnType<WSClient["getConnectionStatus"]>["state"] } {
   const options = { ...config, domain: config.domain === "lark" ? Domain.Lark : Domain.Feishu, loggerLevel: LoggerLevel.warn };
   const client = new Client(options);
-  const ws = new WSClient(options);
+  const ws = new WSClient({ ...options, handshakeTimeoutMs: 15_000, onReady: changed, onError: changed,
+    onReconnecting: changed, onReconnected: changed });
   async function send(chatId: string, type: "text" | "interactive", content: object, uuid?: string) {
     const result = await client.im.message.create({ params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: type, content: JSON.stringify(content), uuid } });
@@ -62,6 +63,7 @@ export function sdkTransport(config: FeishuConfig): FeishuTransport {
     return result.data.message_id;
   }
   return {
+    connection: () => ws.getConnectionStatus().state,
     start: handlers => ws.start({ eventDispatcher: dispatcher(handlers) }),
     async sendText(chatId, text) { await send(chatId, "text", { text }); },
     sendCard: (chatId, card, uuid) => send(chatId, "interactive", card, uuid),

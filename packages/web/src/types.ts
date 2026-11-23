@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.14).
+// Mirrors docs/architecture/web-api.md (v1.15).
 
 export type TimelineItem = {
   id: string;
@@ -11,7 +11,9 @@ export type TimelineItem = {
 };
 
 export type ApprovalDecision = "once" | "statement" | "task-full" | "deny";
-export type Settings = { approvalModel: "shadow" | "auto" | "off" };
+export type HeartbeatSettings = { enabled: boolean; start: string; end: string };
+export type Settings = { approvalModel: "shadow" | "auto" | "off"; heartbeat: HeartbeatSettings };
+export type SettingsPatch = { approvalModel?: Settings["approvalModel"]; heartbeat?: Partial<HeartbeatSettings> };
 export type ApprovalStats = { compared: number; agreed: number; agreementRate: number | null; deniedButInScope: number };
 export type PermissionItem = { tool: string; target: string; purpose: string; isNew: boolean };
 
@@ -196,3 +198,18 @@ export type HeartbeatView = {
   signals: { dueGoals: number; backlog: number; userMessages24h: number };
   runs: HeartbeatRun[];
 };
+
+export type PluginField = {
+  key: string; label: string; type: "text" | "secret" | "toggle" | "select";
+  required: boolean; help: string; options?: string[]; default?: string | boolean;
+};
+export type PluginDescription = {
+  id: string; name: string; provides: { channels: string[]; capabilities: string[]; sources: string[] }; settings: PluginField[];
+};
+export type PluginCheck = { id: string; label: string; ok: boolean; detail?: string };
+export type PluginStatus = { state: "off" | "needs-config" | "connecting" | "ok" | "error"; detail?: string; checks?: PluginCheck[] };
+export type PluginView = PluginDescription & {
+  enabled: boolean; values: Record<string, string | boolean | null | { set: boolean }>; status: PluginStatus;
+};
+export type PluginPatch = { enabled?: boolean; settings?: Record<string, string | boolean | null> };
+export type FeishuGuide = { permissionsJson: string; redirectUri: string; eventsMode: "long-connection"; steps: string[] };

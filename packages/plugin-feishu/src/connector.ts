@@ -11,9 +11,9 @@ function externalText(rows: object[]) {
   return `<external source="feishu">${text}</external>`;
 }
 
-export function createFeishuConnector(options: { config: FeishuUserConfig; dataDir: string; api?: FeishuUserApi; now?: () => number }) {
+export function createFeishuConnector(options: { config: FeishuUserConfig; dataDir: string; api?: FeishuUserApi; now?: () => number; changed?: () => void }) {
   const api = options.api ?? sdkUserApi(options.config);
-  const account = openAccount(options.config, options.dataDir, api, options.now ?? Date.now);
+  const account = openAccount(options.config, options.dataDir, api, options.now ?? Date.now, options.changed);
   async function read(fetchRows: (token: string) => Promise<object[]>) {
     const token = await account.accessToken();
     const result = token ? reply(externalText(await fetchRows(token))) : reply(disconnected, true);

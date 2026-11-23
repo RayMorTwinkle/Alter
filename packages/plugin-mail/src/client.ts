@@ -27,13 +27,18 @@ export type MailClients = {
   imap(options: ImapFlowOptions): MailConnection;
   smtp(config: MailConfig, to: string, raw: Buffer): Promise<void>;
 };
+export function smtpTransport(config: MailConfig, checking = false) {
+  return createTransport({
+    ...(checking && { connectionTimeout: 12_000, greetingTimeout: 12_000, socketTimeout: 12_000 }),
+    ...config.smtp, secure: config.smtp.port === 465 || config.smtp.port === 994, requireTLS: true,
+    auth: { user: config.address, pass: config.authCode },
+  });
+}
+
 export const defaultClients: MailClients = {
   imap: options => new ImapFlow(options),
   async smtp(config, to, raw) {
-    const transport = createTransport({
-      ...config.smtp, secure: config.smtp.port === 465 || config.smtp.port === 994, requireTLS: true,
-      auth: { user: config.address, pass: config.authCode },
-    });
+    const transport = smtpTransport(config);
     try {
       await transport.sendMail({ envelope: { from: config.address, to: [to] }, raw });
     } finally {

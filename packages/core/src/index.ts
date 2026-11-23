@@ -24,3 +24,5 @@ export { judge, type ApprovalCall, type Judgment } from "./approval-model.ts";
 export { isApprovalMode, type ApprovalMode } from "./settings.ts";
 export { stats, type StatsRange } from "./stats.ts";
 export { subscribeHeartbeat, type HeartbeatEvent, type HeartbeatRun } from "./heartbeat-runs.ts";
+export type { PluginCheck, PluginDescription, PluginField, PluginStatus, PluginView } from "./plugin-settings.ts";
+export { isHeartbeatSettings, type HeartbeatSettings } from "./settings.ts";

@@ -47,3 +47,13 @@ it("kills the child and reports timeout at 90 seconds", async () => {
   await expect(running).rejects.toThrow("90 seconds");
   proc.emit("close", null, "SIGKILL");
 });
+
+it("checks the ego runtime without opening a task space", async () => {
+  const { browserInstance } = await import("../src/settings.ts");
+  const runner = vi.fn(async () => "ALTER_EGO_READY true\n");
+  const plugin = browserInstance(runner);
+  expect(await plugin.status()).toMatchObject({ state: "ok", checks: [{ id: "ego", ok: true }] });
+  expect(runner.mock.calls[0]).toEqual([expect.stringContaining("listTaskSpaces()")]);
+  runner.mockRejectedValueOnce(new Error("unavailable"));
+  expect(await plugin.status()).toMatchObject({ state: "error", checks: [{ id: "ego", ok: false }] });
+});

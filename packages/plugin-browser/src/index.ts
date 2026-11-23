@@ -117,3 +117,5 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
     },
   };
 }
+
+export { browserDescription, browserInstance } from "./settings.ts";

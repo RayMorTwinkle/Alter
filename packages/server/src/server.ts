@@ -4,10 +4,12 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  answerUserPermission, approvalStats, isApprovalDecision, isApprovalMode, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
+  answerUserPermission, approvalStats, isApprovalDecision, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
   MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
-import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
+import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
+import type { PluginManager } from "./plugin-manager.ts";
+import { redirectUri, settingsWriter } from "./settings-api.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
 
 const cookieName = "alter_session";
@@ -43,7 +45,7 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 export type Agenda = { timeZone: string; agenda(): unknown[]; subscribe(listener: () => void): () => void };
 
 type WebOptions = {
-  password: string; dataDir: string; dist?: string; calendar?: Agenda;
+  password: string; dataDir: string; dist?: string; calendar?: Agenda; plugins?: PluginManager;
   feishu?: { pairing(): FeishuPairing }; feishuAccount?: FeishuAccount;
 };
 
@@ -75,13 +77,28 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     for (const res of clients.keys()) write(res, message);
     if (event === "notifications" && clients.size) webDelivery(data);
   });
-  const { calendar, feishuAccount } = options;
-  const agenda = () => ({ timeZone: calendar!.timeZone, events: calendar!.agenda() });
-  const unsubscribe = calendar?.subscribe(() => {
-    if (!clients.size) return;
-    const message = frame("calendar", agenda());
+  const { plugins } = options;
+  const feishu = () => plugins?.active("feishu")?.surface ?? options.feishu;
+  const account = () => plugins?.active("feishu")?.account ?? options.feishuAccount;
+  const calendar = () => plugins?.active("calendar")?.calendar ?? options.calendar;
+  const agenda = () => ({ timeZone: calendar()?.timeZone ?? app.timeZone, events: calendar()?.agenda() ?? [] });
+  function broadcast(event: string, data: unknown) {
+    const message = frame(event, data);
     for (const res of clients.keys()) write(res, message);
+  }
+  let attached = calendar();
+  let unsubscribe = attached?.subscribe(() => broadcast("calendar", agenda()));
+  const stopPlugins = plugins?.subscribe(() => {
+    const next = calendar();
+    if (attached !== next) {
+      unsubscribe?.();
+      attached = next;
+      unsubscribe = next?.subscribe(() => broadcast("calendar", agenda()));
+      broadcast("calendar", agenda());
+    }
+    if (clients.size) broadcast("plugins", plugins.list());
   });
+  const saveSettings = settingsWriter(app);
   const stopHeartbeat = await subscribeHeartbeat(app.harness, event => {
     const message = frame("heartbeat", event);
     for (const res of clients.keys()) write(res, message);
@@ -99,6 +116,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return serveStatic(options.dist ?? defaultDist, path, res);
     }
     res.setHeader("Cache-Control", "no-store");
+    const feishuAccount = account();
     if (method === "GET" && path === "/api/feishu/oauth/callback") {
       res.setHeader("Referrer-Policy", "no-referrer");
       if (!feishuAccount) throw new HttpError(404, "Feishu is not configured");
@@ -153,6 +171,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       write(res, frame("snapshot", snapshot));
       if (clients.has(res)) webDelivery(snapshot.notifications);
       if (surface.partial) write(res, frame("delta", surface.partial));
+      if (plugins) write(res, frame("plugins", plugins.list()));
       return;
     } else if (method === "POST" && path === "/api/messages") {
       const { text } = await body(req);
@@ -196,12 +215,12 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         if (typeof patch.paused !== "boolean" || Object.keys(patch).length !== 1) throw new HttpError(400, "Expected { paused: boolean }");
         if (!await app.schedules.pause(id, patch.paused)) throw new HttpError(404, "Unknown or finished schedule");
       } else if (!await app.schedules.cancel(id)) throw new HttpError(404, "Unknown schedule");
-    } else if (method === "GET" && path === "/api/calendar" && calendar) {
+    } else if (method === "GET" && path === "/api/calendar" && calendar()) {
       return json(res, 200, agenda());
-    } else if (method === "GET" && path === "/api/feishu" && options.feishu) {
-      return json(res, 200, { ...options.feishu.pairing(), account: await feishuAccount?.status() ?? { connected: false } });
+    } else if (method === "GET" && path === "/api/feishu" && feishu()) {
+      return json(res, 200, { ...feishu()!.pairing(), account: await feishuAccount?.status() ?? { connected: false } });
     } else if (method === "GET" && path === "/api/feishu/oauth/start" && feishuAccount) {
-      res.writeHead(302, { Location: feishuAccount.start() }).end();
+      res.writeHead(302, { Location: feishuAccount.start(plugins ? redirectUri(req, plugins) : undefined) }).end();
       return;
     } else if (method === "POST" && path === "/api/feishu/account/disconnect" && feishuAccount) {
       await feishuAccount.disconnect();
@@ -211,7 +230,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (values.length > 1 || !/^\d+$/.test(values[0] ?? "7") || !Number.isSafeInteger(days) || days < 1 || days > 366) {
         throw new HttpError(400, "days must be an integer between 1 and 366");
       }
-      return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!options.feishu }));
+      return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!feishu() }));
     } else if (method === "GET" && path === "/api/watches") {
       return json(res, 200, await app.watches.list());
     } else if (method === "DELETE" && /^\/api\/watches\/[^/]+$/.test(path)) {
@@ -234,20 +253,27 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return json(res, 200, await app.heartbeat.stats());
     } else if (method === "GET" && path === "/api/approvals/stats") {
       return json(res, 200, await approvalStats(app.main));
+    } else if (method === "GET" && path === "/api/plugins") {
+      return json(res, 200, plugins?.list() ?? []);
+    } else if (method === "GET" && path === "/api/plugins/feishu/guide") {
+      return json(res, 200, feishuGuide(redirectUri(req, plugins)));
+    } else if (plugins && method === "PATCH" && /^\/api\/plugins\/[^/]+$/.test(path)) {
+      return json(res, 200, await plugins.get(path.split("/")[3]!).patch(await body(req)));
+    } else if (plugins && method === "POST" && /^\/api\/plugins\/[^/]+\/check$/.test(path)) {
+      return json(res, 200, await plugins.get(path.split("/")[3]!).check());
     } else if ((method === "GET" || method === "PATCH") && path === "/api/settings") {
       if (method === "PATCH") {
         const patch = await body(req);
-        if (Object.keys(patch).length !== 1 || !isApprovalMode(patch.approvalModel)) throw new HttpError(400, "Invalid approvalModel");
-        app.settings.set(patch.approvalModel);
+        await saveSettings(patch);
       }
-      return json(res, 200, { approvalModel: app.settings.approvalModel });
+      return json(res, 200, { approvalModel: app.settings.approvalModel, heartbeat: app.settings.heartbeat });
     } else if (method === "GET" && path === "/api/stats") {
       const values = new URL(req.url!, "http://localhost").searchParams.getAll("range");
       const range = values[0] ?? "7d";
       if (values.length > 1 || (range !== "day" && range !== "7d" && range !== "30d" && range !== "all")) {
         throw new HttpError(400, "range must be day, 7d, 30d or all");
       }
-      return json(res, 200, await stats(range, app.timeZone, { app, dir: options.dataDir, feishu: !!options.feishu }));
+      return json(res, 200, await stats(range, app.timeZone, { app, dir: options.dataDir, feishu: !!feishu() }));
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
     } else throw new HttpError(404, "Unknown endpoint");
@@ -266,6 +292,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
   function dispose() {
     clearInterval(ping);
     stopHeartbeat();
+    stopPlugins?.();
     unsubscribe?.();
     surface.detach();
     for (const res of clients.keys()) res.end();

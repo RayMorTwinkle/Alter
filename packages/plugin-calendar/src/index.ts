@@ -178,3 +178,5 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
     },
   };
 }
+
+export { calendarDescription, calendarInstance } from "./settings.ts";

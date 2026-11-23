@@ -1,0 +1,220 @@
+import { CaretDown, Check, Copy, X as Cross } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { api } from "../api.ts";
+import { useT } from "../i18n.tsx";
+import type { ApprovalStats, FeishuGuide, PluginField, PluginView, Settings } from "../types.ts";
+import { Sheet } from "./Sheets.tsx";
+
+type Draft = Record<string, string | boolean>;
+
+function Copyable({ label, value }: { label: string; value: string }) {
+  const t = useT().settings;
+  const [done, setDone] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setDone(true);
+      setTimeout(() => setDone(false), 1500);
+    } catch { /* clipboard unavailable; the value stays selectable */ }
+  }
+  return (
+    <div className="copyable">
+      <span>{label}</span>
+      <code>{value.length > 80 ? value.slice(0, 80) + "…" : value}</code>
+      <button className="text-btn" onClick={() => void copy()}>{done ? <><Check /> {t.copied}</> : <><Copy /> {t.copy}</>}</button>
+    </div>
+  );
+}
+
+function Field({ field, value, draft, onChange }: {
+  field: PluginField; value: PluginView["values"][string]; draft: string | boolean | undefined; onChange: (v: string | boolean) => void;
+}) {
+  const t = useT().settings;
+  const id = `field-${field.key}`;
+  if (field.type === "toggle") {
+    const checked = typeof draft === "boolean" ? draft : value === true;
+    return (
+      <label className="field toggle-field" htmlFor={id}>
+        <input id={id} type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
+        <span>{field.label}</span>
+        {field.help && <small>{field.help}</small>}
+      </label>
+    );
+  }
+  const secretSet = typeof value === "object" && value !== null && value.set;
+  const current = typeof value === "string" ? value : "";
+  return (
+    <label className="field" htmlFor={id}>
+      <span>{field.label}{field.required && <em> *</em>}</span>
+      {field.type === "select" ? (
+        <select id={id} value={typeof draft === "string" ? draft : current} onChange={e => onChange(e.target.value)}>
+          {(field.options ?? []).map(option => <option key={option} value={option}>{option}</option>)}
+        </select>
+      ) : (
+        <input id={id} type={field.type === "secret" ? "password" : "text"} autoComplete="off"
+          value={typeof draft === "string" ? draft : field.type === "secret" ? "" : current}
+          placeholder={field.type === "secret" && secretSet ? t.secretSet : ""}
+          onChange={e => onChange(e.target.value)} />
+      )}
+      {field.help && <small>{field.help}</small>}
+    </label>
+  );
+}
+
+function PluginCard({ plugin, onChanged }: { plugin: PluginView; onChanged: (view: PluginView) => void }) {
+  const t = useT().settings;
+  const [open, setOpen] = useState(plugin.status.state === "needs-config" || plugin.status.state === "error");
+  const [draft, setDraft] = useState<Draft>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [guide, setGuide] = useState<FeishuGuide | null>(null);
+  useEffect(() => {
+    if (open && plugin.id === "feishu" && !guide) api.feishuGuide().then(setGuide, () => {});
+  }, [open, plugin.id, guide]);
+
+  async function act(run: () => Promise<PluginView>) {
+    setBusy(true);
+    setError("");
+    try {
+      onChanged(await run());
+      setDraft({});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const dirty = Object.keys(draft).length > 0;
+  const provides = (["channels", "capabilities", "sources"] as const).filter(kind => plugin.provides[kind].length);
+
+  return (
+    <article className={`plugin-card ${plugin.status.state}`}>
+      <header>
+        <button className="plugin-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <b>{plugin.name}</b>
+          <span className={`plugin-state ${plugin.status.state}`}>{t.states[plugin.status.state]}</span>
+          <CaretDown className={open ? "flip" : ""} />
+        </button>
+        <label className="switch" title={plugin.enabled ? t.disable : t.enable}>
+          <input type="checkbox" checked={plugin.enabled} disabled={busy}
+            onChange={e => void act(() => api.updatePlugin(plugin.id, { enabled: e.target.checked }))} />
+          <span aria-hidden />
+        </label>
+      </header>
+      {plugin.status.detail && <p className="plugin-detail">{plugin.status.detail}</p>}
+      <div className="plugin-provides">
+        {provides.map(kind => (
+          <span key={kind}><i>{t.provides[kind]}</i> {plugin.provides[kind].join("、")}</span>
+        ))}
+      </div>
+      {open && (
+        <div className="plugin-body">
+          {guide && (
+            <details className="guide" open={plugin.status.state !== "ok"}>
+              <summary>{t.guideTitle}</summary>
+              <ol>{guide.steps.map((step, i) => <li key={i}>{step}</li>)}</ol>
+              <Copyable label={t.permissionsJson} value={guide.permissionsJson} />
+              <Copyable label={t.redirectUri} value={guide.redirectUri} />
+            </details>
+          )}
+          {plugin.settings.length > 0 && (
+            <form className="plugin-form" onSubmit={e => { e.preventDefault(); void act(() => api.updatePlugin(plugin.id, { settings: draft })); }}>
+              {plugin.settings.map(field => (
+                <Field key={field.key} field={field} value={plugin.values[field.key] ?? null} draft={draft[field.key]}
+                  onChange={v => setDraft(d => ({ ...d, [field.key]: v }))} />
+              ))}
+              <div className="form-actions">
+                <button type="submit" className="btn primary" disabled={busy || !dirty}>{busy ? t.saving : t.save}</button>
+                <button type="button" className="btn" disabled={busy} onClick={() => void act(() => api.checkPlugin(plugin.id))}>{t.recheck}</button>
+              </div>
+            </form>
+          )}
+          {error && <p className="form-error">{error}</p>}
+          {plugin.status.checks && plugin.status.checks.length > 0 && (
+            <ul className="checks">
+              {plugin.status.checks.map(check => (
+                <li key={check.id} className={check.ok ? "ok" : "bad"}>
+                  {check.ok ? <Check aria-label={t.ok} /> : <Cross aria-label={t.notOk} />}
+                  <span>{check.label}</span>
+                  {check.detail && <small>{check.detail}</small>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function SettingsSheet({ onClose, onToggleLocale }: { onClose: () => void; onToggleLocale: () => void }) {
+  const all = useT();
+  const t = all.settings;
+  const [plugins, setPlugins] = useState<PluginView[] | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [stats, setStats] = useState<ApprovalStats | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api.plugins().then(setPlugins, err => setError(String(err.message ?? err)));
+    api.settings().then(setSettings, () => {});
+    api.approvalStats().then(setStats, () => {});
+  }, []);
+
+  async function patch(next: Parameters<typeof api.updateSettings>[0]) {
+    try { setSettings(await api.updateSettings(next)); } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
+  const replace = (view: PluginView) => setPlugins(list => list?.map(p => p.id === view.id ? view : p) ?? null);
+
+  return (
+    <Sheet title={t.title} onClose={onClose}>
+      {error && <p className="form-error">{error}</p>}
+
+      <section className="settings-block">
+        <h3>{t.plugins}</h3>
+        <p className="settings-hint">{t.pluginsHint}</p>
+        {!plugins && !error && <p className="empty">{all.loading}</p>}
+        {plugins?.map(plugin => <PluginCard key={plugin.id} plugin={plugin} onChanged={replace} />)}
+      </section>
+
+      {settings && <>
+        <section className="settings-block">
+          <h3>{t.approval}</h3>
+          <div className="seg" role="radiogroup" aria-label={t.approval}>
+            {(["shadow", "auto", "off"] as const).map(mode => (
+              <button key={mode} role="radio" aria-checked={settings.approvalModel === mode}
+                className={settings.approvalModel === mode ? "active" : ""} onClick={() => void patch({ approvalModel: mode })}>
+                {t.approvalModes[mode]}
+              </button>
+            ))}
+          </div>
+          <p className="settings-hint">{t.approvalHints[settings.approvalModel]}</p>
+          {stats && stats.compared > 0 && (
+            <dl className="stat-list">
+              <div><dt>{t.agreement}</dt><dd>{stats.agreementRate === null ? "—" : `${Math.round(stats.agreementRate * 100)}%`}</dd></div>
+              <div><dt>{t.compared}</dt><dd>{stats.compared}</dd></div>
+              <div><dt>{t.wouldMisallow}</dt><dd>{stats.deniedButInScope}</dd></div>
+            </dl>
+          )}
+        </section>
+
+        <section className="settings-block">
+          <h3>{t.heartbeat}</h3>
+          <label className="field toggle-field">
+            <input type="checkbox" checked={settings.heartbeat.enabled} onChange={e => void patch({ heartbeat: { enabled: e.target.checked } })} />
+            <span>{t.heartbeatOn}</span>
+          </label>
+          <div className="time-range">
+            <label>{t.from}<input type="time" value={settings.heartbeat.start} onChange={e => void patch({ heartbeat: { start: e.target.value } })} /></label>
+            <label>{t.to}<input type="time" value={settings.heartbeat.end} onChange={e => void patch({ heartbeat: { end: e.target.value } })} /></label>
+          </div>
+          <p className="settings-hint">{t.heartbeatHint}</p>
+        </section>
+      </>}
+
+      <section className="settings-block">
+        <h3>{t.language}</h3>
+        <button className="btn" onClick={onToggleLocale}>{all.language}</button>
+      </section>
+    </Sheet>
+  );
+}
