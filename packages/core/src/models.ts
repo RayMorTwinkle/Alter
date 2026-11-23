@@ -41,7 +41,8 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
     const last = context.messages.at(-1);
     const attribution = last && requests.get(last);
-    const proactive = options?.sessionId?.startsWith("proactive-");
+    const heartbeat = attribution?.wakeSource === "heartbeat" || options?.sessionId?.startsWith("heartbeat-");
+    const proactive = heartbeat || options?.sessionId?.startsWith("proactive-");
     if (!proactive && !(attribution && dir)) return models.streamSimple(model, context, options);
     async function* run() {
       const permit = proactive ? await budget.acquire(options?.signal) : undefined;
@@ -55,7 +56,7 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
         const elapsed = () => Math.round(performance.now() - started);
         async function record(line: UsageLine) {
           recorded = true;
-          const row = { ...attribution, ...line, conversation, role: proactive ? "goal" : line.role ?? conversation,
+          const row = { ...attribution, ...line, conversation, role: heartbeat ? "heartbeat" : proactive ? "goal" : line.role ?? conversation,
             thinking: options?.reasoning ?? "off", ...(proactive && { proactive: true as const }) };
           if (permit) await permit.record(row);
           else if (dir) await appendUsage(dir, row);

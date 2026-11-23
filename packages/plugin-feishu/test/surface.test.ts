@@ -5,7 +5,7 @@ import type { ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   Events, Notifications, Requests, updateNotification, answerUserPermission, context, createGatewayModels, gatewayConfig, observeSurface,
-  openAlter, openNodeSqliteStorage, submitMessage,
+  openAlter, openNodeSqliteStorage, readUsage, submitMessage,
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import { createFeishuSurface, feishuConfigFromEnv, type FeishuHandlers, type FeishuMessage, type FeishuTransport } from "../src/index.ts";
@@ -284,4 +284,55 @@ it("pushes a triaged external event to the paired owner exactly once", async () 
   await f.close();
   const next = await f.reopen();
   expect(next.transport.sendText).not.toHaveBeenCalled();
+});
+
+it("delivers explicit notify but keeps a task report after a Feishu user turn on the timeline", async () => {
+  let worker: ServerResponse | undefined;
+  const f = await setup(({ model, messages }, res) => {
+    const last = messages.at(-1)!;
+    if (model === "offline/task") { worker = res; return; }
+    if (last.content.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "audit", context: "fresh", permission: "restricted" });
+    if (last.content.endsWith("\nnotify")) return toolCall(res, "notify", { level: "now", title: "进度", body: "更新" });
+    if (last.content.includes("finished:")) return say(res, "报告已处理");
+    say(res, "收到");
+  });
+  await f.pair();
+  await f.send("delegate", "delegate");
+  await f.app.main.waitForIdle(context);
+  await expect.poll(() => !!worker).toBe(true);
+  await submitMessage(f.app.main, "notify");
+  await f.app.main.waitForIdle(context);
+  await expect.poll(() => f.feed.snapshot().notifications[0]?.pushedAt).toBe(f.clock.now);
+  await f.send("latest", "last user is in Feishu");
+  await f.app.main.waitForIdle(context);
+  await f.app.scheduler.create({ kind: "reminder", text: "回投前提醒", at: new Date(f.clock.now).toISOString() });
+  await expect.poll(() => f.feed.snapshot().notifications.find(n => n.body === "回投前提醒")?.pushedAt).toBe(f.clock.now);
+  toolCall(worker!, "finish", { summary: "查完", refs: [] });
+  await expect.poll(() => f.feed.snapshot().timeline.some(i => i.text === "报告已处理")).toBe(true);
+  const reportInput = f.gateway.requests.find(r => r.messages.at(-1)?.content.includes("finished: 查完"))!.messages.at(-1)!.content;
+  expect(reportInput).toContain("<untrusted>");
+  expect(reportInput).toContain("schedule");
+  expect(f.feed.snapshot().timeline.find(item => item.kind === "report")?.text).not.toContain("<untrusted>");
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到", "进度\n更新", "收到", "提醒\n回投前提醒"]);
+  f.clock.now = Date.parse("2026-12-01T15:00Z");
+  await submitMessage(f.app.main, "notify");
+  await f.app.main.waitForIdle(context);
+  expect(f.feed.snapshot().notifications[0]).toMatchObject({ kind: "notify", source: "alter", level: "digest" });
+  expect(f.transport.sendText.mock.calls.filter(([, text]) => text === "进度\n更新")).toHaveLength(1);
+});
+
+it("keeps an actionable heartbeat reply local after a Feishu turn and records its gateway usage once", async () => {
+  const f = await setup(({ messages }, res) =>
+    say(res, messages.at(-1)?.content.includes("定时巡检") ? "有一场会议需要准备" : "收到"));
+  await f.pair();
+  await f.send("hello", "hello");
+  await f.app.main.waitForIdle(context);
+  f.app.memory.save({ kind: "goal", text: "会议准备" });
+  f.clock.now += 5 * 3_600_000;
+  f.app.harness.resume();
+  await expect.poll(async () => (await f.app.heartbeat.view()).runs[0]?.finalReply).toBe("有一场会议需要准备");
+  expect(f.feed.snapshot().timeline.some(i => i.text === "有一场会议需要准备")).toBe(false);
+  await f.app.main.waitForIdle(context);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到"]);
+  expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
 });

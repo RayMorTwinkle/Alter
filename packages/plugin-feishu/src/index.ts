@@ -87,9 +87,12 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
         queued.add(item.id);
         outbox = outbox.then(async () => {
           // Reserve before sending: a crash after Feishu accepts the message must never replay it.
+          if (item.kind === "event" && item.ref !== undefined && await app.notifications.isClaimed(item.ref)) return;
           if (!store.claimNotification(item.id)) return;
           await transport.sendText(chatId, [item.title, item.body].filter(Boolean).join("\n"));
-          await updateNotification(app.main, item.id, { pushedAt: now() });
+          if (!await updateNotification(app.main, item.id, { pushedAt: now() })) {
+            await app.notifications.delivered([item]);
+          }
         }).catch((error: unknown) => {
           console.warn("Alter Feishu notification delivery failed:", error instanceof Error ? error.message : "unknown error");
         }).finally(() => queued.delete(item.id));

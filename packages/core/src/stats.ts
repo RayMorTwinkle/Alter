@@ -187,12 +187,12 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
       task.usageSource = "ledger";
       addUsage(task.usage, line);
       task.models.add(line.model);
-      if (role === "task" || role === "goal") {
+      if (role === "task" || role === "goal" || (role === "heartbeat" && line.conversation === "task")) {
         if (line.attempt === 1) task.rounds++;
         for (const tool of line.tools ?? []) task.tools.set(tool, (task.tools.get(tool) ?? 0) + 1);
       }
     }
-    if (role === "main" && line.wakeId) {
+    if ((role === "main" || (role === "heartbeat" && line.conversation === "main")) && line.wakeId) {
       const wake = wakeDetails.get(line.wakeId) ?? includeWake({ wakeId: line.wakeId, wakeSource: line.wakeSource ?? "unknown", wakeAt: line.wakeAt ?? ms });
       if (wake) addUsage(wake.usage, line);
     }

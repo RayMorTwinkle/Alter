@@ -1,7 +1,7 @@
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import type { calendarTime } from "./calendar-time.ts";
 import type { ExternalEvent } from "./capabilities.ts";
-import { addNotification } from "./notifications.ts";
+import { addNotification, isClaimed } from "./notifications.ts";
 import { context, conversationDoc, type Conversation, type Harness, type Tx } from "./runtime.ts";
 import type { Decision } from "./triage.ts";
 
@@ -37,6 +37,9 @@ export async function startEventBus(harness: Harness, main: Conversation, time: 
 
   async function finish(tx: Tx, progress: Progress, event: ExternalEvent, decision: Decision) {
     const at = now();
+    if (decision.level === "now" && await isClaimed(tx, event.ref)) {
+      decision = { level: "silent", filtered: "duplicate", reason: "主会话已处理" };
+    }
     const level = decision.level === "now" && time.quietHours(at) ? "digest" : decision.level;
     await addNotification(tx, { id: `event-${progress.cursor}`, title: event.summary, body: decision.reason, at, level,
       kind: "event", ref: event.ref, source: event.source, status: "unread", ...(decision.filtered && { filtered: decision.filtered }) }, time.midnight(at));

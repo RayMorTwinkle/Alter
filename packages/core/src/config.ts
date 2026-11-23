@@ -37,7 +37,16 @@ export function proactiveConfig(env = process.env) {
   dailyMinutes(digestTime);
   dailyMinutes(goalReviewTime);
   const mute = (env.ALTER_MUTE ?? "").toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
-  return { budget, digestTime, goalReviewTime, mute };
+  const hours = (env.ALTER_HEARTBEAT_HOURS ?? "08:00-23:00").trim().split("-").map(value => {
+    const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(value.trim());
+    if (!match) throw new Error("Expected ALTER_HEARTBEAT_HOURS as HH:mm-HH:mm");
+    const clock = match[1]!.padStart(2, "0") + ":" + (match[2] ?? "00");
+    dailyMinutes(clock);
+    return clock;
+  });
+  if (hours.length !== 2 || hours[0] === hours[1]) throw new Error("Expected distinct ALTER_HEARTBEAT_HOURS start and end");
+  const heartbeat = { enabled: env.ALTER_HEARTBEAT?.trim().toLowerCase() !== "off", start: hours[0]!, end: hours[1]! };
+  return { budget, digestTime, goalReviewTime, mute, heartbeat };
 }
 
 export function gatewayConfig(env = process.env) {

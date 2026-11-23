@@ -149,13 +149,14 @@ export function createProactiveBudget(time: ReturnType<typeof calendarTime>, lim
 
 export function usageTotals(lines: UsageLine[]) {
   const empty = () => ({ input: 0, output: 0, tokens: 0, calls: 0, aborted: 0 });
-  const totals = { main: empty(), task: empty(), triage: empty(), judge: empty(), total: empty() };
+  const totals = { main: empty(), task: empty(), triage: empty(), heartbeat: empty(), judge: empty(), total: empty() };
   for (const line of lines) {
     if (line.statsOnly) continue;
     const role = line.conversation ?? usageRole(line);
     const groups = [totals.total];
     if (role === "task" || role === "main" || role === "triage" || role === "judge") groups.push(totals[role]);
     else if (role === "goal") groups.push(totals.task);
+    if (usageRole(line) === "heartbeat") groups.push(totals.heartbeat);
     for (const group of groups) {
       group.input += totalInput(line);
       group.output += line.outputTokens ?? 0;

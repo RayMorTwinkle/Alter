@@ -71,7 +71,7 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_save", "memory_search", "memory_update"];
-const controls = ["dispatch_task", "enable_tool", ...memoryTools, "schedule_cancel", "schedule_create", "schedule_list", "task_cancel", "task_message", "task_status"];
+const controls = ["dispatch_task", "enable_tool", ...memoryTools, "notify", "schedule_cancel", "schedule_create", "schedule_list", "task_cancel", "task_message", "task_status"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "declare_permissions", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {

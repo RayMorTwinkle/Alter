@@ -17,6 +17,7 @@ export type TaskRecord = {
   status: "running" | "completed" | "failed" | "cancelled";
   failure?: string;
   proactive?: true;
+  heartbeatAt?: number; heartbeatId?: string;
   goal?: { text: string; timeZone: string };
 };
 

@@ -1,4 +1,4 @@
-# Web API 契约（v1.11）
+# Web API 契约（v1.12）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -6,6 +6,8 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `ALTER_HEARTBEAT` | `on` | `off` 关闭巡检 |
+| `ALTER_HEARTBEAT_HOURS` | `08:00-23:00` | 本地巡检时间窗，含起点，支持跨午夜 |
 | `ALTER_TZ` | `Asia/Shanghai` | 提醒与每日重复使用的用户时区 |
 | `ALTER_WEB_HOST` | `127.0.0.1` | 只监听本机；需要局域网访问时显式改 |
 | `ALTER_WEB_PORT` | `4317` | |
@@ -66,6 +68,7 @@ type Task = {
   taskId: string;
   brief: string;
   context: "fork" | "fresh";
+  heartbeatAt?: number; heartbeatId?: string;
   continuedFrom?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
@@ -102,9 +105,9 @@ type AgendaEvent = { id: string; title: string; start: number; end: number; allD
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
 
 type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing"; status: "unread" | "read";
-  feedback?: "useful" | "useless"; pushedAt?: number;
+  feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
 
 type Funnel = {
@@ -145,6 +148,10 @@ type TranscriptItem =
 | `GET` / `PATCH` | `/api/settings` | 返回 `{ approvalModel }`。更新时提交同形对象，值为 `shadow`、`auto` 或 `off`，非法值返回 `400` |
 | `GET` | `/api/approvals/stats` | `{ compared, agreed, agreementRate, deniedButInScope }`。仅统计同时有模型判断和用户决定的请求。一致率为 0–1，没有可对照样本时为 null |
 | `GET` | `/api/stats?range=7d` | `Stats`（v1.11）。需要登录，默认 `7d`。支持 `day`、`7d`、`30d`、`all`；非法、空值或重复参数返回 `400` |
+| `GET` | `/api/heartbeat` | 返回巡检开关、下次时间、自适应间隔、采纳率、当前需求信号及最近 50 条巡检记录，见下文 |
+| `POST` | `/api/heartbeat/run` | 立即尝试巡检。已启动返回 202 与巡检记录，跳过或时间窗外返回 200 与原因。主会话忙返回 409 及 `{ error, id }` |
+| `POST` | `/api/heartbeat/:id/feedback` | 请求体 `{ feedback: "useful" 或 "useless" }`。成功 204，非法反馈 400，未知 ID 404，未运行的记录 409 |
+| `GET` | `/api/heartbeat/stats` | `{ lastInspection?: number, adoptionRate: number, history: { at: number, intervalMs: number }[] }`。时间和间隔以毫秒计，保留最近 50 次间隔计算 |
 | `GET` | `/api/usage` | `usageSummary()` 的结果数组 |
 | `GET` | `/api/feishu` | `FeishuPairing`（v1.6 含账号连接状态与可选显示名）；未登录 `401`，已登录但未配置飞书 `404`。未配对时返回当前 6 位码，10 分钟到期后轮换 |
 | `GET` | `/api/feishu/oauth/start` | 需要登录；`302` 跳转至飞书授权页 |
@@ -231,6 +238,7 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 | `ledger` | `LedgerEntry[]` | 账本整体替换 |
 | `busy` | `{ busy: boolean }` | 主会话是否在生成 |
 | `notifications` | `Notification[]` | v1.7 新增。提醒触发、已读或反馈更新时整体替换，首次连接与重连由 snapshot 提供 |
+| `heartbeat` | `{ type: "start" 或 "end", id }`、`{ type: "feedback", id, feedback }` 或 `{ type: "schedule", nextAt }` | 巡检开始、结束（含跳过或顺延）、反馈或下次时间变化。收到事件及重连后读取 `GET /api/heartbeat` |
 | `memory` | `MemoryItem[]` | v1.5：工具写入、网页修改或删除、读取触发过期转换后推送全量列表。首次连接与重连后请求 `GET /api/memory` 获取当前列表 |
 | `calendar` | `Agenda` | v1.3：日程变化时整体替换。不包含在 `snapshot` 中，重连后前端重新请求 `/api/calendar` |
 
@@ -239,3 +247,26 @@ v1.5 的记忆接口使用登录会话。网页上的修改和删除由用户直
 ## 错误
 
 除飞书 OAuth 回调的 HTML 错误页外，API 错误响应体为 `{ error: string }`。
+
+## 主会话巡检（v1.12）
+
+从 v1.12 起，飞书发送成功或 Web SSE 投递的未读立即通知可随下一次唤醒进入模型上下文。同一通知跨渠道只附带一次，优先保留最近的 20 条，整个附带段最多 1500 字。明细只含通知 ID、来源和标题。
+
+`GET /api/heartbeat` 返回 `{ enabled, nextAt, intervalMs, adoption, signals, runs }`。时间均为 Unix 毫秒。停用时 `nextAt` 为 `null`。`signals` 包含未来 7 天到期的活跃目标数 `dueGoals`、上次巡检以来的摘要通知数 `backlog`、过去 24 小时主会话用户消息数 `userMessages24h`。
+
+初始间隔为 5 小时，按采纳率和三个需求信号调整，范围为 2–48 小时。默认只在本地 08:00（含）到 23:00（不含）开始，落在窗外的触发时间顺延至下一次开放。自动巡检遇忙每分钟重试，超过一小时跳过；最近半小时主会话活跃也跳过。六类线索均无变化且距上次实际巡检不足 24 小时才因内容未变跳过。首次巡检和满 24 小时的复查可以在线索为空时运行。
+
+手动触发忽略近期活跃和内容未变，沿用开关、时间窗与每日主动预算，保留自动巡检的下次时间。遇忙返回 409，记录为 `skipped / busy`，由调用方决定是否重试。飞书和 Web 用户消息在巡检后的两小时内、由巡检派出的任务完成且未被拒绝、巡检或关联通知获得“有用”评价，均可形成采纳信号。每次实际巡检产生一个 EWMA 样本（初始 0.5，α 为 0.3）。修改反馈按原回合权重修正；显式“没用”优先。
+
+`runs` 按最近发生的顺序返回，每次尝试均有独立 ID。
+
+| 字段 | 含义 |
+|---|---|
+| `id, at, finishedAt` | 巡检 ID、开始时间、结束时间。正在运行时 `finishedAt` 为 `null` |
+| `status, skipReason` | `ran / skipped / deferred`。运行时原因为 `null`，其他取值为 `disabled / outside-hours / busy / busy-timeout / recent-activity / unchanged / budget` |
+| `counts` | 六类线索限长展示前的条数，字段为 `goals, memories, agenda, chat, tasks, digests`。聊天取最近八轮用户输入，记忆包含用户偏好和最近八条事实 |
+| `actions` | 按执行顺序列出本轮主会话成功调用的工具，每项含 `tool`。派单、盯梢、通知、创建或取消调度附返回的 `id`。通知的 `level` 是安静时段处理后的实际级别 |
+| `notified, finalReply` | 是否成功写入了面向用户的通知（立即或摘要），以及主会话本轮最后回复。巡检简报、回复正文与流式片段均在 Web 对话中隐藏。工具调用仍可显示为时间线提示 |
+| `tokens, feedback` | 本轮主会话对话中模型报告的 token 总数（含缓存），以及对本轮的直接反馈 `useful / useless / null` |
+
+主会话自行决定是否告知用户、派任务、开盯梢、另寻线索或什么都不做。`notify` 写入来源为 `alter` 的通知，遵循立即投递与安静时段规则。报告、调度的普通回复进 Web 时间线，飞书用户消息照常回到原渠道。巡检及其派单的请求按 `role: "heartbeat"` 计入每日主动预算，主会话的唤醒来源为 `heartbeat`。

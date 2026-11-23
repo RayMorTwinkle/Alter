@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.11).
+// Mirrors docs/architecture/web-api.md (v1.12).
 
 export type TimelineItem = {
   id: string;
@@ -35,6 +35,7 @@ export type Task = {
   taskId: string;
   brief: string;
   context: "fork" | "fresh";
+  heartbeatAt?: number; heartbeatId?: string;
   continuedFrom?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
@@ -47,9 +48,9 @@ export type Task = {
 };
 
 export type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
-  status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number;
+  status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
 
 export type Funnel = {
@@ -155,4 +156,20 @@ export type Stats = {
   funnel: Funnel; watchWakeAccuracy: number | null; latency: { firstToken: StatsLatency; total: StatsLatency };
   topTasks: { taskId: string; costUsd: number }[];
   daily: { date: string; usage: StatsUsage; tasks: number; succeeded: number; wakes: number }[];
+};
+export type HeartbeatStats = { lastInspection?: number; adoptionRate: number; history: { at: number; intervalMs: number }[] };
+
+export type HeartbeatReason = "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
+export type HeartbeatRun = {
+  id: string; at: number; finishedAt: number | null; status: "ran" | "skipped" | "deferred"; skipReason: HeartbeatReason | null;
+  counts: { goals: number; memories: number; chat: number; agenda: number; tasks: number; digests: number };
+  actions: { tool: string; id?: string; level?: "now" | "digest" }[];
+  notified: boolean; finalReply: string; tokens: number; feedback: "useful" | "useless" | null;
+};
+type HeartbeatRunEvent = { type: "start" | "end"; id: string } | { type: "feedback"; id: string; feedback: "useful" | "useless" };
+export type HeartbeatEvent = HeartbeatRunEvent | { type: "schedule"; nextAt: number | null };
+export type HeartbeatView = {
+  enabled: boolean; nextAt: number | null; intervalMs: number; adoption: number;
+  signals: { dueGoals: number; backlog: number; userMessages24h: number };
+  runs: HeartbeatRun[];
 };
