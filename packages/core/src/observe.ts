@@ -3,7 +3,7 @@ import { Audit, Requests, type PermissionState } from "./broker.ts";
 import { Notifications, type Notification } from "./notifications.ts";
 import { Leases, leaseWindow, type openAlter } from "./main.ts";
 import {
-  context, InboxDoc, LiveDoc, type ConversationDocToken, type Cursor, type JsonObject,
+  context, InboxDoc, LiveDoc, type ConversationDocToken, type Cursor, type EntryRecord, type JsonObject,
 } from "./runtime.ts";
 import { Ledger, Tasks, type LedgerEntry, type TaskRecord } from "./state.ts";
 import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
@@ -32,7 +32,7 @@ const limit = 200;
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
 export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
   const state: SurfaceState = { timeline: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
-  let inputSource: string | undefined;
+  const turn: { source?: string; heartbeat?: boolean } = {};
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
   let streamedId: string | undefined;
@@ -48,7 +48,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     timeline.push(item);
     if (timeline.length > 1 && timeline[timeline.length - 2]!.at > item.at) timeline.sort((a, b) => a.at - b.at);
     if (timeline.length > limit) timeline.shift();
-    if (publish) emit({ event: "timeline", data: item }, inputSource);
+    if (publish) emit({ event: "timeline", data: item }, turn.source);
   }
 
   function updateTasks() {
@@ -82,16 +82,25 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     }, context);
     let cursor: Cursor | undefined;
     const recent: TimelineItem[] = [];
+    const segment: EntryRecord[] = [];
+    let latest = true;
+    function readTurn() {
+      const historyTurn = latest ? turn : {};
+      const items = segment.reverse().flatMap(entry => timelineEntries(entry, historyTurn));
+      recent.push(...items.reverse().slice(0, limit - recent.length));
+      segment.length = 0;
+      latest = false;
+    }
     do {
       const page = await main.entries({}, limit, cursor, context);
       for (const entry of page.items) {
-        const items = timelineEntries(entry).reverse();
-        inputSource ??= items.find(item => item.kind === "user")?.source;
-        if (recent.length < limit) recent.push(...items);
+        segment.push(entry);
+        if (entry.model?.some(msg => msg.role === "user")) readTurn();
+        if (recent.length >= limit) break;
       }
       cursor = page.next;
-    } while (cursor && (recent.length < limit || !inputSource));
-
+    } while (cursor && recent.length < limit);
+    if (segment.length) readTurn();
     for (const item of recent.reverse()) add(item, false);
     await watch(Tasks, value => { records = value.byId; updateTasks(); });
     // A parked auto action is user-visible even after the request is answered. The
@@ -140,7 +149,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       if (state.busy !== busy) { state.busy = busy; emit({ event: "busy", data: { busy } }); }
       const msg = live.generation?.message;
       const text = msg && contentText(msg.content);
-      if (!live.run || !msg || !text) { partial = undefined; return; }
+      if (turn.heartbeat || !live.run || !msg || !text) { partial = undefined; return; }
       const id = assistantId(live.run.taskId, msg.timestamp);
       if (partial?.id !== id || partial.text !== text) {
         streamedId = id;
@@ -162,9 +171,8 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
         }
         for (const change of changes) {
           if (change.type === "entry" && change.value.conversationId === main.id) {
-            for (const item of timelineEntries(change.value)) {
+            for (const item of timelineEntries(change.value, turn)) {
               // A follow-up is visible in the inbox before it participates in a model turn.
-              if (item.kind === "user") inputSource = item.source;
               if (placed.has(change.value.id)) continue;
               // Short answers can finish before pi.live's first progress tick.
               if (item.kind === "assistant" && streamedId !== item.id) {

@@ -27,6 +27,8 @@ it("interprets offsets, validates wall times and advances by local calendar day"
 });
 
 it("sleeps durably, fires once per occurrence, catches up once and resumes registered kinds", async ({ onTestFinished }) => {
+  vi.stubEnv("ALTER_HEARTBEAT", "off");
+  onTestFinished(() => { vi.unstubAllEnvs(); });
   const dir = await mkdtemp(join(tmpdir(), "alter-schedule-"));
   let now = Date.parse("2026-12-01T00:00Z");
   const timers = new Map<() => void, number>();

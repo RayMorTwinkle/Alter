@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, approvalStats, isApprovalDecision, isApprovalMode, context, funnel, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  MemoryInputError, schema, stats, Tasks, usageSummary, type AlterApp,
+  MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
@@ -58,10 +58,22 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     res.write(frame);
   }
   const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  let displayed = new Set<string>();
+  let deliveries = Promise.resolve();
+  function webDelivery(items: Notification[]) {
+    const unread = items.filter(item => item.level === "now" && item.status === "unread" && item.pushedAt === undefined);
+    const fresh = unread.filter(item => !displayed.has(item.id));
+    displayed = new Set(unread.map(item => item.id));
+    if (fresh.length) deliveries = app.notifications.delivered(fresh.reverse()).catch(error => {
+      for (const item of fresh) displayed.delete(item.id);
+      console.warn("Web notification receipt failed", error);
+    });
+  }
   const surface = await observeSurface(app, ({ event, data }) => {
     if (!clients.size) return;
     const message = frame(event, data);
     for (const res of clients.keys()) write(res, message);
+    if (event === "notifications" && clients.size) webDelivery(data);
   });
   const { calendar, feishuAccount } = options;
   const agenda = () => ({ timeZone: calendar!.timeZone, events: calendar!.agenda() });
@@ -70,7 +82,11 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     const message = frame("calendar", agenda());
     for (const res of clients.keys()) write(res, message);
   });
-  const heartbeat = setInterval(() => {
+  const stopHeartbeat = await subscribeHeartbeat(app.harness, event => {
+    const message = frame("heartbeat", event);
+    for (const res of clients.keys()) write(res, message);
+  });
+  const ping = setInterval(() => {
     for (const res of clients.keys()) write(res, ": ping\n\n");
   }, 20_000).unref();
 
@@ -133,7 +149,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         if (clients.has(res)) write(res, frame("memory", items));
       });
       res.on("close", () => { clients.delete(res); stopMemory(); });
-      write(res, frame("snapshot", surface.snapshot()));
+      const snapshot = surface.snapshot();
+      write(res, frame("snapshot", snapshot));
+      if (clients.has(res)) webDelivery(snapshot.notifications);
       if (surface.partial) write(res, frame("delta", surface.partial));
       return;
     } else if (method === "POST" && path === "/api/messages") {
@@ -185,6 +203,20 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         throw new HttpError(400, "days must be an integer between 1 and 366");
       }
       return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!options.feishu }));
+    } else if (method === "GET" && path === "/api/heartbeat") {
+      return json(res, 200, await app.heartbeat.view());
+    } else if (method === "POST" && path === "/api/heartbeat/run") {
+      const run = await app.heartbeat.run();
+      if (run.skipReason === "busy") return json(res, 409, { error: "Main conversation is busy", id: run.id });
+      return json(res, run.status === "ran" ? 202 : 200, run);
+    } else if (method === "POST" && /^\/api\/heartbeat\/[^/]+\/feedback$/.test(path)) {
+      const { feedback } = await body(req);
+      if (feedback !== "useful" && feedback !== "useless") throw new HttpError(400, "Expected useful or useless feedback");
+      const result = await app.heartbeat.feedback(path.split("/")[3]!, feedback);
+      if (result === "missing") throw new HttpError(404, "Unknown heartbeat");
+      if (result === "skipped") throw new HttpError(409, "Heartbeat did not run");
+    } else if (method === "GET" && path === "/api/heartbeat/stats") {
+      return json(res, 200, await app.heartbeat.stats());
     } else if (method === "GET" && path === "/api/approvals/stats") {
       return json(res, 200, await approvalStats(app.main));
     } else if ((method === "GET" || method === "PATCH") && path === "/api/settings") {
@@ -217,7 +249,8 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     });
   });
   function dispose() {
-    clearInterval(heartbeat);
+    clearInterval(ping);
+    stopHeartbeat();
     unsubscribe?.();
     surface.detach();
     for (const res of clients.keys()) res.end();
@@ -226,6 +259,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
   server.once("close", dispose);
   return { server, async close() {
     dispose();
+    await deliveries;
     if (server.listening) await new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());
       server.closeAllConnections();

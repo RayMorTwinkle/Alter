@@ -26,6 +26,7 @@ export type PluginHost = { emit(event: ExternalEvent): Promise<void> };
 export type AlterPlugin = {
   capability: Capability;
   tools: ToolRegistration[];
+  agenda?(days?: number): { id: string; title: string; start: number; end: number }[];
   onTaskEnd?(conversation: Pick<Conversation, "id" | "commit">): Promise<void>;
   start?(host: PluginHost): Promise<() => Promise<void>>;
 };

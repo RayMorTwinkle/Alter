@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Notifications, Tasks, type MemoryItem, type SurfaceEvent, type SurfaceState,
+  context, createGatewayModels, gatewayConfig, openAlter, openNodeSqliteStorage, Leases, Notifications, Tasks, type HeartbeatEvent, type HeartbeatRun, type MemoryItem, type SurfaceEvent, type SurfaceState,
 } from "@alter/core";
 import { delta, fakeGateway, say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import { createFeishuConnector, type FeishuPairing } from "@alter/plugin-feishu";
@@ -60,7 +60,7 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
   return { ...await open(), reopen: open };
 }
 
-type Event = SurfaceEvent | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
+type Event = SurfaceEvent | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState } | { event: "calendar"; data: unknown } | { event: "memory"; data: MemoryItem[] };
 
 async function stream(read: (path: string) => Promise<Response>) {
   const response = await read("/api/events");
@@ -93,7 +93,7 @@ async function stream(read: (path: string) => Promise<Response>) {
 it("authenticates API requests, enforces JSON writes, and revokes the session including its open streams", async () => {
   const web = await setup();
   await expect(createWebServer(web.app, { password: "", dataDir: web.dir })).rejects.toThrow("ALTER_WEB_PASSWORD");
-  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/stats", "/api/feishu", "/api/unknown"]) {
+  for (const path of ["/api/state", "/api/events", "/api/usage", "/api/stats", "/api/heartbeat/stats", "/api/heartbeat", "/api/feishu", "/api/unknown"]) {
     const response = await web.read(path);
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: expect.any(String) });
@@ -464,13 +464,18 @@ it("authenticates memory routes and streams full lists for tool writes, expiry a
 
 it("publishes the notification list and persists independent read and feedback updates", async () => {
   const now = Date.parse("2026-11-22T02:00:00Z");
-  const web = await setup(undefined, false, undefined, () => now);
+  const inputs: string[] = [];
+  const web = await setup(({ messages }, res) => { inputs.push(messages.at(-1)!.content); say(res, "ok"); }, false, undefined, () => now);
   expect((await web.post("/api/notifications/missing", { status: "read" })).status).toBe(401);
   await web.login();
+  expect(await (await web.read("/api/heartbeat/stats")).json()).toEqual({ adoptionRate: 0.5, history: [] });
   const feed = await stream(web.read);
   await web.app.scheduler.create({ kind: "reminder", at: new Date(now).toISOString(), text: "出门" });
   await feed.seen(event => event.event === "notifications" && event.data[0]?.body === "出门");
   const [item] = (await web.state()).notifications;
+  await web.post("/api/messages", { text: "which reminder?" });
+  await web.app.main.waitForIdle(context);
+  expect(inputs[0]).toContain(item!.id);
   const path = "/api/notifications/" + item!.id;
   for (const patch of [{}, { title: "changed" }, { status: "unread" }, { feedback: "bad" }]) {
     expect((await web.post(path, patch)).status).toBe(400);
@@ -524,4 +529,53 @@ it("persists an authenticated approval mode and reports paired decisions", async
   const reopened = await web.reopen();
   await reopened.login();
   expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "off" });
+});
+
+it("publishes heartbeat starts, finishes and schedule changes and serves direct run feedback", async () => {
+  let pending: ServerResponse | undefined;
+  const web = await setup(({ messages }, res) => {
+    if (messages.at(-1)?.content.includes("定时巡检")) pending = res;
+    else say(res, messages.at(-1)?.role === "user" ? "收到" : "已安排，请查阅通知");
+  }, false, undefined, () => Date.parse("2026-12-01T02:00Z"));
+  await web.login();
+  const events = await stream(web.read);
+  const view = async () => (await web.read("/api/heartbeat")).json();
+  const initial = await view();
+  expect(initial).toMatchObject({ enabled: true, intervalMs: 5 * 3_600_000, adoption: 0.5,
+    signals: { dueGoals: 0, backlog: 0, userMessages24h: 0 }, runs: [] });
+  await web.post("/api/messages", { text: "提醒我留意活动" });
+  await web.app.main.waitForIdle(context);
+  const response = await web.post("/api/heartbeat/run", {});
+  expect(response.status).toBe(202);
+  const run: HeartbeatRun = await response.json();
+  expect(run).toMatchObject({ status: "ran", finishedAt: null, counts: { chat: 1 } });
+  await events.seen(e => e.event === "heartbeat" && e.data.type === "start" && e.data.id === run.id);
+  await expect.poll(() => !!pending).toBe(true);
+  try {
+    const busy = await web.post("/api/heartbeat/run", {});
+    expect(busy.status).toBe(409);
+    const { id } = await busy.json();
+    expect((await view()).runs[0]).toMatchObject({ id, status: "skipped", skipReason: "busy" });
+    expect((await web.post(`/api/heartbeat/${id}/feedback`, { feedback: "useful" })).status).toBe(409);
+  } finally { toolCall(pending!, "notify", { level: "now", title: "周末活动", body: "报名已开放" }); }
+  await events.seen(e => e.event === "heartbeat" && e.data.type === "end" && e.data.id === run.id);
+  const finished = (await view()).runs.find((row: HeartbeatRun) => row.id === run.id);
+  expect(finished).toMatchObject({ finalReply: "已安排，请查阅通知", notified: true, tokens: 22, feedback: null,
+    actions: [{ tool: "notify", id: expect.stringMatching(/^notify-/), level: "now" }] });
+  expect(events.events.filter(e => (e.event === "timeline" || e.event === "delta") && e.data.text === finished.finalReply)).toEqual([]);
+  expect((await web.state()).timeline.some(item => item.text === finished.finalReply)).toBe(false);
+  const url = `/api/heartbeat/${run.id}/feedback`;
+  expect((await web.post(url, { feedback: "invalid" })).status).toBe(400);
+  expect((await web.post("/api/heartbeat/unknown/feedback", { feedback: "useful" })).status).toBe(404);
+  for (const feedback of ["useful", "useful", "useless"]) {
+    expect((await web.post(url, { feedback })).status).toBe(204);
+    const state = await view();
+    expect(state.adoption).toBeCloseTo(feedback === "useful" ? 0.65 : 0.35);
+    expect(state.runs.find((row: HeartbeatRun) => row.id === run.id).feedback).toBe(feedback);
+    expect(state.nextAt).toBe(initial.nextAt);
+  }
+  expect(await (await web.read("/api/stats")).json()).toMatchObject({ wakes: { bySource: { heartbeat: 1 } } });
+  await web.app.scheduler.cancel("adaptive-heartbeat");
+  await events.seen(e => e.event === "heartbeat" && e.data.type === "schedule" && e.data.nextAt === null);
+  expect(await view()).toMatchObject({ enabled: false, nextAt: null });
 });

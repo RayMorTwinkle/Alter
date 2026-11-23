@@ -13,8 +13,9 @@ export type ScheduleItem = {
   status: "scheduled" | "done" | "cancelled";
 };
 // Handlers commit their durable effects through tx, together with the occurrence checkpoint.
-type Handler = (item: Readonly<ScheduleItem>, tx: Tx, firedAt: number) => void | Promise<void>;
-const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId }> }>("schedules", () => ({ byId: {} }));
+type NextOccurrence = { nextAt: number };
+type Handler = (item: Readonly<ScheduleItem>, tx: Tx, firedAt: number) => void | NextOccurrence | Promise<void | NextOccurrence>;
+export const Schedules = conversationDoc<{ byId: Record<string, { item: ScheduleItem; worker: TaskId }> }>("schedules", () => ({ byId: {} }));
 const Cancel = defineSignal({ name: "alter.schedule-cancel", version: 1, schema: bool() });
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
@@ -25,13 +26,16 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
       name: `alter.schedule.${kind}`, version: 1, initial: () => ({ phase: "tick" }),
       phases: {
         tick: ({ input: id }, runtime, ctx) => runtime.commit(async tx => {
-          const { item } = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id]!;
-          if (item.status !== "scheduled") return complete;
+          const { item, worker } = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id]!;
+          if (worker !== runtime.taskId || item.status !== "scheduled") return complete;
           const firedAt = runtime.now();
           if (item.at <= firedAt) {
-            await handler({ ...item }, tx, firedAt);
-            if (!item.repeat) { item.status = "done"; return complete; }
-            item.at = time.nextDaily(firedAt, item.repeat.daily);
+            const next = await handler({ ...item }, tx, firedAt);
+            if (next && typeof next === "object" && "nextAt" in next) {
+              if (!Number.isSafeInteger(next.nextAt) || next.nextAt <= firedAt) throw new Error("Expected a future schedule time");
+              item.at = next.nextAt;
+            } else if (item.repeat) item.at = time.nextDaily(firedAt, item.repeat.daily);
+            else { item.status = "done"; return complete; }
           }
           return { status: "sleeping", until: item.at, checkpoint: { phase: "tick" }, signals: [Cancel.key(String(item.at))] };
         }, ctx).catch(async error => {
@@ -41,7 +45,8 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
         }),
       },
       abort: ({ input: id }, runtime, ctx) => runtime.commit(async tx => {
-        (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id]!.item.status = "cancelled";
+        const entry = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId[id]!;
+        if (entry.worker === runtime.taskId) entry.item.status = "cancelled";
         return { status: "terminal", outcome: { status: "aborted" } };
       }, ctx),
     });
@@ -106,6 +111,22 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     if (exists) return;
     await create({ kind, text, daily, at: new Date(time.nextDaily(now(), daily)).toISOString() }, `daily-${kind}`);
   }
+  async function ensureAdaptive(kind: string, text: string, first: number | undefined) {
+    const id = `adaptive-${kind}`;
+    await main().commit(async tx => {
+      const { byId } = await tx.doc(Schedules, ROOT_CONVERSATION_ID);
+      const existing = byId[id];
+      if (first === undefined) {
+        if (existing?.item.status === "scheduled") {
+          await tx.signal(existing.worker, Cancel, String(existing.item.at), true);
+          existing.item.status = "done";
+        }
+      } else if (!existing || existing.item.status === "done") {
+        const worker = await tx.createTask(tasks.get(kind)!, id, { ownership: { kind: "conversation" }, background: true });
+        byId[id] = { worker, item: { id, kind, text, at: first, createdAt: now(), status: "scheduled" } };
+      }
+    }, context);
+  }
   function list() {
     return main().commit(async tx => Object.values((await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId)
       .map(({ item }) => ({ ...item, ...(item.repeat && { repeat: { ...item.repeat } }) })), context);
@@ -136,5 +157,5 @@ export function createScheduler(main: () => Conversation, registry: ReturnType<t
     defineTool({ name: "schedule_cancel", description: "Cancel a scheduled reminder by ID.", parameters: obj({ id: str() }), replay: "safe",
       execute: async ({ id }) => await cancel(id) ? reply(id) : reply("Unknown or finished schedule", true) }),
   ];
-  return { register, ensureDaily, create: (input: Input) => create(input), list, cancel, capability, tools };
+  return { register, ensureDaily, ensureAdaptive, create: (input: Input) => create(input), list, cancel, capability, tools };
 }

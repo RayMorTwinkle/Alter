@@ -1,3 +1,4 @@
+import { submitWake } from "./timeline.ts";
 import { bool, obj, opt, str } from "@earendil-works/pi-schema";
 import type { ApprovalCall, Judgment } from "./approval-model.ts";
 import type { ApprovalMode } from "./settings.ts";
@@ -113,8 +114,8 @@ async function expire(tx: Tx, main: Conversation, req: Request, at: number) {
   const { byId } = await tx.doc(Reviews, main.id);
   byId[req.id] = { ...byId[req.id], taskId: req.taskId, tool: req.tool, ended: "expired", expiredAt: at };
   delete (await tx.doc(Requests, main.id)).pending[req.id];
-  await main.submit(tx, { type: "input", whenBusy: "followUp", requestId: `expired-${req.id}`,
-    content: `Notify the user: task ${req.taskId}, request ${req.id} (${req.tool}): Approval expired without a decision` });
+  const text = `Notify the user: task ${req.taskId}, request ${req.id} (${req.tool}): Approval expired without a decision`;
+  await submitWake(tx, main, { id: `expired-${req.id}`, kind: "alter.schedule", at, content: text, data: { at, text } });
 }
 
 export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number, defaultMs: number,
@@ -154,6 +155,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         const isMain = api.conversationId === main.id;
         const control = call.name === "finish" || call.name === "declare_permissions";
         const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write-local" }
+          : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write-local" }
           : registry.toolActions.get(call.name);
         if (isMain && !descriptor) return;
         const taskId = isMain ? "main" : (await api.snapshot(TaskIdentity, api.conversationId, ctx))?.taskId ?? "";

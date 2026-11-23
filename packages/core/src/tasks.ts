@@ -2,7 +2,9 @@ import { arr, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
 import { calendarTime } from "./calendar-time.ts";
 import { addNotification } from "./notifications.ts";
-import { Requests } from "./broker.ts";
+import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
+import { submitWake } from "./timeline.ts";
+import { Audit, Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
 import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
@@ -48,11 +50,13 @@ async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId
     return;
   }
   await inheritTaint(tx, task.conversationId, main.id);
-  await main.submit(tx, {
-    entry: { kind: "alter.task-report", data: { taskId, at } },
-    type: "input", whenBusy: "followUp", requestId: `${failed ? "failure" : "report"}-${taskId}`,
-    content: `task ${taskId} ${failed ? "failed" : "finished"}: ${summary}`,
-  });
+  if (!failed && task.heartbeatAt !== undefined) {
+    const refused = (await tx.doc(Audit, main.id)).refused ?? {};
+    if (!Object.keys(refused).some(key => key.startsWith(taskId + " "))) await recordAdoption(tx, task.heartbeatId ?? task.heartbeatAt);
+  }
+  const text = `task ${taskId} ${failed ? "failed" : "finished"}: ${summary}`;
+  await submitWake(tx, main, { id: `${failed ? "failure" : "report"}-${taskId}`, kind: "alter.task-report",
+    at, content: text, data: { taskId, at, text } });
 }
 
 const finish = defineTool({
@@ -178,6 +182,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     if (tasks.byId[taskId]) return;
     const stamp = clock();
     const wake = !goal || args.continuedFrom ? await activeWake(tx, mainId, stamp.at) : undefined;
+    const inspection = goal ? undefined : await activeHeartbeat(tx);
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
     if (previous) {
@@ -203,6 +208,11 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       const provider = await tx.doc(ProviderDoc, childId);
       provider.sessionId = `proactive-${provider.sessionId}`;
     }
+    if (inspection || previous?.heartbeatAt !== undefined) {
+      const provider = await tx.doc(ProviderDoc, childId);
+      const session = provider.sessionId.replace(/^heartbeat-/, "");
+      provider.sessionId = inspection ? "heartbeat-" + session : session;
+    }
     const identity = await tx.doc(TaskIdentity, childId);
     if (previous) {
       const scope = await tx.doc(ScopeDoc, childId);
@@ -219,7 +229,8 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     identity.reminders = 0;
     tasks.byId[taskId] = {
       worker, ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
-      permission: args.permission, status: "running", ...(goal && { proactive: true, goal: { ...goal } }),
+      permission: inspection && args.permission === "full" ? "restricted" : args.permission, status: "running",
+      ...inspection, ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),
     };
   };

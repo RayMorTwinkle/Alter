@@ -28,6 +28,7 @@ const event = (ref: string, summary = ref, source = "mail"): ExternalEvent => ({
   source, ref, summary, kind: "received", at: 1, untrusted: true,
 });
 async function setup(plugins: AlterPlugin[] = []) {
+  vi.stubEnv("ALTER_HEARTBEAT", "off");
   const dir = await mkdtemp(join(tmpdir(), "alter-proactive-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const clock = { now: Date.parse("2026-12-01T02:00Z") };
