@@ -28,6 +28,11 @@ type Route = (text: string, last: Message, history: Message[], offered: string[]
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 function call(name: string, args: Parameters<typeof fauxToolCall>[1]) {
   return say(fauxToolCall(name, args), { stopReason: "toolUse" });
 }
@@ -120,6 +125,82 @@ it("dispatches a fresh notes task and delivers its ledger summary to the main mo
     summary: "Remember the planning meeting.", refs: [{ kind: "note", ref: "welcome" }],
     taskId: expect.stringMatching(/^task-/), at: expect.any(Number),
   }]);
+});
+
+it.each([false, true])("answers once for a fast report, including after a failed model request=%s", async failOnce => {
+  const result = "Created three calendar events";
+  const reported = gate();
+  let failed = false;
+  const app = await open(async (text, last) => {
+    if (text === "delegate") return dispatch("create events");
+    if (text === "create events") return finish(result);
+    if (last.role === "toolResult" && last.toolName === "dispatch_task") {
+      await reported.promise;
+      return call("task_status", { taskId: text });
+    }
+    if (!text.includes(result)) return say("missing result");
+    if (failOnce && !failed) { failed = true; throw new Error("offline model unavailable"); }
+    return say(result);
+  });
+  const feed = await observeSurface(app, event => {
+    if (event.event === "timeline" && event.data.kind === "report") reported.resolve();
+  });
+  cleanup.push(async () => feed.detach());
+  await submitMessage(app.main, "delegate");
+  await app.main.waitForIdle(context);
+  if (failOnce) {
+    expect(failed).toBe(true);
+    await expect.poll(() => feed.snapshot().timeline.some(item => item.kind === "assistant" && item.text === result)).toBe(true);
+  }
+  expect(feed.snapshot().timeline.filter(item => item.kind === "assistant").map(item => item.text)).toEqual([result]);
+});
+
+it("starts a report turn when the worker finishes after the user turn", async () => {
+  const release = gate();
+  const app = await open(async text => {
+    if (text === "delegate") return dispatch("slow work");
+    if (text === "slow work") { await release.promise; return finish("verified later"); }
+    return say(text.endsWith("finished: verified later") ? "verified later" : "working");
+  });
+  await input(app, "delegate");
+  expect(await ledger(app)).toEqual([]);
+  release.resolve();
+  await expect.poll(async () => (await readTranscript(app.main)).flatMap(m => m.kind === "assistant" ? [m.text] : []))
+    .toEqual(["working", "verified later"]);
+});
+
+it("delivers concurrent reports in full to one main request and settles them with the user input", async () => {
+  const release = gate();
+  const reported = gate();
+  const briefs = ["first", "second"];
+  const summary = (brief: string) => brief + " " + "details ".repeat(50) + "end";
+  const app = await open(async (text, last, messages) => {
+    if (text === "delegate") return say(briefs.map(brief => fauxToolCall("dispatch_task",
+      { brief, permission: "restricted", context: "fresh" })), { stopReason: "toolUse" });
+    if (briefs.includes(text)) { await release.promise; return finish(summary(text)); }
+    if (last.role === "toolResult" && last.toolName === "dispatch_task") {
+      release.resolve();
+      await reported.promise;
+      return call("task_status", {});
+    }
+    const seen = briefs.filter(brief => messages.some(m => m.role === "user" && contentText(m.content).endsWith(summary(brief))));
+    return say(seen.join(", "));
+  });
+  const ids: string[] = [];
+  const feed = await observeSurface(app, event => {
+    if (event.event === "timeline" && event.data.kind === "report") {
+      ids.push(event.data.id);
+      if (ids.length === 2) reported.resolve();
+    }
+  });
+  cleanup.push(async () => feed.detach());
+  const user = await submitMessage(app.main, "delegate");
+  await app.main.waitForIdle(context);
+  expect(feed.snapshot().timeline.filter(item => item.kind === "assistant").map(item => item.text)).toEqual(["first, second"]);
+  const receipts = await app.main.commit(tx => Promise.all([user, ...ids].map(id => tx.submissionByRequest(app.main.id, id))), context);
+  expect(receipts).toHaveLength(3);
+  expect(receipts[0]?.answer).toBeDefined();
+  expect(receipts).toEqual(Array(3).fill(expect.objectContaining({ status: "done", answer: receipts[0]!.answer })));
 });
 
 it("never asks the user twice in one task after a denial, while a new task asks again", async () => {

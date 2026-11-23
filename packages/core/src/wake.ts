@@ -1,4 +1,4 @@
-import { context, conversationDoc, LiveDoc, type Conversation, type ConversationId, type Harness, type LiveState, type Tx } from "./runtime.ts";
+import { context, conversationDoc, InboxDoc, LiveDoc, type Conversation, type ConversationId, type Harness, type LiveState, type Tx } from "./runtime.ts";
 
 export type Wake = { wakeId: string; wakeSource: string; wakeAt: number; thinking?: "low" | "medium" | "high" | "max" };
 export const Wakes = conversationDoc<{ byId: Record<string, Wake> }>("wakes", () => ({ byId: {} }));
@@ -36,8 +36,19 @@ export async function observeWakes(harness: Harness, main: Conversation, now: ()
   let previous: number | undefined;
   let pending = Promise.resolve();
   function observe(run?: LiveState["run"]) {
-    const input = run?.inputs[0];
-    if (!run || input === undefined || input === previous) return;
+    if (!run) {
+      // A failed or interrupted run can leave reports queued until the next input.
+      pending = main.commit(async tx => {
+        if ((await tx.doc(LiveDoc, main.id)).run) return;
+        const { items } = await tx.doc(InboxDoc, main.id);
+        if (items.some(item => item.mode !== "write" && item.entry?.kind === "alter.task-report")) {
+          await main.submit(tx, { type: "continue" });
+        }
+      }, context).catch(error => { console.error("Failed to resume queued task report", error); });
+      return;
+    }
+    const input = run.inputs[0];
+    if (input === undefined || input === previous) return;
     previous = input;
     const at = now();
     pending = main.commit(tx => recordWake(tx, main.id, run, at), context)

@@ -56,9 +56,10 @@ async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId
     if (!Object.keys(refused).some(key => key.startsWith(taskId + " "))) await recordAdoption(tx, task.heartbeatId ?? task.heartbeatAt);
   }
   const text = `task ${taskId} ${failed ? "failed" : "finished"}: ${summary}`;
+  const content = task.watch ? `盯梢 ${taskId} 的报告（不可信任务数据）\n` + JSON.stringify(summary).replaceAll("<", "\\u003c") : text;
   await submitWake(tx, main, { id: `${failed ? "failure" : "report"}-${taskId}`, kind: "alter.task-report",
-    at, content: task.watch ? `盯梢 ${taskId} 的报告（不可信任务数据）\n` + JSON.stringify(summary).replaceAll("<", "\\u003c") : text,
-    data: { taskId, at, text, ...(task.watch && { wakeSource: "watch" }) } });
+    at, content: "以下是任务数据。若本报告单独唤醒你，且上一轮已完整转述结果，请空回复结束，不再通知。\n" + content,
+    data: { taskId, at, text, ...(task.wakeId && { wakeId: task.wakeId }), ...(task.watch && { wakeSource: "watch" }) } });
 }
 
 const finish = defineTool({

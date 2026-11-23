@@ -8,7 +8,7 @@ import {
 import { ScheduledTasks, type ScheduledTask } from "./scheduled-tasks.ts";
 import { watchList, type WatchItem } from "./watch.ts";
 import { Ledger, Tasks, type LedgerEntry, type TaskRecord } from "./state.ts";
-import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
+import { assistantId, isInlineTaskReport, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
@@ -97,7 +97,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       const page = await main.entries({}, limit, cursor, context);
       for (const entry of page.items) {
         segment.push(entry);
-        if (entry.model?.some(msg => msg.role === "user")) readTurn();
+        if (!isInlineTaskReport(entry) && entry.model?.some(msg => msg.role === "user")) readTurn();
         if (recent.length >= limit) break;
       }
       cursor = page.next;
