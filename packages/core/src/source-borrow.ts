@@ -4,7 +4,6 @@ import { NestedCallDoc } from "@earendil-works/pi-durable";
 import { configure, context, defineTask, ROOT_CONVERSATION_ID, ToolTask, type Conversation,
   type Extension, type ToolRegistration, type Harness, type JsonObject, type Tx } from "./runtime.ts";
 import { TaskIdentity, Tasks } from "./state.ts";
-import { Taint } from "./taint.ts";
 import { clearRequests } from "./tasks.ts";
 
 type Input = { taskId: string; plugin: string; tool: string; args: JsonObject };
@@ -53,7 +52,6 @@ export async function borrowForSource(main: Conversation, harness: Harness, exte
       { conversationId: child.id, ownership: { kind: "conversation" }, abandonOnRestart: true });
     const identity = await tx.doc(TaskIdentity, child.id);
     identity.taskId = taskId; identity.sourcePlugin = plugin;
-    (await tx.doc(Taint, child.id)).first = { source: "feed:" + plugin, capability: "ext-" + plugin, at: now };
     (await tx.doc(Tasks, main.id)).byId[taskId] = { conversationId: child.id, worker, brief: "插件 " + plugin + " 的消息来源借用 " + tool.name,
       thinking: "off", context: "fresh", permission: "restricted", status: "running", createdAt: now };
     return worker;

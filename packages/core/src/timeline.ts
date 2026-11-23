@@ -4,7 +4,6 @@ import { contentText } from "@earendil-works/pi-ai";
 import { Heartbeat, heartbeatKind, userActivity } from "./heartbeat-state.ts";
 import { wakeNotifications } from "./notifications.ts";
 import { recordUserMessage } from "./memory-inbox.ts";
-import { Taint } from "./taint.ts";
 import { inputClock } from "./clock.ts";
 import { context, InboxDoc, LiveDoc, type TaskId, type ConversationId, type Conversation, type ConversationHandle, type Tx, type JsonObject, type Cursor, type EntryRecord, type InboxState } from "./runtime.ts";
 
@@ -42,7 +41,6 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
     content = prefix + "\n" + content;
     notices.cursor = notices.pushed.count;
     notices.pushed.lines = [];
-    (await tx.doc(Taint, main.id)).first ??= { source: "notifications", capability: "notifications", at: input.at };
   }
   const state = await tx.doc(Heartbeat, main.id);
   state.lastActivity = input.at;
@@ -71,6 +69,25 @@ type InputEntry = Pick<EntryRecord, "kind" | "data">;
 function entryData(entry?: InputEntry) {
   const data = entry?.data;
   return data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
+}
+
+export async function recentUserText(tx: Tx, conversationId: ConversationId) {
+  const messages: string[] = [];
+  let cursor: Cursor | undefined;
+  do {
+    const page = await tx.scanEntries({ conversationId, order: "descending" }, 64, cursor);
+    for (const entry of page.items) {
+      if (entry.kind !== inputKind) continue;
+      const data = entryData(entry);
+      if (!userSources.has(String(data?.source)) || typeof data?.text !== "string" || !data.text.trim()) continue;
+      // A truncated instruction could omit a restriction. Ask the user if it cannot fit.
+      if (data.text.length > 1000) return [];
+      messages.push(data.text);
+      if (messages.length === 3) return messages.reverse();
+    }
+    cursor = page.next;
+  } while (cursor);
+  return messages.reverse();
 }
 
 export async function hasUserInput(tx: Tx, id: ConversationId) {

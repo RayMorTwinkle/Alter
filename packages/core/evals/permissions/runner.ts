@@ -12,16 +12,14 @@ import { Tasks } from "../../src/state.ts";
 import { cases, type Decision, type PermissionCase } from "./cases.ts";
 
 const actions: Capability["actions"] = [
-  { name: "read", effect: "read" }, { name: "write", effect: "write-local" },
-  { name: "send", effect: "external-send" }, { name: "delete", effect: "irreversible" },
-  { name: "run", effect: "unknown" }, { name: "untrusted", effect: "read" },
+  { name: "read", effect: "read" }, { name: "write", effect: "write" },
+  { name: "delete", effect: "irreversible" },
 ];
 const fixture: AlterPlugin = {
   capability: { id: "fixture", mainLeasable: true, actions },
   tools: actions.map(({ name }) => defineTool({
     name: "fixture_" + name, description: name, parameters: obj({}),
-    execute: async () => name === "untrusted" ? { ...reply('<external url="https://example.test/?a=1&amp;b=2">外部内容</external>'),
-      details: { untrusted: true } } : reply(name),
+    execute: async () => reply(name),
   })),
 };
 
@@ -36,15 +34,11 @@ function script(c: PermissionCase) {
   const main: Call[] = [];
   const child: Call[] = [];
   const lease = (capability: string) => call("lease-" + capability, "enable_tool", { capability, reason: "评测" });
-  if (c.taint === "main-read") main.push(lease("fixture"));
-  if (c.caller.kind === "lease") {
-    if (c.caller.capability !== "fixture" || c.taint !== "main-read") main.push(lease(c.caller.capability));
-  }
-  if (c.taint === "main-read") main.push(call("seed-main", "fixture_untrusted"));
+  if (c.caller.kind === "lease") main.push(lease(c.caller.capability));
   if (c.caller.kind === "task") {
     const { permission, context } = c.caller;
     main.push(call("dispatch", "dispatch_task", { brief: "eval-child", permission, context }));
-    if (c.taint === "task-read") child.push(call("seed-task", "fixture_untrusted"));
+    if (c.statement) child.push(call("declare", "declare_permissions", { items: c.statement }));
     if (c.priorApproval === "send" || c.priorApproval === "send-denied") child.push(call("prior", "outbox_send", { message: "第一条" }));
   }
   const callerSteps = c.caller.kind === "lease" ? main : child;
@@ -84,7 +78,16 @@ async function play(c: PermissionCase, signal: AbortSignal, plugins: AlterPlugin
   const ctx = withAbortSignal(signal, context);
   const route = script(c);
   const faux = fauxProvider();
-  faux.setResponses(Array.from({ length: 32 }, () => ({ messages }) => route(messages.findLast(m => m.role !== "system")!)));
+  faux.setResponses(Array.from({ length: 32 }, () => ({ messages }, options) => {
+    const last = messages.findLast(m => m.role !== "system")!;
+    if (options?.metadata?.alterConversation === "judge") {
+      const { statement, call } = JSON.parse(contentText(last.content));
+      const inScope = statement.some((item: { tool: string; target: string }) =>
+        item.tool === call.tool && item.target === call.arguments.message);
+      return say(JSON.stringify({ inScope, reason: "评测目标核对" }));
+    }
+    return route(last);
+  }));
   const models = createModels();
   models.setProvider(faux.provider);
   const storage = new MemoryStorage();
@@ -114,15 +117,19 @@ async function play(c: PermissionCase, signal: AbortSignal, plugins: AlterPlugin
       }
       const requests = await app.harness.snapshot(Requests, app.main.id, ctx);
       for (const request of Object.values(requests?.pending ?? {})) {
+        if (request.checking) continue;
         const tasks = await app.harness.snapshot(Tasks, app.main.id, ctx);
         const id = request.taskId === "main" ? app.main.id : tasks?.byId[request.taskId]?.conversationId;
         if (!id) continue;
         const live = await app.harness.snapshot(LiveDoc, id, ctx);
         const slot = live?.tools?.find(s => s.taskId === request.toolTask && s.status === "sleeping");
         if (slot?.callId === "target" && request.audience === "user") {
-          result = { actual: request.audience, evidence: `${request.tool} sleeping · ${request.audience}` +
-            (request.taint ? " · " + request.taint.source : "") };
+          result = { actual: request.audience, evidence: `${request.tool} sleeping · ${request.audience}` };
           break;
+        }
+        if (slot?.callId.startsWith("lease-")) {
+          await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
+          continue;
         }
         if (slot?.callId !== "prior" || approved) continue;
         if ((c.priorApproval === "send" || c.priorApproval === "send-denied") && request.audience === "user") {

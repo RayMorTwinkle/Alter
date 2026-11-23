@@ -109,7 +109,7 @@ export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; o
           <Tile label={t.successRate} value={percent(stats.tasks.successRate)} sub={t.tasksSummary(stats.tasks.completed, stats.tasks.terminal)} />
           <Tile label={t.wakes} value={String(stats.wakes.count)} sub={`${t.calls} ${total.calls}`} />
           {stats.leases.count > 0 && <Tile label={t.leases} value={String(stats.leases.count)}
-            sub={t.leasesSub(percent(stats.leases.taintedRate), percent(stats.leases.dispatchAfterLeaseRate))} />}
+            sub={t.leasesSub(percent(stats.leases.dispatchAfterLeaseRate))} />}
         </div>
 
         {stats.daily.length > 1 && <Daily days={stats.daily} />}
@@ -141,7 +141,6 @@ export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; o
             <dl className="stat-list">
               {(["allow", "deny", "park"] as const).map(key => <div key={key}><dt>{t.decisions[key]}</dt><dd>{decisions[key]}</dd></div>)}
               {stats.approvals.byApprover.map(row => <div key={row.approver}><dt>{t.approvers[row.approver] ?? row.approver}</dt><dd>{row.count}</dd></div>)}
-              <div><dt>{t.agreement}</dt><dd>{percent(stats.approvals.shadowAgreementRate)}</dd></div>
             </dl>
           </section>
         )}

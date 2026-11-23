@@ -1,4 +1,4 @@
-import { withAbortSignal, permitsBorrow, defineTool, isTainted, markPluginTaint, reply, type AlterApp, type AlterPlugin, type PluginView } from "@alter/core";
+import { withAbortSignal, permitsBorrow, defineTool, reply, type AlterApp, type AlterPlugin, type PluginView } from "@alter/core";
 import { openRuntime, PluginError, check, fields, record, type Version } from "@alter/plugin-runtime";
 import type { openSecrets } from "./secrets.ts";
 
@@ -44,8 +44,7 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
           let seq = 0;
           try {
             const result = await runtime.invoke(id, v.sha, { kind: "tools", name: t.name, args }, {
-              signal: ctx.abortSignal, tainted: () => isTainted(api, ctx),
-              mark: () => markPluginTaint(api, ctx, capability(id), t.name),
+              signal: ctx.abortSignal,
               borrow: async (name, params, effect, signal) => {
                 const descriptor = app.capabilities.toolActions.get(name);
                 check(descriptor && permitsBorrow(effect, descriptor.effect), "Borrow exceeds calling effect");

@@ -26,7 +26,7 @@ export function createFeishuConnector(options: { config: FeishuUserConfig; dataD
   }
   const plugin: AlterPlugin = {
     capability: { id: "feishu", mainLeasable: true, actions: [
-      { name: "chats", effect: "read" }, { name: "messages", effect: "read" }, { name: "send", effect: "external-send" },
+      { name: "chats", effect: "read" }, { name: "messages", effect: "read" }, { name: "send", effect: "write" },
     ] },
     async describe({ tool, arguments: { chat_id } }) {
       if ((tool !== "feishu_send" && tool !== "feishu_messages") || typeof chat_id !== "string") return;

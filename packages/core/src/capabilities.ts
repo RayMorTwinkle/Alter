@@ -2,12 +2,18 @@ import { obj, str } from "@earendil-works/pi-schema";
 import type { ApprovalCall, ApprovalContext } from "./approval-model.ts";
 import { defineExtension, defineTool, reply, type Conversation, type ConversationDocToken, type ConversationId, type JsonObject, type ToolRegistration } from "./runtime.ts";
 
-export type Effect = "read" | "write-local" | "external-send" | "irreversible" | "unknown";
-const effects = ["read", "write-local", "external-send", "irreversible"] as const;
-export function permitsBorrow(ceiling: string, effect: Effect) {
-  return effect !== "unknown" && effects.indexOf(effect) <= effects.findIndex(e => e === ceiling);
+export type Effect = "read" | "write" | "irreversible";
+const effects = ["read", "write", "irreversible"] as const;
+export function normalizeEffect(value: unknown): Effect {
+  if (value === "write-local" || value === "external-send") return "write";
+  return value === "read" || value === "write" ? value : "irreversible";
 }
-type ActionPolicy = { effect: Effect; guarded?: true; seenArg?: string };
+
+export function permitsBorrow(ceiling: string, effect: Effect) {
+  const limit = ceiling === "write-local" || ceiling === "external-send" ? "write" : ceiling;
+  return effects.indexOf(normalizeEffect(effect)) <= effects.findIndex(e => e === limit);
+}
+type ActionPolicy = { effect: Effect };
 export type ToolAction = ActionPolicy & { capability: string; action: string };
 export type Capability = {
   id: string;
@@ -18,11 +24,11 @@ export type Capability = {
 
 export const demoManifests: Capability[] = [
   { id: "calendar", mainLeasable: true, actions: [
-    { name: "list", effect: "read" }, { name: "create", effect: "write-local" },
-    { name: "update", effect: "write-local", guarded: true },
+    { name: "list", effect: "read" }, { name: "create", effect: "write" },
+    { name: "update", effect: "write" },
   ] },
   { id: "notes", mainLeasable: true, actions: [{ name: "read", effect: "read" }] },
-  { id: "outbox", mainLeasable: true, actions: [{ name: "send", effect: "external-send" }] },
+  { id: "outbox", mainLeasable: true, actions: [{ name: "send", effect: "write" }] },
 ];
 
 export type ExternalEvent = {
@@ -70,6 +76,7 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = [], d
     for (const { name: action, ...policy } of capability.actions) {
       const name = `${capability.id}_${action}`;
       if (reserved.has(name) || toolActions.has(name)) throw new Error(`Duplicate tool: ${name}`);
+      if (!effects.includes(policy.effect)) throw new Error(`Unsupported effect for ${name}`);
       toolActions.set(name, { capability: capability.id, action, ...policy });
     }
   }

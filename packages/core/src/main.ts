@@ -7,7 +7,6 @@ import { arr, obj, opt, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
 import { approvalClocks, createBroker, migrateRequests, Reviews } from "./broker.ts";
 import { activeLease, LeaseHistory, Leases, leaseTarget, leaseWindow } from "./leases.ts";
-import { Taint } from "./taint.ts";
 import { judge } from "./approval-model.ts";
 import { openSettings } from "./settings.ts";
 import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, type PluginHost } from "./capabilities.ts";
@@ -113,7 +112,8 @@ export async function openAlter(
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
   const settings = openSettings(options.dataDir ?? storageDirectories.get(storage) ?? dir, proactive.heartbeat, feedback.settings);
   const defaultMs = validateApprovalTimeout(options.approvalDefaultMs ?? Number(process.env.ALTER_APPROVAL_DEFAULT_MS ?? 60_000), "ALTER_APPROVAL_DEFAULT_MS");
-  const broker = createBroker(() => main, capabilities, timeout, defaultMs, () => settings.approvalModel,
+  const broker = createBroker(() => main, capabilities, timeout, defaultMs,
+    name => controls.some(tool => tool.name === name && !scheduler.tools.includes(tool)), () => settings.approvalModel,
     async (statement, call, owner, metadata) => {
       const preferences = await harness.snapshot(Preferences, main.id, context);
       return judge(auxiliaryModels(currentModels(), dir, now, "judge", owner), taskModel, statement, call, metadata, preferences?.permissionNotes[call.tool]);
@@ -187,13 +187,11 @@ export async function openAlter(
           const history = await tx.doc(LeaseHistory, api.conversationId);
           const id = String(api.taskId);
           if (!history.byId[id]) {
-            const tainted = !!(await tx.doc(Taint, api.conversationId)).first;
             const approved = (await tx.doc(Reviews, api.conversationId)).byId["permission-" + id]?.user === "once";
-            if (tainted && target.effect !== "read" && !approved) return reply("Lease requires approval", true);
             const at = api.now();
             const wake = await activeWake(tx, api.conversationId, at);
             history.byId[id] = { capability, tools: target.tools, reason: reason.trim(), at, ...(wake && { wakeId: wake.wakeId }),
-              tainted, approved, useWakeIds: [], calls: 0, succeeded: 0, failed: 0, dispatched: false };
+              approved, useWakeIds: [], calls: 0, succeeded: 0, failed: 0, dispatched: false };
             const leases = await tx.doc(Leases, api.conversationId);
             leases.records ??= {};
             leases.records[target.key] = id;

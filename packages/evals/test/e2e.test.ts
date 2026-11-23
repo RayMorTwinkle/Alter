@@ -27,9 +27,11 @@ function setup(main: ReturnType<typeof fauxProvider>, worker?: ReturnType<typeof
   return { timeZone: "America/New_York", browser: false, models: async () => {
     const models = createModels();
     models.setProvider(main.provider);
-    if (worker) models.setProvider(worker.provider);
+    const task = worker ?? fauxProvider({ provider: "worker" });
+    if (!worker) task.setResponses(Array(12).fill(say('{"inScope":true,"reason":"符合说明"}')));
+    models.setProvider(task.provider);
     return { models, mainModel: { provider: "faux", modelId: "faux-1" },
-      taskModel: worker && { provider: "worker", modelId: "faux-1" } };
+      taskModel: { provider: "worker", modelId: "faux-1" } };
   } };
 }
 
@@ -53,11 +55,11 @@ it("checks actual calendar state, removes each database, and excludes incorrect 
   const good = await run(15, 1);
   const bad = await run(16, 2);
   expect(good).toMatchObject({ status: "pass", tools: { enable_tool: 1, dispatch_task: 0 }, reply: "已按要求创建。",
-    usage: { main: { tokens: 9, calls: 1 }, task: { tokens: 0 }, total: { calls: 1 } } });
+    usage: { main: { tokens: 9, calls: 1 }, task: { tokens: 0 }, total: { calls: 3 } } });
   expect(bad).toMatchObject({ status: "fail", reason: expect.stringContaining("周报会"), usage: { main: { tokens: 1003 } } });
   const md = summary([good, bad]);
   expect(md.indexOf(bad.reason!)).toBeLessThan(md.indexOf("## 完成率"));
-  expect(md).toContain("| 总计 | 1 / 2 | 50.0% | 0 | 0 | 9 / 0 | 1 |");
+  expect(md).toContain("| 总计 | 1 / 2 | 50.0% | 0 | 0 | 9 / 0 | 3 |");
   expect(md).toContain("| 日历 | 1 / 2 | 50.0%");
   expect(md).toContain("| calendar-relative | 2 | fail");
 });

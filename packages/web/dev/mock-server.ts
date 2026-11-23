@@ -114,7 +114,6 @@ async function runTask(text: string) {
     id: `permission-${id()}`, taskId, audience: "user", capability: "outbox", tool: "outbox_send",
     arguments: { message: "老闆您好，邀請您參加明天下午三點的週報會。" }, reason: task.brief,
     expiresAt: Date.now() + 24 * 3_600_000, defaultAt: Date.now() + 60_000,
-    tainted: true, taint: { source: "mail_read", capability: "mail", at: Date.now() },
     statement: [
       { tool: "calendar_create", target: "本地日曆", purpose: "按郵件建立明天 15:00 的週報會", isNew: false },
       { tool: "outbox_send", target: "老闆（boss@example.com）", purpose: "發送週報會邀請", isNew: true },
@@ -199,7 +198,7 @@ function mockStats(range: string) {
       tools: { browser_open: 2 }, approvals: [], result: null,
     })) },
     wakes: { count: 71, bySource: { "user-web": 30, "user-feishu": 18, report: 19, schedule: 4 }, items: [] },
-    approvals: { decisions: { park: 1, allow: 14, deny: 2 }, pending: [], byApprover: [{ approver: "user", count: 12 }, { approver: "judge", count: 4 }, { approver: "timeout", count: 1 }], timeouts: 1, shadowAgreementRate: 0.83 },
+    approvals: { decisions: { park: 1, allow: 14, deny: 2 }, pending: [], byApprover: [{ approver: "user", count: 12 }, { approver: "judge", count: 4 }, { approver: "timeout", count: 1 }], timeouts: 1, modelAllowed: 4, askedUser: 13, userApproved: 10, userDenied: 2 },
     funnel: { days: [], precision: null }, watchWakeAccuracy: null,
     latency: { firstToken: { samples: 210, p50Ms: 1400, p95Ms: 3900 }, total: { samples: 210, p50Ms: 9800, p95Ms: 31000 } },
     topTasks: [], daily,
@@ -284,8 +283,8 @@ createServer(async (req, res) => {
     steps: ["在飛書開放平台創建企業自建應用，開啟機器人能力", "權限管理中批量導入下面的權限 JSON", "事件訂閱選擇「長連接」，添加接收消息事件", "安全設置中添加下面的回調地址", "把 App ID 和 App Secret 填到下面並保存", "在飛書裡給機器人發配對碼，再授權你的賬號"],
   });
   if (path.startsWith("/api/plugins/")) return json(res, 200, mockPlugins.find(p => path.includes(p.id)));
-  if (path === "/api/settings") return json(res, 200, { approvalModel: "shadow", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
-  if (path === "/api/approvals/stats") return json(res, 200, { compared: 23, agreed: 19, agreementRate: 19 / 23, deniedButInScope: 0 });
+  if (path === "/api/settings") return json(res, 200, { approvalModel: "on", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
+  if (path === "/api/approvals/stats") return json(res, 200, { modelAllowed: 4, askedUser: 13, userApproved: 10, userDenied: 2 });
   if (path.startsWith("/api/watches/")) return json(res, 204);
   if (path.startsWith("/api/schedules/")) return json(res, 204);
   if (path === "/api/heartbeat") {

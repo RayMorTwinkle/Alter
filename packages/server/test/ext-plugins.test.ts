@@ -18,7 +18,9 @@ it("approves the proposed bytes only via authenticated plugin management and pre
   await events.seen(e => e.event === "ext-plugins" && e.data.length === 0);
   const response = await web.post(base + "/install", { path });
   expect(response.status).toBe(201);
-  const { sha, summary, codeUrl, dependencies } = await response.json();
+  const { sha, summary, codeUrl, dependencies, manifest } = await response.json();
+  expect(manifest.tools).toMatchObject([{ name: "get", description: "get", effect: "read" }]);
+  expect(await (await web.read(base)).json()).toMatchObject([{ pending: { manifest } }]);
   expect(summary.split("\n")[0]).toBe("此插件以你的权限运行，可以读写文件、联网、执行命令");
   expect(codeUrl).toMatch(/^file:/);
   expect(dependencies).toEqual({});

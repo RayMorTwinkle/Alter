@@ -1,9 +1,10 @@
-import { chmodSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { openRuntime } from "../src/index.ts";
 import { parseManifest } from "../src/manifest.ts";
 import type { run } from "../src/process.ts";
+import { preparePackage } from "../src/packages.ts";
 import { openStore } from "../src/store.ts";
 import { fixture, manifest } from "./fixtures.ts";
 
@@ -43,12 +44,12 @@ it("compares upgrades and restores the previous code, KV and feed cursor after r
   });
   await f.approve(); await f.tool(); await f.poll();
   const next = structuredClone(manifest);
-  next.version = "2"; next.tools[0]!.effect = "external-send"; next.network[0]!.pathPrefixes.push("/new");
+  next.version = "2"; next.tools[0]!.effect = "write"; next.network[0]!.pathPrefixes.push("/new");
   next.network.push({ host: "new.example", methods: ["POST"], pathPrefixes: ["/x"] });
   next.secrets.push({ name: "extra", purpose: "test" }); next.borrows.push("calendar_list");
   f.write(next);
   const p = await f.r.store.propose(f.pkg);
-  expect(p.expanded.join(" ")).toMatch(/external-send.*\/new.*new.example.*extra.*calendar_list/);
+  expect(p.expanded.join(" ")).toMatch(/write.*\/new.*new.example.*extra.*calendar_list/);
   await f.r.store.approve("sample", p.sha); f.r.store.update("sample", p.sha, v => { v.kv.x = "after"; v.sources = {}; });
   const store = openStore(f.data);
   store.rollback("sample");
@@ -85,7 +86,7 @@ it("baselines and deduplicates external data and pauses only a malformed source"
 
 it("only forwards a declared borrow, validates output and enforces the KV quota", async () => {
   const borrow = vi.fn(async () => "borrowed");
-  const caller = { tainted:async () => false, mark:async () => {}, borrow };
+  const caller = { borrow };
   const f = await setup(async (_,__,___,host) => {
     await expect(host("borrow",{tool:"undeclared",args:{}})).rejects.toThrow("Undeclared");
     await expect(host("kv.set",{key:"x",value:"x".repeat(4096)})).rejects.toThrow("quota");
@@ -99,4 +100,29 @@ it("only forwards a declared borrow, validates output and enforces the KV quota"
   await f.r.store.approve("sample",p.sha);
   await expect(f.r.invoke("sample",p.sha,{kind:"tools",name:"read",args:{}},caller)).rejects.toThrow("Invalid tool output");
   expect(borrow).toHaveBeenCalledExactlyOnceWith("notes_read",{id:"welcome"},"read",expect.any(AbortSignal));
+});
+
+it.each(["write-local", "external-send"])("migrates an installed %s package without changing its approved bytes", async effect => {
+  const f = fixture();
+  const legacy = { ...manifest, tools: [{ ...manifest.tools[0], effect }] };
+  const bytes = JSON.stringify(legacy);
+  writeFileSync(join(f.pkg, "alter-plugin.json"), bytes);
+  const store = openStore(f.data);
+  await expect(store.propose(f.pkg)).rejects.toThrow("Unsupported effect");
+
+  const p = await preparePackage(store.root, f.pkg, true);
+  writeFileSync(join(store.root, "registry.json"), JSON.stringify({ sample: {
+    pending: { ...p, manifest: legacy }, versions: [],
+  } }));
+  const reopened = openStore(f.data);
+  expect(reopened.view("sample").pending?.manifest.tools[0]?.effect).toBe("write");
+  await reopened.approve("sample", p.sha);
+  reopened.update("sample", p.sha, v => Object.assign(v, { manifest: legacy }));
+  const installed = openStore(f.data);
+  expect(installed.view("sample")).toMatchObject({ active: p.sha, status: "enabled", manifest: { tools: [{ effect: "write" }] } });
+  expect(readFileSync(join(installed.directory(p.sha), "alter-plugin.json"), "utf8")).toBe(bytes);
+});
+
+it.each(["unknown", "", null, undefined])("rejects an invalid effect at installation (%s)", effect => {
+  expect(() => parseManifest({ ...manifest, tools: [{ ...manifest.tools[0], effect }] })).toThrow("Unsupported effect");
 });

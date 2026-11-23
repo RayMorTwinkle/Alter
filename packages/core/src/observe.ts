@@ -123,7 +123,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       let count = 0;
       function permissionAt(i: number) {
         const row = entries[i]!;
-        if (row.decision !== "park" || (!row.audience && !row.tainted && records[row.taskId]?.permission !== "auto")) return;
+        if (row.decision !== "park" || (!row.audience && records[row.taskId]?.permission !== "auto")) return;
         add({ id: `approval-${i}`, kind: "permission", text: `请求用户审批：${row.tool}`, at: row.at, taskId: row.taskId }, !seeding);
         count++;
       }

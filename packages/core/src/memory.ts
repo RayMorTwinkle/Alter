@@ -29,8 +29,8 @@ function legacy(e: MemoryEntry): MemoryItem {
     ...(e.dueAt !== undefined && { due: e.dueAt }), status: e.status, createdAt: e.createdAt, updatedAt: e.updatedAt };
 }
 const capability: Capability = { id: "memory", mainLeasable: true, actions: [
-  { name: "read", effect: "read" }, { name: "search", effect: "read" }, { name: "write", effect: "write-local", guarded: true },
-  { name: "delete", effect: "write-local", guarded: true },
+  { name: "read", effect: "read" }, { name: "search", effect: "read" }, { name: "write", effect: "write" },
+  { name: "delete", effect: "write" },
 ] };
 
 async function messageSource(api: ToolExecutionApi, ctx: Context) {

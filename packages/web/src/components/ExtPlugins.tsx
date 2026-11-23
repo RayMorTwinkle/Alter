@@ -4,7 +4,7 @@ import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
 import type { ExtPluginEffect, ExtPluginManifest, ExtPluginProposal, ExtPluginView } from "../types.ts";
 
-const risky = new Set<ExtPluginEffect>(["external-send", "irreversible"]);
+const risky = new Set<ExtPluginEffect>(["irreversible"]);
 
 function Capabilities({ manifest, dependencies }: { manifest: ExtPluginManifest; dependencies?: Record<string, string> }) {
   const t = useT().ext;

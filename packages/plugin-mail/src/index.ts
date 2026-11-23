@@ -14,7 +14,7 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
   return {
     capability: { id: "mail", mainLeasable: true, actions: [
       { name: "search", effect: "read" }, { name: "read", effect: "read" },
-      { name: "draft", effect: "write-local" }, { name: "send", effect: "external-send" },
+      { name: "draft", effect: "write" }, { name: "send", effect: "write" },
     ] },
     describe({ tool, arguments: { to } }) {
       if ((tool !== "mail_send" && tool !== "mail_draft") || typeof to !== "string" || !validAddress(to)) return;

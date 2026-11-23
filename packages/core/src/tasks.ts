@@ -11,7 +11,6 @@ import {
 } from "./runtime.ts";
 import { activeWake } from "./wake.ts";
 import { budgetExhausted } from "./usage.ts";
-import { inheritTaint, Taint } from "./taint.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type TaskRecord } from "./state.ts";
 
 const nonempty = str({ minLength: 1 });
@@ -40,8 +39,6 @@ export const unescapeNewlines = (text: string) => text.includes("\n") || !text.i
 
 async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId: string, at: number, summary: string) {
   const failed = task.status === "failed";
-  await inheritTaint(tx, task.conversationId, main.id);
-  if (task.watch) (await tx.doc(Taint, main.id)).first ??= { source: "watch-report", capability: "task", at };
   if (!failed && task.heartbeatAt !== undefined) {
     const refused = (await tx.doc(Audit, main.id)).refused ?? {};
     if (!Object.keys(refused).some(key => key.startsWith(taskId + " "))) await recordAdoption(tx, task.heartbeatId ?? task.heartbeatAt);
@@ -205,7 +202,6 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       ...(watch ? { compaction: { enabled: false } } : previous?.watch ? { compaction: null } : {}),
       instructions: watch?.instructions ?? (goal ? "完成只读调研后单独调用 finish，提供摘要与引用。" : workerInstructions),
     });
-    await inheritTaint(tx, mainId, childId);
     if (inspection || previous?.heartbeatAt !== undefined) {
       const provider = await tx.doc(ProviderDoc, childId);
       const session = provider.sessionId.replace(/^heartbeat-/, "");
@@ -218,7 +214,6 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       scope.late = [];
       scope.declarations = [];
       delete scope.shown;
-      delete scope.approved;
       delete scope.full;
     }
     const scheduled = args.triggerSource === "scheduled" || wake?.wakeSource === "schedule";
@@ -317,12 +312,11 @@ export const taskStatus = defineTool({
     if (!task) return reply("Unknown task", true);
     const { pending } = await tx.doc(Requests, api.conversationId);
     const requests = Object.values(pending).filter(req => req.taskId === taskId && !req.checking).map(req => ({
-      id: req.id, audience: req.audience, tool: req.tool, ...(req.tainted && { tainted: true }), arguments: clip(req.argumentsJson, 200),
+      id: req.id, audience: req.audience, tool: req.tool, arguments: clip(req.argumentsJson, 200),
       remainingMs: Math.max(0, req.expiresAt - api.now()),
     }));
     const activity = await taskActivity(tx, taskId, task);
     const failure = task.failure && clip(task.failure, 200);
-    await inheritTaint(tx, task.conversationId, api.conversationId);
     return reply(JSON.stringify({ ...summary(taskId, task), ...activity, failure, pending: requests }));
   }, ctx),
 });
@@ -342,7 +336,6 @@ export const taskMessage = defineTool({
       if (task.watch && !(await tx.doc(LiveDoc, child.id)).run) return reply("Watch is sleeping", true);
       if (!await tx.submissionByRequest(child.id, `brief-${taskId}`)) return { sleep: { until: api.now() + 10 } };
       if (!(await tx.doc(LiveDoc, child.id)).run) return reply("Task has ended; use dispatch_task with continue_from", true);
-      await inheritTaint(tx, api.conversationId, child.id);
       await child.submit(tx, { type: "input", whenBusy: "steer", whenIdle: "reject", content: message,
         requestId, entry: { kind: "alter.task-message", data: { taskId } } });
       record.messages ??= [];

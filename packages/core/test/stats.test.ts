@@ -124,8 +124,8 @@ it("dates user and judge events independently and includes undated v1.10 reviews
   }, context);
   const { approvals } = await query("day");
   expect(approvals).toMatchObject({ userDecisions: { once: 1, "task-full": 0, deny: 0 }, judgments: { inScope: 1 }, timeouts: 0,
-    shadow: { compared: 1, agreed: 1, agreementRate: 1 } });
+    userApproved: 1, userDenied: 0 });
   const all = (await query("all")).approvals;
-  expect(all.shadow).toEqual(await approvalStats(app.main));
-  expect(all).toMatchObject({ timeouts: 1, shadowAgreementRate: 0.5, shadow: { deniedButInScope: 1 } });
+  expect(all).toMatchObject(await approvalStats(app.main));
+  expect(all).toMatchObject({ timeouts: 1, userApproved: 2, userDenied: 1 });
 });

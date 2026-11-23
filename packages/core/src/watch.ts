@@ -8,7 +8,6 @@ import {
   ROOT_CONVERSATION_ID as root, SubmissionSettled, type Conversation, type Harness, type TaskId, type Tx,
 } from "./runtime.ts";
 import { Ledger, TaskIdentity, Tasks, type TaskRecord, type WatchSettings } from "./state.ts";
-import { recordUntrusted, Taint } from "./taint.ts";
 import { clearRequests, declarePermissions, finishTask, type createDispatcher, type createTaskCancellation } from "./tasks.ts";
 import { budgetExhausted, type ProactiveBudget } from "./usage.ts";
 
@@ -159,7 +158,6 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
               const key = String(watch.wakes.length);
               const lines = buffer.pending.sort((a, b) => a.at - b.at).map(e => dataLine([e.ref, e.at, e.chatId ?? "", e.contact ?? "", e.text ?? e.summary]));
               const messages = lines.length ? "\n<untrusted>\n" + lines.join("\n") + "\n</untrusted>" : "";
-              if (lines.length) recordUntrusted(await tx.doc(Taint, child.id), { source: "watch", capability: watch.where.channel, at }, reply(messages).output);
               const content = [watch.wakes.length ? "" : current.brief, final ? "观察期结束，请收尾" : "本批消息", watch.pollError ? "渠道拉取失败，观察可能不完整。" : ""].filter(Boolean).join("\n") + messages;
               await child.submit(tx, { type: "input", content, entry: { kind: "alter.watch-input", data: { final } },
                 requestId: watch.wakes.length ? `watch-${id}-${key}` : `brief-${id}`, notify: { taskId: runtime.taskId, key } });

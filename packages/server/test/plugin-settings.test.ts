@@ -13,7 +13,8 @@ import { setup, stream } from "./web-fixture.ts";
 
 it("serves all installed plugins with partial credentials and changes the live calendar registration", async () => {
   const start = new Date(Date.now() + 3_600_000).toISOString();
-  const web = await setup(({ messages }, res) => {
+  const web = await setup(({ messages, model }, res) => {
+    if (model === "offline/task") return say(res, '{"inScope":true,"reason":"符合说明"}');
     if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar", reason: "book" });
     if (messages.at(-1)?.content === "Enabled calendar") return toolCall(res, "calendar_create", { title: "热重载验证", start });
     say(res, "done");
@@ -47,7 +48,7 @@ it("serves all installed plugins with partial credentials and changes the live c
   expect((await reopened.state()).leases.map(lease => lease.capability)).toContain("calendar");
   expect(await (await reopened.read("/api/calendar")).json()).toMatchObject({ events: [{ title: "热重载验证" }] });
   const { leases } = await (await reopened.read("/api/stats?range=all")).json();
-  expect(leases).toMatchObject({ count: 1, byTool: { calendar_create: 1, calendar_list: 1 }, taintedRate: 0,
+  expect(leases).toMatchObject({ count: 1, byTool: { calendar_create: 1, calendar_list: 1 },
     dispatchAfterLeaseRate: 0, items: [{ reason: "book", approved: false, calls: 1, succeeded: 1 }] });
 });
 
@@ -107,12 +108,12 @@ it("applies a partial heartbeat patch immediately and restores the window and de
   await web.login();
   const patch = (value: unknown) => fetch(web.base + "/api/settings", { method: "PATCH",
     headers: { cookie: web.sessionCookie(), "Content-Type": "application/json" }, body: JSON.stringify(value) });
-  expect((await patch({ approvalModel: "auto", heartbeat: { start: "99:00" } })).status).toBe(400);
+  expect((await patch({ approvalModel: "on", heartbeat: { start: "99:00" } })).status).toBe(400);
   expect((await patch({ heartbeat: { extra: true } })).status).toBe(400);
   expect((await patch({ heartbeat: { start: "23:00" } })).status).toBe(400);
-  expect(await (await patch({ heartbeat: { enabled: false } })).json()).toMatchObject({ approvalModel: "shadow", heartbeat: { enabled: false } });
+  expect(await (await patch({ heartbeat: { enabled: false } })).json()).toMatchObject({ approvalModel: "on", heartbeat: { enabled: false } });
   expect(await (await web.read("/api/heartbeat")).json()).toMatchObject({ enabled: false, nextAt: null });
-  await patch({ heartbeat: { enabled: true, start: "22:00", end: "02:00" }, approvalModel: "auto" });
+  await patch({ heartbeat: { enabled: true, start: "22:00", end: "02:00" }, approvalModel: "on" });
   const nextAt = Date.parse("2026-01-05T22:00:00+08:00");
   expect(await (await web.read("/api/heartbeat")).json()).toMatchObject({ enabled: true, nextAt });
   await patch({ heartbeat: { start: "21:00" } });
@@ -120,7 +121,7 @@ it("applies a partial heartbeat patch immediately and restores the window and de
   await web.close();
   const reopened = await web.reopen();
   await reopened.login();
-  expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "auto", heartbeat: { enabled: true, start: "21:00", end: "02:00" } });
+  expect(await (await reopened.read("/api/settings")).json()).toEqual({ approvalModel: "on", heartbeat: { enabled: true, start: "21:00", end: "02:00" } });
   expect(await (await reopened.read("/api/heartbeat")).json()).toMatchObject({ nextAt: nextAt - 3_600_000 });
 });
 

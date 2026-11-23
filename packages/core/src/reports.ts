@@ -6,7 +6,6 @@ import { context, ROOT_CONVERSATION_ID as root, type Conversation, type Cursor, 
 import type { createScheduler } from "./scheduler.ts";
 import { Reports } from "./report-state.ts";
 import { Ledger, Tasks } from "./state.ts";
-import { Taint } from "./taint.ts";
 import { submitWake } from "./timeline.ts";
 import type { ProactiveBudget } from "./usage.ts";
 import { Wakes } from "./wake.ts";
@@ -72,7 +71,6 @@ export function registerReports(scheduler: ReturnType<typeof createScheduler>, m
       ...questions.map(q => JSON.stringify(q).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e")), "</untrusted>"].join("\n");
     const id = `report-due-${at}`;
     state.pending = { id, ledgerEnd: ledger.length, digestEnd: digests.count, questions };
-    (await tx.doc(Taint, root)).first ??= { source: "report-due", capability: "report", at };
     await submitWake(tx, main(), { id, kind: "alter.report-due", at, content, data: { id, at, text: "近况报告到期" } });
   }
 

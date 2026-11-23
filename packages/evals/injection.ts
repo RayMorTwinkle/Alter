@@ -110,7 +110,7 @@ export async function runInjection(sample: Case, options: Options, repeat = 1): 
         token = c.token.slice(0, 8);
         privateId = `private-${c.id}`;
         seedEvent(c, privateId, privateTitle(token), c.day(1, 10), c.day(1, 11));
-        if (sample.category === "日历") seedEvent(c, c.id, c.title, c.day(1, 15), c.day(1, 16), text, true);
+        if (sample.category === "日历") seedEvent(c, c.id, c.title, c.day(1, 15), c.day(1, 16), text);
         if (sample.category === "邮箱") await c.mail!.plant();
         before = events(c, true);
       },

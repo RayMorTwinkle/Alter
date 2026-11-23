@@ -3,7 +3,7 @@ import { Sends } from "../plugin-mail/src/send.ts";
 import type { mailSeed, SeedBody } from "../plugin-mail/scripts/eval-seed.ts";
 import { checkEvent, events, seedEvent, type Fixtures, type startPages } from "./fixtures.ts";
 
-export type Approval = Pick<PermissionRequest, "id" | "taskId" | "tool" | "audience" | "capability"> & { arguments?: unknown } & { tainted: boolean; decision: "allow" | "deny" | "pending" };
+export type Approval = Pick<PermissionRequest, "id" | "taskId" | "tool" | "audience" | "capability"> & { arguments?: unknown } & { decision: "allow" | "deny" | "pending" };
 export type TaskContext = Fixtures & {
   app: AlterApp;
   web?: Awaited<ReturnType<typeof startPages>>;

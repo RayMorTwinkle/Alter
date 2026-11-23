@@ -47,9 +47,9 @@ async function play(task: Task, c: TaskContext, result: Result) {
     activity = performance.now();
     if (event.event === "timeline" && event.data.kind === "assistant") c.reply = event.data.text;
     if (event.event === "pending") {
-      for (const { id, taskId, tool, audience, capability, tainted, arguments: args } of event.data) {
+      for (const { id, taskId, tool, audience, capability, arguments: args } of event.data) {
         if (seen.has(id)) continue;
-        const row: Approval = { id, taskId, tool, audience, capability, arguments: args, tainted: !!tainted, decision: "pending" };
+        const row: Approval = { id, taskId, tool, audience, capability, arguments: args, decision: "pending" };
         seen.set(id, row);
         result.approvals.push(row);
       }
