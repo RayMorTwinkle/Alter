@@ -3,7 +3,7 @@ import { mergeCorrection, type FeedbackCall } from "./feedback-model.ts";
 import { calendarTime } from "./calendar-time.ts";
 import { day, Feedback, FeedbackError, featureQuestion, feedbackEditors, fixedMetric, knownReplyLength, memoryVersion, originalOption, lastInteraction, issueQuestions, seedQuestions, syncGuesses,
   type Answer, type Bank, type Change, type Issued } from "./feedback.ts";
-import { interacted, Preferences, type FeedbackSettings } from "./feedback-settings.ts";
+import { feedbackPaused, interacted, Preferences, type FeedbackSettings } from "./feedback-settings.ts";
 import { openFeedbackTables } from "./feedback-tables.ts";
 import { feedbackStats } from "./feedback-stats.ts";
 import type { createMemory } from "./memory.ts";
@@ -244,6 +244,7 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
     });
   }
   async function checkin(tx: Tx, at: number) {
+    if (feedbackPaused) return;
     const bank = await tx.doc(Feedback, root);
     const consecutive = bank.visits.slice(-2);
     const doubled = consecutive.length === 2 && consecutive.every(batch =>
@@ -292,7 +293,7 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
       try { await complete(id); } catch (e) { if (!(e instanceof FeedbackError && e.status === 409)) throw e; }
     }
     memoryRevision = await commit(syncMemory);
-    await scheduler.ensureAdaptive("feedback", "每周回访", initialized.first);
+    await scheduler.ensureAdaptive("feedback", "每周回访", feedbackPaused ? undefined : initialized.first);
     tables = await openFeedbackTables(dir, harness());
     let queued = Promise.resolve();
     function sync() {
@@ -304,10 +305,11 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
     return async () => { feedbackEditors.delete(runtimeId); memory.store.listeners.delete(sync); await queued; tables.close(); };
   }
   return { start, answer, skip, undo, checkin,
-    active: () => commit(async tx => now() - await lastInteraction(tx) < 7 * day),
+    active: () => commit(async tx => !feedbackPaused && now() - await lastInteraction(tx) < 7 * day),
     view: () => tables.view(),
     stats: () => commit(tx => feedbackStats(tx, now(), timeZone)),
     more: (fromId?: string) => commit(async tx => {
+      if (feedbackPaused) return [];
       const bank = await tx.doc(Feedback, root);
       const at = now();
       let batch = bank.lastCheckin !== undefined && at - bank.lastCheckin < 7 * day ? bank.visits.at(-1) : undefined;

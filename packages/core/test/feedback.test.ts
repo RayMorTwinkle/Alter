@@ -20,6 +20,9 @@ import { openAlter } from "../src/main.ts";
 import { addNotification } from "../src/notifications.ts";
 import { context, MemoryStorage, openNodeSqliteStorage, type Tx } from "../src/runtime.ts";
 
+// Exercise the retained feedback loop, including historical answer/undo behavior, with issuance enabled.
+vi.mock(import("../src/feedback-settings.ts"), async original => ({ ...await original(), feedbackPaused: false }));
+
 const clean: (() => Promise<void>)[] = [];
 afterEach(async () => { while (clean.length) await clean.pop()!(); });
 const start = Date.parse("2026-12-01T12:00Z");
@@ -138,7 +141,7 @@ it("sends due checkins only after recent activity and doubles the interval after
   for (const q of pending) await app.feedback.skip(q.id);
   clock.at += 7 * day;
   await touch();
-  expect((await tick()).nextAt).toBe(clock.at + 7 * day);
+  expect((await tick())?.nextAt).toBe(clock.at + 7 * day);
   expect((await app.feedback.view()).pending).toEqual([]);
   clock.at += 7 * day;
   await touch(); await tick();

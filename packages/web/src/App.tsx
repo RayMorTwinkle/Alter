@@ -57,7 +57,9 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [showSettings, setShowSettings] = useState(false);
   const awaiting = state.extPlugins.find(p => p.pending);
   const [showFeedback, setShowFeedback] = useState(false);
-  const questions = state.feedback?.pending.filter(p => p.status === "pending").length ?? 0;
+  // Check-ins are paused (ADR-0017); keep the sheet but stop inviting answers.
+  const feedbackPaused = true;
+  const questions = feedbackPaused ? 0 : state.feedback?.pending.filter(p => p.status === "pending").length ?? 0;
   const [heartbeat, setHeartbeat] = useState<HeartbeatView | null>(null);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
   const [showNotices, setShowNotices] = useState(false);
@@ -211,7 +213,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       </nav>
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
-      {showUsage && <StatsSheet onClose={() => setShowUsage(false)} onOpenFeedback={() => { setShowUsage(false); setShowFeedback(true); }} />}
+      {showUsage && <StatsSheet onClose={() => setShowUsage(false)} onOpenFeedback={feedbackPaused ? undefined : () => { setShowUsage(false); setShowFeedback(true); }} />}
       {showFeedback && <FeedbackSheet view={state.feedback} onClose={() => setShowFeedback(false)} />}
       {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} onToggleLocale={onToggleLocale} extPlugins={state.extPlugins} />}
       {showHeartbeat && <HeartbeatSheet view={heartbeat} onClose={() => setShowHeartbeat(false)} onChange={() => setHeartbeatTick(n => n + 1)} />}

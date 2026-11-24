@@ -360,25 +360,26 @@ it("keeps an actionable heartbeat reply local after a Feishu turn and records it
   expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
 });
 
-it("accepts owner feedback forms once, syncs Web skips and serves more questions", async () => {
+it("accepts existing owner feedback forms and syncs Web skips while issuance is paused", async () => {
   const f = await setup();
   await f.pair();
+  const { Feedback } = await import("../../core/src/feedback.ts");
+  const { conversationDoc } = await import("../../core/src/runtime.ts");
+  const Cards = conversationDoc<{ byId: Record<string, { messageId: string }> }>("feishu-cards", () => ({ byId: {} }));
+  const messageFor = (id: string) => "om_" + id;
   await f.app.feedback.feature("ext-brief", "活动速览");
-  await f.app.feedback.featureResult("ext-brief", f.clock.now);
-  const questions = await f.app.feedback.more();
-  const q = questions.find(q => q.multi)!;
-  await expect.poll(() => f.transport.sendCard.mock.calls.length).toBe(questions.length);
-  function messageFor(id: string) {
-    const call = f.transport.sendCard.mock.calls.find(([, card]) => JSON.stringify(card).includes(id))!;
-    return "om_" + call[2];
-  }
-  const card = f.transport.sendCard.mock.calls.find(([, card]) => JSON.stringify(card).includes(q.id))![1];
-  expect(card).toMatchObject({ schema: "2.0", body: { elements: expect.arrayContaining([
-    expect.objectContaining({ tag: "form", elements: expect.arrayContaining([
-      expect.objectContaining({ tag: "multi_select_static", name: "options" }),
-      expect.objectContaining({ form_action_type: "submit", behaviors: [{ type: "callback", value: { feedbackId: q.id, operation: "answer" } }] }),
-    ]) }),
-  ]) } });
+  const questions = await f.app.main.commit(async tx => {
+    const bank = await tx.doc(Feedback, f.app.main.id);
+    const cards = await tx.doc(Cards, f.app.main.id);
+    return ["feature:ext-brief", "style:satisfaction"].map(id => {
+      const candidate = bank.candidates[id]!;
+      const q = { ...candidate, candidateId: id, outlet: "checkin" as const, batch: "legacy", askedAt: f.clock.now, status: "pending" as const, changeIds: [] };
+      bank.issues[id] = q;
+      cards.byId[id] = { messageId: messageFor(id) };
+      return { id, options: [...q.options] };
+    });
+  }, context);
+  const q = questions[0]!;
   const sdk = dispatcher(f.handlers);
   async function click(openId: string, id: string, operation: string, form?: object) {
     return sdk.invoke({ schema: "2.0", header: { event_type: "card.action.trigger" }, event: {
@@ -395,7 +396,8 @@ it("accepts owner feedback forms once, syncs Web skips and serves more questions
   await expect.poll(() => f.transport.updateCard.mock.calls.some(([id, card]) => id === messageFor(web.id) && JSON.stringify(card).includes("已跳过"))).toBe(true);
   expect(await click("owner", web.id, "answer", { options: web.options[0] })).toMatchObject({ toast: { type: "info" } });
   expect(await click("owner", q.id, "more")).toMatchObject({ toast: { type: "success" } });
-  expect((await f.app.feedback.view()).history.find(i => i.id === q.id)?.moreUsed).toBe(true);
+  expect((await f.app.feedback.view()).pending).toEqual([]);
+  expect(f.transport.sendCard).not.toHaveBeenCalled();
 });
 
 it("closes a feedback card whose question left the bank with a schema 2.0 update", async () => {

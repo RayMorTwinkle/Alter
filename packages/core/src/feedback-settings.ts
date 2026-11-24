@@ -1,5 +1,7 @@
 import { conversationDoc, ROOT_CONVERSATION_ID, type Tx } from "./runtime.ts";
 
+export const feedbackPaused: boolean = true;
+
 export type PreferenceKey = "heartbeatBias" | "triagePreference" | "reportFrequency" | "replyLength" | "permissionNotes";
 export type PreferenceValue = number | string;
 export type FeedbackSettings = {

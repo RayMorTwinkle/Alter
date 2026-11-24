@@ -186,6 +186,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         const descriptor: ToolAction | undefined = target ? { capability: target.capability, action: "lease", effect: target.effect }
           : control ? { capability: "task", action: call.name, effect: "write" }
           : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write" }
+          : isMain && call.name === "digest_source" ? { capability: "notifications", action: "digest_source", effect: "read" }
           : registry.toolActions.get(call.name);
         const borrowed = call.parent && /^ext:([a-z0-9-]+):([^:]+):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
         const borrower = borrowed?.[1];

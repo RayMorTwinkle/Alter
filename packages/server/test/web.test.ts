@@ -478,7 +478,7 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
   const events = await stream(web.read);
   const view = async () => (await web.read("/api/heartbeat")).json();
   const initial = await view();
-  expect(initial.report).toMatchObject({ intervalDays: 3, time: "21:00", activeDays: 1, paused: false });
+  expect(initial.report).toMatchObject({ intervalDays: 1, time: "21:00", activeDays: 1, paused: false });
   expect(initial).toMatchObject({ enabled: true, intervalMs: 5 * 3_600_000, adoption: 0.5,
     signals: { dueGoals: 0, backlog: 0, userMessages24h: 0 }, runs: [] });
   await web.post("/api/messages", { text: "提醒我留意活动" });
@@ -582,8 +582,15 @@ it("serves feedback history, SSE changes, stats and undo through authenticated r
   expect((await web.read("/api/feedback")).status).toBe(401);
   await web.login();
   const feed = await stream(web.read);
-  const questions = await (await web.post("/api/feedback/more", {})).json() as { id: string; options: string[] }[];
-  const q = questions.find(q => q.options.includes("满意"))!;
+  expect(await (await web.post("/api/feedback/more", {})).json()).toEqual([]);
+  const { Feedback } = await import("../../core/src/feedback.ts");
+  const q = await web.app.main.commit(async tx => {
+    const bank = await tx.doc(Feedback, web.app.main.id);
+    const candidate = bank.candidates["style:satisfaction"]!;
+    const id = "old-pending";
+    bank.issues[id] = { ...candidate, id, candidateId: candidate.id, outlet: "report", batch: "old", askedAt: web.app.now(), status: "pending", changeIds: [] };
+    return { id };
+  }, context);
   await feed.seen(e => e.event === "feedback" && e.data.pending.some(i => i.id === q.id));
   expect((await web.post("/api/feedback/" + q.id + "/answer", { options: ["非法"] })).status).toBe(400);
   expect((await web.post("/api/feedback/" + q.id + "/answer", { options: ["满意"] })).status).toBe(204);
