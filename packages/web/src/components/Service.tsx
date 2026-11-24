@@ -44,6 +44,7 @@ export function Service() {
             <small>{help[flag]}</small>
           </label>
         ))}
+        {state.failedNode && !restarting && <p className="form-error">{t.failed(state.failedNode)}</p>}
         <p className="settings-hint">{restarting ? t.restarting : `${state.managed ? t.managed : t.unmanaged}${t.restartNote}`}</p>
       </>}
       {error && <p className="form-error">{error}</p>}

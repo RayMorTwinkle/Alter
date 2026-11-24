@@ -254,6 +254,7 @@ const hant = {
     restartNote: "切換前兩項時 Alter 會重啟一次，幾秒後需要重新登錄。",
     restarting: "正在重啟，連上後會自動刷新…",
     unsupported: "後台運行目前只支持 macOS。",
+    failed: (node: string) => `上次交給系統運行沒有成功，已退回手動運行。通常是 macOS 不讓後台程序讀「文稿」文件夾：到 系統設置 → 隱私與安全性 → 完全磁盤訪問權限，加入 ${node}，再重新打開開關。`,
   },
   sources: {
     title: "消息來源",
@@ -624,6 +625,7 @@ const hans: Strings = {
     restartNote: "切换前两项时 Alter 会重启一次，几秒后需要重新登录。",
     restarting: "正在重启，连上后会自动刷新…",
     unsupported: "后台运行目前只支持 macOS。",
+    failed: (node: string) => `上次交给系统运行没有成功，已退回手动运行。通常是 macOS 不让后台程序读「文稿」文件夹：到 系统设置 → 隐私与安全性 → 完全磁盘访问权限，加入 ${node}，再重新打开开关。`,
   },
   sources: {
     title: "消息来源",
