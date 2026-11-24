@@ -31,6 +31,7 @@ export function openSecrets(dir: string) {
   if (key.length !== 32) throw new Error("Invalid secret.key");
   chmodSync(keyPath, 0o600);
   return {
+    names(prefix: string) { return Object.keys(entries).filter(key => key.startsWith(prefix)); },
     get(name: string): Value | undefined {
       const entry = entries[name];
       if (!entry) return;

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
 import { clock } from "../format.ts";
+import { Adapters } from "./Adapters.tsx";
 import { ExtPlugins } from "./ExtPlugins.tsx";
 import { Models } from "./Models.tsx";
 import { AlwaysAllowed } from "./AlwaysAllowed.tsx";
@@ -309,6 +310,7 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
     <Sheet title={t.title} onClose={onClose}>
       {error && <p className="form-error">{error}</p>}
 
+      <Adapters />
       <ExtPlugins plugins={extPlugins} />
 
       <section className="settings-block">

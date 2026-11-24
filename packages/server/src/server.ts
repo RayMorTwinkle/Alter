@@ -113,6 +113,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     }
     if (clients.size) broadcast("plugins", plugins.list());
   });
+  const adapters = plugins?.adapters;
   const ext = plugins?.ext;
   const stopExt = ext?.subscribe(() => {
     if (clients.size) { broadcast("ext-plugins", ext.list()); broadcast("plugins", plugins!.list()); }
@@ -334,6 +335,16 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       const id = path.split("/")[3]!;
       if (method === "PATCH") return mutation(200, await sources.patch(id, await body(req)));
       await sources.remove(id);
+    } else if (method === "GET" && path === "/api/adapters") {
+      return json(res, 200, adapters?.list() ?? []);
+    } else if (adapters && method === "POST" && path === "/api/adapters") {
+      return mutation(201, await adapters.create(await body(req)));
+    } else if (adapters && method === "POST" && /^\/api\/adapters\/[^/]+\/refresh$/.test(path)) {
+      return mutation(200, await adapters.refresh(path.split("/")[3]!));
+    } else if (adapters && (method === "PATCH" || method === "DELETE") && /^\/api\/adapters\/[^/]+$/.test(path)) {
+      const id = path.split("/")[3]!;
+      if (method === "PATCH") return mutation(200, await adapters.patch(id, await body(req)));
+      await adapters.remove(id);
     } else if (method === "GET" && path === "/api/ext-plugins") {
       return json(res, 200, ext?.list() ?? []);
     } else if (ext && method === "POST" && path === "/api/ext-plugins/install") {

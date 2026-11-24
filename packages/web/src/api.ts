@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { AdapterCreate, AdapterPatch, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -33,6 +33,11 @@ export const api = {
   cancelWatch: (id: string) => request<void>(`/api/watches/${encodeURIComponent(id)}`, { method: "DELETE" }),
   pauseSchedule: (id: string, paused: boolean) => request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body: { paused } }),
   deleteSchedule: (id: string) => request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  adapters: () => request<AdapterView[]>("/api/adapters"),
+  createAdapter: (input: AdapterCreate) => request<AdapterView>("/api/adapters", { body: input }),
+  updateAdapter: (id: string, patch: AdapterPatch) => request<AdapterView>(`/api/adapters/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
+  refreshAdapter: (id: string) => request<AdapterView>(`/api/adapters/${encodeURIComponent(id)}/refresh`, { body: {} }),
+  deleteAdapter: (id: string) => request<void>(`/api/adapters/${encodeURIComponent(id)}`, { method: "DELETE", body: {} }),
   plugins: () => request<PluginView[]>("/api/plugins"),
   updatePlugin: (id: string, patch: PluginPatch) => request<PluginView>(`/api/plugins/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   checkPlugin: (id: string) => request<PluginView>(`/api/plugins/${encodeURIComponent(id)}/check`, { body: {} }),
