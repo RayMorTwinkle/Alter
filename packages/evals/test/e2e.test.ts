@@ -151,7 +151,7 @@ it("rejects a mail-reply result if a sibling task has a receipt despite a denied
   const worker = fauxProvider({ provider: "worker" });
   const dispatch = (brief: string) => call("dispatch_task", { brief, context: "fresh", permission: "restricted" });
   main.setResponses([dispatch("回复"), say("正在处理"), dispatch("复核"), say("正在复核"), say("已处理")]);
-  worker.setResponses([call("mail_read", { uid: 1 }), call("mail_send", { to: mailConfig.address, subject: "Re: 会议", text: "收到，谢谢" }),
+  worker.setResponses([call("mail_read", { uid: 1 }), call("mail_reply", { uid: 1, text: "收到，谢谢" }),
     call("finish", { summary: "用户拒绝发送", refs: [] }), call("finish", { summary: "已复核", refs: [] })]);
   const mail = task("mail-reply");
   const row = await runTask({ ...mail, async check(c) {
@@ -167,7 +167,7 @@ it("rejects a mail-reply result if a sibling task has a receipt despite a denied
   } }, { ...setup(main, worker), mail: mailConfig });
   expect(smtp).toHaveBeenCalledTimes(1);
   expect(row).toMatchObject({ status: "fail", reason: expect.stringContaining("发送回执"),
-    approvals: [{ audience: "user", tool: "mail_send", decision: "deny" }] });
+    approvals: [{ audience: "user", tool: "mail_reply", decision: "deny" }] });
   // This transport cannot expunge. A possible residual must survive directory cleanup in both reports.
   expect(row.cleanup[0]).toContain("可能残留种子");
   expect(summary([row])).toContain(row.cleanup[0]!);

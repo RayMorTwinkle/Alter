@@ -4,7 +4,7 @@ import { ImapFlow } from "imapflow";
 import { hasCapability } from "imapflow/lib/tools.js";
 import { defaultClients, folderPath, imapConnection, uids, withImap } from "../src/client.ts";
 import type { MailConfig } from "../src/config.ts";
-import { search } from "../src/read.ts";
+import { search } from "../src/search.ts";
 import { send } from "../src/send.ts";
 
 export type SeedBody = string | { html: string };

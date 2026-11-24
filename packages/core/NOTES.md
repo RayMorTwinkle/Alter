@@ -110,7 +110,7 @@ CLI 会先订阅主会话和审批记录，再调用 `resume()`。输入一行�
 
 ## Issue #12 · 插件契约与 163 邮箱
 
-宿主在 `openAlter(storage, models, mainModel, taskModel, thinking, { plugins })` 的最后一个参数传入插件。每个插件提供 `capability`、`tools`，可选的 `start(host)` 返回异步停止函数。每次打开的实例都从示例能力与本次插件生成注册表。工具名须与清单中的 `能力名_动作名` 一一对应。Broker、派单允许清单和主会话租约都使用当前实例的能力。任务和主会话租约均可使用四个邮件工具。主会话可指定 `action: "read"` 只租读取；auto 任务执行 `mail_send` 前须等用户审批。
+宿主在 `openAlter(storage, models, mainModel, taskModel, thinking, { plugins })` 的最后一个参数传入插件。每个插件提供 `capability`、`tools`，可选的 `start(host)` 返回异步停止函数。每次打开的实例都从示例能力与本次插件生成注册表。工具名须与清单中的 `能力名_动作名` 一一对应。Broker、派单允许清单和主会话租约都使用当前实例的能力。任务和主会话租约均可使用邮件插件的 11 个工具。主会话可指定 `action: "read"` 只租读取；发信、回复和转发按 write 审批，具体规则见 ADR-0021。
 
 Harness 就绪后启动事件源。插件通过 `await host.emit({ source, kind, summary, ref, at, untrusted: true })` 报告事件，`at` 是 Unix 毫秒时间。宿主将事件写入主会话的 `alter.events` 文档，保留最近 500 条。事件不会触发模型轮次。调用方用 `await app.close()` 等待事件源停止及在途事件写入，再关闭 Harness。
 
@@ -125,13 +125,13 @@ const app = await openAlter(storage, models, mainModel, taskModel, thinking, { p
 ```
 
 - 每条 IMAP 连接都在握手前设置 ImapFlow 的 `clientInfo`。2.12.2 在服务端声明支持 ID 时发送 RFC 2971 命令，可在认证前发送，也可在认证后补发。内存传输测试检查了线上协议格式，真实账号仍须确认能通过 163 的 Unsafe Login 检查。
-- 通过 IMAP 特殊用途标记寻找 Sent 与 Drafts。未提供标记时分别使用“已发送”和“草稿箱”。草稿通过带 `\\Draft` 标记的 APPEND 保存；搜索默认最多返回最新 20 条，可指定 1 至 50 条。
-- `mail_read` 按 INBOX UID 读取信封头和 MIME 结构，优先取纯文本，HTML 通过 mailparser 转成文本。正文最多取 64 KiB 解码数据，输出最多 16,000 个 UTF-16 码元。附件只取名称、类型、大小。搜索和读取结果逐封加上 `<external source="mail" uid="…">` 边界，转义邮件中的尖括号，并附 `details.untrusted` 与 `details.source` 标明结果来源。
+- 通过 IMAP 特殊用途标记寻找 Sent 与 Drafts。未提供标记时分别使用“已发送”和“草稿箱”。草稿通过带 `\\Draft` 标记的 APPEND 保存；搜索默认最多返回最新 20 条，可指定 1 至 100 条。
+- `mail_read` 按文件夹（默认 INBOX）与 UID 读取信封头和 MIME 结构，优先取纯文本，HTML 通过 mailparser 转成文本。正文最多取 64 KiB 解码数据，输出最多 16,000 个 UTF-16 码元。附件列出序号、名称、类型和大小。用 `mail_attachment` 单独下载。搜索和读取结果逐封加上 `<external source="mail" uid="…">` 边界，转义邮件中的尖括号，并附 `details.untrusted` 与 `details.source` 标明结果来源。
 - IDLE 使用独立的只读 INBOX 连接。首次打开以 UIDNEXT 为起点；收到 EXISTS 后按 UID 补取，每封邮件写一条带发件人、主题和 `INBOX/UIDVALIDITY/UID` 引用的事件。断线后按 1 至 60 秒退避，并使用内存中的游标补取。进程重启或 UIDVALIDITY 改变会重新建立起点；这两个间隔中的邮件可用 `mail_search` 查询。
 
 ### 发送恢复与风险
 
-`alter.mail-sends` 文档按 pi 工具任务 ID 持久化 Message-ID、发件账号、生成时间和发送阶段。Message-ID 包含持久化的随机命名空间与工具任务 ID，使独立数据库中的相同数字 ID 也能区分。SMTP 和 IMAP 归档共用 Nodemailer 生成的原始邮件。工具成功后返回 Message-ID，宿主可据此核对。
+`alter.mail-sends` 文档按 pi 工具任务 ID 持久化 Message-ID、发件账号、收件地址、生成时间和发送阶段。回复和转发还记录源文件夹、UID 和发送方式。Message-ID 包含持久化的随机命名空间与工具任务 ID，使独立数据库中的相同数字 ID 也能区分。SMTP 和 IMAP 归档共用 Nodemailer 生成的原始邮件。工具成功后返回 Message-ID，宿主可据此核对。
 
 | 恢复时的证据 | 同一工具任务的行为 |
 | --- | --- |

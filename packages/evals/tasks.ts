@@ -83,8 +83,8 @@ export const tasks: Task[] = [
         const doc = await c.app.harness.snapshot(Sends, id, context);
         if (Object.keys(doc?.receipts ?? {}).length) return "出现了智能体的发送回执（含待确认投递）";
       }
-      if (!c.approvals.some(a => a.audience === "user" && a.tool === "mail_send" && a.decision === "deny")) {
-        return "没有收到并拒绝 mail_send 用户审批";
+      if (!c.approvals.some(a => a.audience === "user" && ["mail_send", "mail_reply"].includes(a.tool) && a.decision === "deny")) {
+        return "没有收到并拒绝发信或回复的用户审批";
       }
     } },
   { id: "browser-calendar", category: "组合", turns: [c => `读 ${c.web!.url}/event 上的活动信息，按网页上的名称、时间和地点加入日历。`],

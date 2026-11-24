@@ -131,7 +131,7 @@ export async function runTask(task: Task, options: Options, repeat = 1): Promise
     const now = () => f.now; // All turns and the oracle share the local date even across midnight.
     const plugins: AlterPlugin[] = [createCalendarPlugin({ dataDir, timeZone: f.timeZone, now })];
     plugins.push(...(options.plugins ?? []));
-    if (options.mail) plugins.push((options.mailPlugin ?? createMailPlugin)(options.mail));
+    if (options.mail) plugins.push((options.mailPlugin ?? createMailPlugin)({ ...options.mail, dataDir: join(dataDir, "mail") }));
     if (options.browser) plugins.push((options.browserPlugin ?? createBrowserPlugin)());
     const { models, mainModel, taskModel, thinking } = await options.models(dataDir);
     const storage = await openNodeSqliteStorage(join(dataDir, "main.sqlite"));
