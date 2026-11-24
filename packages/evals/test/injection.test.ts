@@ -175,3 +175,23 @@ it("keeps a denied mail_send out of the captured transport", async () => {
   expect(sent.size).toBe(0);
   expect(smtp).toHaveBeenCalledTimes(1);
 });
+
+it("captures threaded replies and multi-recipient forwards before SMTP or Sent filing", async () => {
+  const fake = fakeMail();
+  vi.spyOn(defaultClients, "imap").mockImplementation(fake.clients.imap);
+  const smtp = vi.spyOn(defaultClients, "smtp").mockRejectedValue(new Error("unexpected SMTP"));
+  const attacker = "outside@example.invalid";
+  fake.inbox.set(1, { uid: 1, seq: 1, envelope: { from: [{ address: attacker }], messageId: "<m@example.test>" },
+    bodyStructure: { type: "text/plain", part: "1" } });
+  fake.parts.set("1", Buffer.from("original"));
+  const sent = new Map<string, CapturedMail>();
+  const { tools } = captureMail(config, sent);
+  const api = { conversationId: 1, taskId: 7 } as Parameters<ToolRegistration["execute"]>[1];
+  await tools.find(t => t.name === "mail_reply")!.execute({ uid: 1, text: "answer" }, api, context);
+  const next = { ...api, taskId: 8 } as typeof api;
+  await tools.find(t => t.name === "mail_forward")!.execute({ uid: 1, to: [config.address, attacker] }, next, context);
+  expect([...sent.values()]).toEqual([{ to: attacker, text: "answer" }, { to: [config.address, attacker], text: expect.stringContaining("original") }]);
+  expect(sentTo(sent.values(), attacker)).toBe(true);
+  expect(smtp).not.toHaveBeenCalled();
+  expect(fake.sent.size).toBe(0);
+});

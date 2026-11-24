@@ -1,37 +1,76 @@
-import { defineTool, reply, schema, type AlterPlugin } from "@alter/core";
+import { join } from "node:path";
+import { dataDirectory, defineTool, reply, schema, type AlterPlugin } from "@alter/core";
+import { saveAttachment } from "./attachment.ts";
 import { append, compose, defaultClients, folderPath, withImap, type MailClients } from "./client.ts";
 import { validAddress, type MailConfig } from "./config.ts";
-import { external, ownSent, read, search } from "./read.ts";
+import { contacts, folders, mark, move } from "./mailbox.ts";
+import { external, ownSent, read } from "./read.ts";
+import { search } from "./search.ts";
 import { send, toolAttempt } from "./send.ts";
+import { forwardMessage, replyMessage, replyRecipients } from "./thread.ts";
 import { mailWatchSource, watchInbox } from "./watch.ts";
 
 export { mailConfigFromEnv, type MailConfig } from "./config.ts";
 export type { MailClients, MailConnection } from "./client.ts";
 
-const { bool, int, obj, opt, str } = schema;
+const { arr, bool, int, obj, opt, str } = schema;
 const message = obj({ to: str({ description: "One recipient email address" }), subject: str(), text: str() });
+const folder = opt(str({ minLength: 1, description: "Mailbox path from mail_folders. Defaults to INBOX." }));
+const uid = int({ minimum: 1, maximum: 4294967295 });
+const ids = arr(uid, { minItems: 1, uniqueItems: true });
+const limit = opt(int({ minimum: 1, maximum: 100, description: "Default 20" }));
+const date = opt(str({ description: "YYYY-MM-DD" }));
 export function createMailPlugin(config: MailConfig, clients: MailClients = defaultClients, connection?: (ok: boolean) => void): AlterPlugin {
   return {
     capability: { id: "mail", mainLeasable: true, actions: [
-      { name: "search", effect: "read" }, { name: "read", effect: "read" },
-      { name: "draft", effect: "write" }, { name: "send", effect: "write" },
+      { name: "folders", effect: "read" }, { name: "search", effect: "read" }, { name: "read", effect: "read" },
+      { name: "attachment", effect: "read" }, { name: "contacts", effect: "read" },
+      { name: "draft", effect: "write" }, { name: "send", effect: "write" }, { name: "reply", effect: "write" },
+      { name: "forward", effect: "write" }, { name: "mark", effect: "write" }, { name: "move", effect: "write" },
     ] },
-    describe({ tool, arguments: { to } }) {
+    async describe({ tool, arguments: args }) {
+      const { to } = args;
+      if (tool === "mail_reply" && typeof args.uid === "number") {
+        const uid = args.uid;
+        return withImap(config, clients, async client => {
+          await client.mailboxOpen(typeof args.folder === "string" ? args.folder : "INBOX", { readOnly: true });
+          const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
+          if (!msg || !msg.envelope) return;
+          const targets = replyRecipients(msg.envelope, config.address, args.reply_all === true);
+          return { to: [...targets.to, ...targets.cc].join(", ") };
+        });
+      }
+      if (tool === "mail_forward" && Array.isArray(to) && to.length && to.every(v => typeof v === "string" && validAddress(v))) return { to: to.join(", ") };
       if ((tool !== "mail_send" && tool !== "mail_draft") || typeof to !== "string" || !validAddress(to)) return;
       const at = to.indexOf("@");
       return { to: to.slice(0, at + 1) + to.slice(at + 1).toLowerCase() };
     },
     tools: [
       defineTool({
-        name: "mail_search", description: "Search INBOX, newest first. from and subject are case-insensitive substrings matched within the newest 500 messages that satisfy since and unseen.", replay: "safe",
-        parameters: obj({ from: opt(str()), subject: opt(str()), since: opt(str({ description: "YYYY-MM-DD" })),
-          unseen: opt(bool()), limit: opt(int({ minimum: 1, maximum: 50 })) }),
+        name: "mail_folders", description: "List mailbox paths, special uses, total and unread counts.", replay: "safe", parameters: obj({}),
+        execute: () => withImap(config, clients, async client => external(await folders(client), "No folders")),
+      }),
+      defineTool({
+        name: "mail_search", description: "Find messages in a folder, newest UID first. Combine address, subject, full-text, date, flag and attachment filters. since is inclusive, before exclusive.", replay: "safe",
+        parameters: obj({ folder, from: opt(str()), to: opt(str()), subject: opt(str()), text: opt(str()), since: date, before: date,
+          unseen: opt(bool()), flagged: opt(bool()), has_attachment: opt(bool()), limit }),
         execute: args => withImap(config, clients, async client => external(await search(client, args))),
       }),
       defineTool({
-        name: "mail_read", description: "Read INBOX headers, text and attachment names by UID.", replay: "safe",
-        parameters: obj({ uid: int({ minimum: 1, maximum: 4294967295 }) }),
-        execute: ({ uid }) => withImap(config, clients, async client => external([await read(client, uid)])),
+        name: "mail_read", description: "Read headers, thread IDs, body text and numbered attachments by folder and UID.", replay: "safe",
+        parameters: obj({ folder, uid }),
+        execute: args => withImap(config, clients, async client => external([await read(client, args.uid, args.folder)])),
+      }),
+      defineTool({
+        name: "mail_attachment", description: "Download one attachment by its 1-based index from mail_read. Returns the local path, MIME type and byte size.",
+        parameters: obj({ folder, uid, index: int({ minimum: 1 }) }), replay: "safe",
+        execute: args => withImap(config, clients, async client => external([await saveAttachment(client,
+          config.dataDir ?? join(dataDirectory(), "mail"), config.address, args.folder ?? "INBOX", args.uid, args.index)])),
+      }),
+      defineTool({
+        name: "mail_contacts", description: "Find correspondents by name or address in the latest 1,500 messages per folder in INBOX and Sent, most frequent first.",
+        parameters: obj({ query: opt(str()), limit }), replay: "safe",
+        execute: args => withImap(config, clients, async client => external(await contacts(client, config.address, args.query, args.limit), "No matching contacts")),
       }),
       defineTool({
         name: "mail_draft", description: "Save a plain text draft.", parameters: message,
@@ -46,6 +85,36 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
         parameters: message, replay: "safe",
         execute: (args, api, ctx) => withImap(config, clients, async client =>
           reply(await send(config, clients, client, args, await toolAttempt(config, args.to, api, ctx)))),
+      }),
+      defineTool({
+        name: "mail_reply", description: "Send a threaded reply to Reply-To or the sender. reply_all also includes original To and Cc, excluding yourself. Returns Message-ID.",
+        parameters: obj({ folder, uid, text: str(), reply_all: opt(bool()) }), replay: "safe",
+        execute: (args, api, ctx) => withImap(config, clients, async client => reply(await send(config, clients, client,
+          () => replyMessage(client, config.address, args), await toolAttempt(config, undefined, api, ctx,
+            JSON.stringify(["reply", args.folder ?? "INBOX", args.uid, args.reply_all ?? false]))))),
+      }),
+      defineTool({
+        name: "mail_forward", description: "Forward a message to one or more addresses with an optional introduction. Includes original attachments by default. Returns Message-ID.",
+        parameters: obj({ folder, uid, to: arr(str(), { minItems: 1 }), text: opt(str()), include_attachments: opt(bool()) }), replay: "safe",
+        execute: (args, api, ctx) => withImap(config, clients, async client => reply(await send(config, clients, client,
+          () => forwardMessage(client, args), await toolAttempt(config, args.to.join(","), api, ctx,
+            JSON.stringify(["forward", args.folder ?? "INBOX", args.uid, args.include_attachments ?? true]))))),
+      }),
+      defineTool({
+        name: "mail_mark", description: "Set or clear seen and/or flagged for the specified UIDs. Other flags are preserved.",
+        parameters: obj({ folder, uids: ids, seen: opt(bool()), flagged: opt(bool()) }),
+        execute: args => withImap(config, clients, async client => {
+          await mark(client, args.folder ?? "INBOX", args.uids, args.seen, args.flagged);
+          return reply("Flags updated");
+        }),
+      }),
+      defineTool({
+        name: "mail_move", description: "Move the specified UIDs to an existing destination mailbox. UIDs are local to each folder.",
+        parameters: obj({ folder, uids: ids, destination: str({ minLength: 1 }) }),
+        execute: args => withImap(config, clients, async client => {
+          await move(client, args.folder ?? "INBOX", args.uids, args.destination);
+          return reply("Messages moved");
+        }),
       }),
     ],
     ownMessages: (since, until) => withImap(config, clients, client => ownSent(client, config.address, since, until)),

@@ -3,7 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { loadRepoEnv } from "@alter/core";
 import { append, compose, defaultClients, folderPath, withImap } from "../src/client.ts";
 import { mailConfigFromEnv } from "../src/config.ts";
-import { read, search } from "../src/read.ts";
+import { read } from "../src/read.ts";
+import { search } from "../src/search.ts";
 import { inSent, send, type SendAttempt } from "../src/send.ts";
 import { watchInbox } from "../src/watch.ts";
 

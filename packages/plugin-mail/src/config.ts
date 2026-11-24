@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
 
 type Endpoint = { host: string; port: number };
-export type MailConfig = { address: string; authCode: string; imap: Endpoint; smtp: Endpoint };
+export type MailConfig = { dataDir?: string; address: string; authCode: string; imap: Endpoint; smtp: Endpoint };
 
 function validHostname(host: string) {
   return host.length <= 253 && host.split(".").every(label => /^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i.test(label));
