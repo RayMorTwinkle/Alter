@@ -20,11 +20,16 @@ export async function observeChat(app: AlterApp, print: (text: string) => void) 
     shown = new Set(pending.map(req => req.id));
   }
   function show(item: TimelineItem) {
-    if (item.kind === "assistant") print(`Alter> ${item.text}`);
-    else if (item.kind === "notice" && item.id.endsWith("-error")) print(item.text);
-    else if (item.kind !== "user" && !item.id.startsWith("approval-")) print(`[回投] ${item.text}`);
+    if (item.kind === "notice" && item.id.endsWith("-error")) print(item.text);
+    else if (["report", "permission", "notice"].includes(item.kind) && !item.id.startsWith("approval-")) print(`[回投] ${item.text}`);
   }
+  let seenMessages: Set<string> | undefined;
   const observer = await observeSurface(app, event => {
+    if (event.event === "notifications") {
+      const messages = event.data.filter(n => n.kind === "message" && n.channel !== "web");
+      for (const n of messages.toReversed()) if (seenMessages && !seenMessages.has(n.id)) print(`Alter> ${n.body}`);
+      seenMessages = new Set(messages.map(n => n.id));
+    }
     if (event.event === "timeline") show(event.data);
     if (event.event === "pending") permissions(event.data);
   });

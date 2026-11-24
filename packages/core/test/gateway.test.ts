@@ -146,7 +146,8 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
       return toolCall(res, "outbox_send", { message: "hello" });
     }
     if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send", context: mode, permission: "auto" });
-    say(res, last.role === "tool" ? "已派单" : "收到报告");
+    if (last.content.includes("finished:")) return toolCall(res, "send_message", { text: "收到报告" });
+    say(res, "内部草稿");
   });
   const storage = () => mode === "fresh" ? new MemoryStorage() : openNodeSqliteStorage(join(app.dir, "main.sqlite"));
   const open = async () => {
@@ -186,6 +187,7 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
   const allow = mode === "fresh";
   await chatCommand(runtime, `/${allow ? "approve" : "deny"} ${id} my note`, print);
   await expect.poll(() => lines.includes("Alter> 收到报告")).toBe(true);
+  await runtime.main.waitForIdle(context);
   expect(lines.filter(l => l.startsWith("[回投]"))).toEqual([expect.stringMatching(/finished: 已处理/)]);
   expect(lines.filter(l => l.startsWith("[用户审批]"))).toHaveLength(1);
   expect(runtime.demo.outbox).toEqual(allow ? ["hello"] : []);
@@ -193,21 +195,21 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
   expect(logs.some(line => line.conversation === "judge")).toBe(false);
   for (const conversation of ["main", "task"] as const) {
     const uses = logs.filter(l => l.conversation === conversation);
-    expect(uses.map(l => l.model)).toEqual(Array(conversation === "main" ? 3 : 2).fill([primary, conversation === "main" ? backup : taskBackup]).flat());
+    expect(uses.map(l => l.model)).toEqual(Array(conversation === "main" ? 4 : 2).fill([primary, conversation === "main" ? backup : taskBackup]).flat());
   }
   const mainCalls = logs.filter(l => l.role === "main");
   const taskCalls = logs.filter(l => l.role === "task");
-  expect(mainCalls.map(l => l.wakeSource)).toEqual(["user-cli", "user-cli", "user-cli", "user-cli", "report", "report"]);
+  expect(mainCalls.map(l => l.wakeSource)).toEqual(["user-cli", "user-cli", "user-cli", "user-cli", "report", "report", "report", "report"]);
   expect(new Set(mainCalls.map(l => l.wakeId)).size).toBe(2);
   expect(taskCalls.every(l => l.taskId?.startsWith("task-") && l.wakeId === mainCalls[0]!.wakeId)).toBe(true);
   const entries = await runtime.main.entries({}, 100, undefined, context);
-  expect(entries.items.flatMap(e => e.model ?? []).filter(m => m.role === "assistant").map(m => m.model)).toEqual([backup, backup, backup]);
+  expect(entries.items.flatMap(e => e.model ?? []).filter(m => m.role === "assistant").map(m => m.model)).toEqual([backup, backup, backup, backup]);
   const summary = await usageSummary(app.dir);
   const legacy = await stats("all", runtime.timeZone, { app: runtime, dir: join(app.dir, "no-usage") });
   expect(legacy.tasks.items).toMatchObject([{ usageSource: "transcript", rounds: 2, models: [taskBackup],
     tools: { outbox_send: 1, finish: 1 }, usage: { calls: 2, tokens: 22, costUsd: null } }]);
   expect(legacy.total.calls).toBe(0);
-  expect(summary.find(row => row.model === backup)).toMatchObject({ calls: 3, fallbacks: 3, failureRate: "0.0%", inputTokens: 24, outputTokens: 9 });
+  expect(summary.find(row => row.model === backup)).toMatchObject({ calls: 4, fallbacks: 4, failureRate: "0.0%", inputTokens: 32, outputTokens: 12 });
 });
 
 it.each([false, true])("prints a queued report once when the in-flight answer already relays it=%s", async relayed => {
@@ -221,10 +223,14 @@ it.each([false, true])("prints a queued report once when the in-flight answer al
     if (last.content?.endsWith("\ndelegate")) {
       return toolCall(res, "dispatch_task", { brief: "report", context: "fresh", permission: "restricted" });
     }
-    if (last.role === "tool") { release = res; return; }
+    if (last.role === "tool") {
+      if (last.content.startsWith("message-")) return say(res, "草稿");
+      release = res; return;
+    }
     reportCalls++;
-    const alreadyHandled = last.content.includes("空回复结束") && messages.some(m => m.role === "assistant" && m.content === "ready");
-    say(res, alreadyHandled ? "" : "handled");
+    const alreadyHandled = last.content.includes("空回复结束") && messages.some(m => m.role === "assistant" && JSON.stringify(m).includes("ready"));
+    if (alreadyHandled) return say(res, "");
+    toolCall(res, "send_message", { text: "handled" });
   });
   const runtime = await openAlter(new MemoryStorage(), app.models, app.mainModel, app.taskModel);
   cleanup.push(() => runtime.harness.close(context));
@@ -234,7 +240,7 @@ it.each([false, true])("prints a queued report once when the in-flight answer al
   cleanup.push(async () => detach());
   await chatCommand(runtime, "delegate", print);
   await expect.poll(() => release !== undefined && lines.some(s => s.startsWith("[回投]"))).toBe(true);
-  say(release!, relayed ? "ready" : "dispatched");
+  toolCall(release!, "send_message", { text: relayed ? "ready" : "dispatched" });
   await runtime.main.waitForIdle(context);
   expect(reportCalls).toBe(1);
   expect(lines.filter(s => s.startsWith("Alter>"))).toEqual(relayed ? ["Alter> ready"] : ["Alter> dispatched", "Alter> handled"]);

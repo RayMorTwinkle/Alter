@@ -198,7 +198,7 @@ it("feeds grouped, validated digest lines into the report and looks up their ful
     return say(fauxToolCall("digest_source", { ids: ["mail-123", "n1"] }), { stopReason: "toolUse" });
   }, ({ messages }) => {
     originals = contentText(messages.at(-1)!.content);
-    return say(fauxToolCall("notify", { level: "now", title: "近况", body: "报告正文" }), { stopReason: "toolUse" });
+    return say(fauxToolCall("send_message", { text: "报告正文" }), { stopReason: "toolUse" });
   }, say("已发")]);
   f.clock.now = (await f.app.heartbeat.view()).report.nextAt!;
   f.app.harness.resume();
@@ -219,7 +219,7 @@ it("feeds grouped, validated digest lines into the report and looks up their ful
   expect(f.task.state.callCount).toBe(1);
 });
 
-it("retries an unnotified report with new arrivals and advances its cursor only on notify", async () => {
+it("retries an unnotified report with new arrivals and advances its cursor only on send_message", async () => {
   vi.stubEnv("ALTER_REPORT_TIME", "20:30");
   const f = await setup();
   const view = () => f.app.heartbeat.view();
@@ -256,7 +256,7 @@ it("retries an unnotified report with new arrivals and advances its cursor only 
   let input = "";
   f.main.setResponses([({ messages }) => {
     input = contentText(messages.at(-1)!.content);
-    return say(fauxToolCall("notify", { level: "now", title: "近况", body: "两条消息" }), { stopReason: "toolUse" });
+    return say(fauxToolCall("send_message", { text: "两条消息" }), { stopReason: "toolUse" });
   }, say("已发")]);
   f.clock.now = next;
   g.app.harness.resume();

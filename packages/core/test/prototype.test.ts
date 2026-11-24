@@ -82,7 +82,7 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_read", "memory_search", "memory_write"];
-const controls = ["digest_source", "dispatch_task", "enable_tool", "feedback_answer", ...memoryTools, "notify", "schedule_create", "schedule_list", "schedule_set", "task_message", "task_status", "task_stop", "watch", "watch_cancel", "watch_list"];
+const controls = ["digest_source", "dispatch_task", "enable_tool", "feedback_answer", ...memoryTools, "schedule_create", "schedule_list", "schedule_set", "send_message", "task_message", "task_status", "task_stop", "watch", "watch_cancel", "watch_list"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
@@ -879,7 +879,7 @@ it("stamps each model input at submission or dispatch and preserves the original
   const surface = await observeSurface(app, () => {});
   cleanup.push(async () => surface.detach());
   const id = await submitMessage(app.main, raw);
-  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  await expect.poll(async () => (await ledger(app)).filter(row => row.taskId !== "main").length).toBe(1);
   await app.main.waitForIdle(context);
   await submitMessage(app.main, "下一条");
   await app.main.waitForIdle(context);

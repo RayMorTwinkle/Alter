@@ -45,7 +45,7 @@ it("checks actual calendar state, removes each database, and excludes incorrect 
       main.setResponses([call("enable_tool", { capability: "calendar" }),
         call("calendar_create", { title: "周报会", location: "A 会议室",
           start: new Date(c.day(1, hour)).toISOString(), end: new Date(c.day(1, hour + 1)).toISOString() }),
-        say("已按要求创建。")]);
+        call("send_message", { text: "已按要求创建。" }), say("草稿")]);
       await appendUsage(dataDir, { at: new Date().toISOString(), model: "faux", conversation: "main", attempt: 1,
         outcome: "ok", latencyMs: 4, inputTokens: hour === 15 ? 6 : 1000, outputTokens: 3 });
     } }, setup(main), repeat);
@@ -68,7 +68,7 @@ it.each([false, true])("answers a parked user request once and waits for the chi
   const main = fauxProvider();
   const worker = fauxProvider({ provider: "worker" });
   main.setResponses([call("dispatch_task", { brief: "send", context: "fresh", permission: "restricted" }),
-    say("正在处理"), say("已收到任务报告")]);
+    say("正在处理"), call("send_message", { text: "已收到任务报告" }), say("草稿")]);
   worker.setResponses([call("outbox_send", { message: "测试" }), say('{"inScope":false,"reason":"请确认"}'), call("finish", { summary: "已处理", refs: [] })]);
   const approvalTask: Task = { id: "offline-approval", category: "日历", turns: ["发消息"],
     approvals: allow ? () => true : undefined,

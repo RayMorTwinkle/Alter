@@ -130,7 +130,7 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
   expect(f.gateway.requests.map(r => r.model)).toEqual([...Array(4).fill("offline/task"), "offline/main"]);
   expect(f.transport.react.mock.calls).toEqual([["image", "Get"], ["trusted", "Get"]]);
   expect(f.feed.snapshot().timeline.filter(item => item.kind === "user")).toMatchObject([{ source: "feishu", text: "你好" }]);
-  await expect.poll(() => f.transport.sendText.mock.calls.at(-1)).toEqual(["private", "收到"]);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "目前只支持文字"]);
   await f.close();
   const restarted = await f.reopen();
   expect(restarted.surface.pairing()).toEqual({ paired: true });
@@ -145,7 +145,8 @@ it.each([true, false])("routes completed replies by placed input even with a que
   let release: ServerResponse | undefined;
   const f = await setup(({ messages }, res) => {
     if (messages.at(-1)?.content.endsWith("\nfirst")) { release = res; delta(res, { content: "partial" }); }
-    else say(res, "second answer");
+    else if (messages.at(-1)?.role === "user") toolCall(res, "send_message", { text: "second answer" });
+    else say(res, "internal draft");
   });
   await f.pair();
   const web = (text: string) => submitMessage(f.app.main, text);
@@ -153,11 +154,11 @@ it.each([true, false])("routes completed replies by placed input even with a que
   await expect.poll(() => !!release).toBe(true);
   if (webFirst) await f.send("second", "second"); else await web("second");
   expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"]]);
-  say(release!, " final");
+  toolCall(release!, "send_message", { text: "first answer" });
   await f.app.main.waitForIdle(context);
-  expect(f.feed.snapshot().timeline.filter(i => i.kind === "assistant")).toHaveLength(2);
+  expect(f.feed.snapshot().timeline.filter(i => i.kind === "message")).toHaveLength(2);
   await f.close();
-  expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", webFirst ? "second answer" : "partial final"]]);
+  expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", webFirst ? "second answer" : "first answer"]]);
 });
 
 function setupApproval() {
@@ -201,7 +202,7 @@ it.each(["once", "capability", "always", "deny", "web", "cancel"] as const)("res
   expect(JSON.stringify(contents)).toContain(via === "web" || via === "cancel" ? "已在其他入口处理" : via === "deny" ? "已拒绝" : "已批准");
   expect(JSON.stringify(contents)).not.toContain("button");
   expect((await g.handlers.action({ ...click, openId: "owner" })).toast.type).toBe("info");
-  await expect.poll(() => g.feed.snapshot().ledger.length).toBe(1);
+  await expect.poll(() => g.feed.snapshot().ledger.filter(row => row.taskId !== "main").length).toBe(1);
   expect(g.app.demo.outbox).toHaveLength(via === "deny" || via === "cancel" ? 0 : 1);
   expect(g.transport.sendCard).not.toHaveBeenCalled();
 });
@@ -273,17 +274,17 @@ it("delivers only unread now notifications to the paired owner and remembers IDs
   expect(f.gateway.requests).toHaveLength(0);
 });
 
-it("pushes only the main session's explicit notify for an urgent external event", async () => {
+it("pushes only the main session's explicit send_message for an urgent external event", async () => {
   const f = await setup(({ model, messages }, res) => {
     if (model === "offline/task") return say(res, JSON.stringify({ level: "now", reason: "会议即将开始" }));
-    if (messages.at(-1)?.role === "user") return toolCall(res, "notify", { level: "now", title: "开会", body: "请看日程" });
+    if (messages.at(-1)?.role === "user") return toolCall(res, "send_message", { text: "开会\n请看日程" });
     return say(res, "处理完毕");
   });
   await f.pair();
   await f.send("meeting", "会议改到十点", { chatType: "group" });
   await expect.poll(() => f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "开会\n请看日程"]]);
   await expect.poll(() => f.feed.snapshot().notifications).toMatchObject([
-    { kind: "notify", pushedAt: f.clock.now }, { kind: "event", ref: "meeting", level: "now" },
+    { kind: "message", pushedAt: f.clock.now }, { kind: "event", ref: "meeting", level: "now" },
   ]);
   expect(f.feed.snapshot().notifications[1]?.pushedAt).toBeUndefined();
   await f.close();
@@ -299,7 +300,8 @@ it("sends one Feishu reply when the user's turn incorporates a fast task report"
     if (model === "offline/task") { worker = res; return; }
     if (last.content.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "verify", context: "fresh", permission: "restricted" });
     if (last.role === "tool" && last.content.startsWith("task-")) { status = res; return; }
-    say(res, last.content.includes("verified") ? "已核实" : "缺少报告");
+    if (last.content.includes("verified")) return toolCall(res, "send_message", { text: "已核实" });
+    say(res, "内部记录");
   });
   await f.pair();
   await f.send("work", "delegate");
@@ -308,42 +310,42 @@ it("sends one Feishu reply when the user's turn incorporates a fast task report"
   await expect.poll(() => f.feed.snapshot().ledger.length).toBe(1);
   toolCall(status!, "task_status", {});
   await f.app.main.waitForIdle(context);
-  expect(f.feed.snapshot().timeline.filter(i => i.kind === "assistant").map(i => i.text)).toEqual(["已核实"]);
+  expect(f.feed.snapshot().timeline.filter(i => i.kind === "message").map(i => i.text)).toEqual(["已核实"]);
   expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"], ["private", "已核实"]]);
 });
 
-it("delivers explicit notify but keeps a task report after a Feishu user turn on the timeline", async () => {
+it("delivers a standalone task result and quiet-hour replies, and keeps the initiating web turn local", async () => {
   let worker: ServerResponse | undefined;
   const f = await setup(({ model, messages }, res) => {
     const last = messages.at(-1)!;
     if (model === "offline/task") { worker = res; return; }
     if (last.content.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "audit", context: "fresh", permission: "restricted" });
-    if (last.content.endsWith("\nnotify")) return toolCall(res, "notify", { level: "now", title: "进度", body: "更新" });
-    if (last.content.includes("finished:")) return say(res, "报告已处理");
+    if (last.content.endsWith("\nsend_message")) return toolCall(res, "send_message", { text: "进度\n更新" });
+    if (last.content.includes("finished:")) return toolCall(res, "send_message", { text: "任务查完了" });
     say(res, "收到");
   });
   await f.pair();
-  await f.send("delegate", "delegate");
+  await submitMessage(f.app.main, "delegate");
   await f.app.main.waitForIdle(context);
   await expect.poll(() => !!worker).toBe(true);
-  await submitMessage(f.app.main, "notify");
+  await submitMessage(f.app.main, "send_message");
   await f.app.main.waitForIdle(context);
-  await expect.poll(() => f.feed.snapshot().notifications[0]?.pushedAt).toBe(f.clock.now);
+  expect(f.feed.snapshot().notifications[0]).toMatchObject({ channel: "web", level: "now", body: "进度\n更新" });
   await f.send("latest", "last user is in Feishu");
   await f.app.main.waitForIdle(context);
   await f.app.scheduler.create({ kind: "reminder", text: "回投前提醒", at: new Date(f.clock.now).toISOString() });
   await expect.poll(() => f.feed.snapshot().notifications.find(n => n.body === "回投前提醒")?.pushedAt).toBe(f.clock.now);
   toolCall(worker!, "finish", { summary: "查完", refs: [] });
-  await expect.poll(() => f.feed.snapshot().timeline.some(i => i.text === "报告已处理")).toBe(true);
+  await expect.poll(() => f.transport.sendText.mock.calls.at(-1)).toEqual(["private", "任务查完了"]);
   const reportInput = f.gateway.requests.find(r => r.messages.at(-1)?.content.includes("finished: 查完"))!.messages.at(-1)!.content;
   expect(reportInput).toContain("<untrusted>");
   expect(reportInput).toContain("schedule");
   expect(f.feed.snapshot().timeline.find(item => item.kind === "report")?.text).not.toContain("<untrusted>");
-  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到", "进度\n更新", "收到", "提醒\n回投前提醒"]);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "提醒\n回投前提醒", "任务查完了"]);
   f.clock.now = Date.parse("2026-12-01T15:00Z");
-  await submitMessage(f.app.main, "notify");
+  await f.send("quiet", "send_message");
   await f.app.main.waitForIdle(context);
-  expect(f.feed.snapshot().notifications[0]).toMatchObject({ kind: "notify", source: "alter", level: "digest" });
+  expect(f.feed.snapshot().notifications[0]).toMatchObject({ kind: "message", source: "alter", level: "now", title: "进度", body: "进度\n更新" });
   expect(f.transport.sendText.mock.calls.filter(([, text]) => text === "进度\n更新")).toHaveLength(1);
 });
 
@@ -359,7 +361,7 @@ it("keeps an actionable heartbeat reply local after a Feishu turn and records it
   await expect.poll(async () => (await f.app.heartbeat.view()).runs[0]?.finalReply).toBe("有一场会议需要准备");
   expect(f.feed.snapshot().timeline.some(i => i.text === "有一场会议需要准备")).toBe(false);
   await f.app.main.waitForIdle(context);
-  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到"]);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功"]);
   expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
 });
 

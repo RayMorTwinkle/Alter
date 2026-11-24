@@ -51,7 +51,7 @@ for (const c of cases) {
     let reply = "";
     const surface = await observeSurface(app, event => {
       last = performance.now();
-      if (event.event === "timeline" && event.data.kind === "assistant") reply = event.data.text;
+      if (event.event === "timeline" && event.data.kind === "message") reply = event.data.text;
     });
     const started = performance.now();
     app.harness.resume();

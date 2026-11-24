@@ -97,7 +97,7 @@ it("creates through main, batches for 30s, sleeps, then finishes in the same con
   await f.app.main.waitForIdle(context);
   expect(inputs[1]?.join("\n")).toContain("m1");
   expect(inputs[1]?.at(-1)).toContain("m3");
-  expect((await f.app.harness.snapshot(Ledger, f.app.main.id, context))?.entries).toMatchObject([{ taskId: id, summary: "已交付" }]);
+  expect((await f.app.harness.snapshot(Ledger, f.app.main.id, context))?.entries.filter(row => row.taskId === id)).toMatchObject([{ taskId: id, summary: "已交付" }]);
   expect(await stats("day", "UTC", { app: f.app, dir: f.dir })).toMatchObject({ watchWakeAccuracy: 0.5, wakes: { bySource: { watch: 1 } } });
   expect((await readUsage(f.dir)).filter(l => l.role === "watch")).toMatchObject([{ proactive: true, taskId: id }, { proactive: true, taskId: id }]);
 });

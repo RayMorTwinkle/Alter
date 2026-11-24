@@ -1,13 +1,13 @@
 import { FeedbackOutcomes, interacted, triageScope } from "./feedback-settings.ts";
 import { defineDocFamily } from "@earendil-works/pi-durable";
-import { arr, obj, oneOf, str } from "@earendil-works/pi-schema";
-import type { calendarTime } from "./calendar-time.ts";
+import { arr, obj, str } from "@earendil-works/pi-schema";
+import { activeWake } from "./wake.ts";
 import { acknowledgeReport } from "./report-state.ts";
 import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
 import { context, defineTool, reply, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Tx } from "./runtime.ts";
 
 export type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; category?: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -73,27 +73,26 @@ export async function recordDeliveries(tx: Tx, items: readonly Notification[]) {
   }
 }
 
-export function notifyTool(time: ReturnType<typeof calendarTime>) {
-  return defineTool({ name: "notify", description: "向用户发送立即通知，或记入摘要。安静时段立即通知自动进入摘要。",
-    parameters: obj({ level: oneOf(["now", "digest"]), title: str({ pattern: "\\S", maxLength: 200 }),
-      body: str({ maxLength: 2000 }) }), replay: "safe",
-    execute: ({ level, title, body }, api, ctx) => api.commit(async tx => {
-      const id = `notify-${api.taskId}`;
+export const sendMessageTool = defineTool({
+  name: "send_message", description: "这是主会话对用户说话的唯一方式。回答用户、汇报任务结果、告知值得说的巡检发现时，调用此工具立即发送全文。",
+  parameters: obj({ text: str({ pattern: "\\S", maxLength: 4000 }) }), replay: "safe",
+  execute: ({ text }, api, ctx) => api.commit(async tx => {
+    const id = `message-${api.taskId}`;
+    const receipt = await tx.doc(MessageReceipt, id, null);
+    if (!receipt.sent) {
       const at = api.now();
-      const inspection = await activeHeartbeat(tx);
-      const receipt = await tx.doc(NotifyReceipt, id, null);
-      if (!receipt.sent) {
-        receipt.level = level === "now" && time.quietHours(at) ? "digest" : level;
-        const report = await acknowledgeReport(tx);
-        await addNotification(tx, { id, at, kind: "notify", title, body,
-          source: report ? "report" : "alter", status: "unread",
-          level: receipt.level, ...inspection });
-        receipt.sent = true;
-      }
-      return reply(id);
-    }, ctx) });
-}
-export const NotifyReceipt = defineDocFamily<{ sent: boolean; level?: "now" | "digest" }, null>({ kind: "alter.notify-receipt", version: 1,
+      const wake = await activeWake(tx, api.conversationId, at);
+      const report = await acknowledgeReport(tx);
+      const title = Array.from(text.split(/\r?\n/, 1)[0]!).slice(0, 60).join("");
+      await addNotification(tx, { id, at, kind: "message", level: "now", title, body: text, status: "unread",
+        source: report ? "report" : "alter", ...(wake?.wakeSource === "user-web" && { channel: "web" }),
+        ...await activeHeartbeat(tx) });
+      receipt.sent = true;
+    }
+    return reply(id);
+  }, ctx),
+});
+const MessageReceipt = defineDocFamily<{ sent: boolean }, null>({ kind: "alter.message-receipt", version: 1,
   family: true, scope: "session", initial: () => ({ sent: false }), checkpointWhen: () => false });
 
 const ReportDigests = conversationDoc<{ count: number; initialized?: true }>(

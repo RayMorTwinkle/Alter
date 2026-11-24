@@ -88,12 +88,12 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
       const chatId = store.value.owner?.chatId;
       if (!ready || !chatId) return;
       for (const item of [...notifications].reverse()) {
-        if (item.source === "feedback" || item.kind === "event" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
+        if (item.channel === "web" || item.source === "feedback" || item.kind === "event" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
         queued.add(item.id);
         outbox = outbox.then(async () => {
           // Reserve before sending: a crash after Feishu accepts the message must never replay it.
           if (!store.claimNotification(item.id)) return;
-          await transport.sendText(chatId, [item.title, item.body].filter(Boolean).join("\n"));
+          await transport.sendText(chatId, item.kind === "message" ? item.body ?? item.title : [item.title, item.body].filter(Boolean).join("\n"));
           if (!await updateNotification(app.main, item.id, { pushedAt: now() })) {
             await app.notifications.delivered([item]);
           }
@@ -105,16 +105,10 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
     const actions = new Set<Promise<unknown>>();
     let stopped = false;
     let observation: Awaited<ReturnType<typeof observeSurface>> | undefined;
-    const observe = () => observeSurface(app, (event, source) => {
+    const observe = () => observeSurface(app, event => {
       if (event.event === "notifications") { notifications = event.data; pushNotifications(); }
       if (event.event === "feedback") cards.feedback(event.data);
       if (event.event === "pending") cards.update(event.data);
-      if (event.event !== "timeline" || event.data.kind !== "assistant" || source !== "feishu") return;
-      const chatId = store.value.owner?.chatId;
-      const { text } = event.data;
-      if (chatId && text.trim()) outbox = outbox.then(() => transport.sendText(chatId, text)).catch((error: unknown) => {
-        console.warn("Alter Feishu reply delivery failed:", error instanceof Error ? error.message : "unknown error");
-      });
     });
     async function stop() {
       stopped = true;

@@ -45,7 +45,7 @@ async function play(task: Task, c: TaskContext, result: Result) {
   let modelError: string | undefined;
   const surface = await observeSurface(c.app, event => {
     activity = performance.now();
-    if (event.event === "timeline" && event.data.kind === "assistant") c.reply = event.data.text;
+    if (event.event === "timeline" && event.data.kind === "message") c.reply = [c.reply, event.data.text].filter(Boolean).join("\n");
     if (event.event === "pending") {
       for (const { id, taskId, tool, audience, capability, arguments: args } of event.data) {
         if (seen.has(id)) continue;
