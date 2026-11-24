@@ -576,24 +576,24 @@ it.each(["restricted", "full"] as const)("opens directly and requires approval f
   expect((await ledger(app))[0]?.summary).toBe("browsed");
 });
 
-it.each(["eval", "fetch"] as const)("requires approval before browser_%s executes on a full-permission task", async action => {
+it.each(["evaluate", "fetch"] as const)("requires approval before browser_run can call page.%s on a full-permission task", async action => {
   const ego = fakeEgo();
-  const tool = "browser_" + action;
+  const script = action === "evaluate" ? 'return await page.evaluate("1 + 1");' : 'return await page.fetch("/api");';
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("browse", "full");
     if (text === "browse") return call("browser_snapshot", {});
     if (last.role === "toolResult" && last.toolName === "browser_snapshot") {
-      return action === "eval" ? call(tool, { expression: "1 + 1" }) : call(tool, { url: "/api" });
+      return call("browser_run", { script });
     }
-    if (last.role === "toolResult" && last.toolName === tool) return finish("denied");
+    if (last.role === "toolResult" && last.toolName === "browser_run") return finish("denied");
     return say("OK");
   }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
   await input(app, "delegate");
   const request = await parked(app);
-  expect(request).toMatchObject({ tool, audience: "user" });
+  expect(request).toMatchObject({ tool: "browser_run", audience: "user" });
   await answerUserPermission(app.main, { requestId: request.id, decision: "deny" });
   await expect.poll(() => ego.finish.mock.calls.length).toBe(1);
-  expect(ego.page[action === "eval" ? "evaluate" : "fetch"]).not.toHaveBeenCalled();
+  expect(ego.page[action]).not.toHaveBeenCalled();
 });
 
 it("aborts a parked task even when plugin cleanup fails", async () => {

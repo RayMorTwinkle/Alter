@@ -34,9 +34,7 @@ it("classifies each browser tool and can be leased by main", () => {
     .map(([name, a]) => [name, a.effect]))).toEqual({
     browser_open: "read", browser_snapshot: "read", browser_scroll: "read", browser_click: "write",
     browser_fill: "write", browser_press: "write", browser_close: "read",
-    browser_eval: "write", browser_fetch: "write", browser_screenshot: "read", browser_wait: "read",
-    browser_handoff: "read", browser_select: "write", browser_upload: "write", browser_dialog: "write",
-    browser_tabs: "read", browser_switch: "read", browser_adopt: "read", browser_back: "read", browser_forward: "read",
+    browser_screenshot: "read", browser_handoff: "read", browser_run: "write", browser_guide: "read",
   });
 });
 
@@ -97,11 +95,14 @@ it("restores the selected tab for actions and approval metadata after a restart"
   const url = "https://second.test/";
   app.second.info.mockResolvedValue({ title: "Second", url });
   app.second.url.mockResolvedValue(url);
-  expect(await app.plugin.describe!({ tool: "browser_eval", arguments: { expression: "1" } }, {
+  expect(await app.plugin.describe!({ tool: "browser_run", arguments: { script: "return await page.url();" } }, {
     conversationId: 1 as Parameters<ToolRegistration["execute"]>[1]["conversationId"],
     snapshot: async <T>() => saved as T,
   })).toEqual({ title: "Second", url });
-  expect((await app.call("snapshot")).text).toContain(url);
+  expect(app.second.evaluate).not.toHaveBeenCalled();
+  expect(app.second.snapshot).not.toHaveBeenCalled();
+  expect((await app.call("run", { script: "return [task.spaceId, page.label, await page.url()];" })).text)
+    .toContain(JSON.stringify([42, "p2", url]));
   expect(app.page.snapshot).not.toHaveBeenCalled();
 });
 
@@ -189,20 +190,6 @@ it("describes the referenced or focused control without exposing viewport text o
   expect(app.page.keyboard.press).not.toHaveBeenCalled();
 });
 
-it("returns the page expression value and credentialed fetch response without taking a snapshot", async () => {
-  const app = setup();
-  const expression = '({ text: "</external>", node: typeof process })';
-  expect((await app.call("eval", { expression })).text).toContain('{"text":"&lt;/external&gt;","node":"undefined"}');
-  expect(app.page.evaluate).toHaveBeenCalledWith(expression);
-  const options = { method: "POST", headers: { "x-example": "quoted ' value" }, body: "payload", credentials: "include" };
-  const response = await app.call("fetch", { url: "/api", ...options });
-  expect(response).toMatchObject({ isError: false, details, text: expect.stringContaining('"body":"page response"') });
-  expect(app.page.fetch).toHaveBeenCalledWith("/api", options);
-  expect((await app.call("eval", { expression: "undefined" })).isError).toBe(true);
-  expect((await app.call("eval", { expression: '"x".repeat(12001)' })).isError).toBe(true);
-  expect(app.page.snapshot).not.toHaveBeenCalled();
-});
-
 it("delivers PNG bytes to the model and removes its temporary file, including on failure", async () => {
   const app = setup();
   const result = await app.invoke("screenshot");
@@ -212,20 +199,6 @@ it("delivers PNG bytes to the model and removes its temporary file, including on
   app.page.screenshot.mockRejectedValueOnce(new Error("capture failed"));
   expect(await app.invoke("screenshot")).toMatchObject({ isError: true, details, output: [{ type: "text" }] });
   expect(app.page.snapshot).not.toHaveBeenCalled();
-});
-
-it("waits for the requested condition before reading the viewport", async () => {
-  const app = setup();
-  const timeoutMs = 2048;
-  for (const condition of [{ kind: "selector", selector: "#ready" }, { kind: "function", expression: "window.ready" }, { kind: "networkidle" }]) {
-    expect((await app.call("wait", { condition, timeoutMs })).isError).toBe(false);
-  }
-  expect(app.page.waitForSelector).toHaveBeenCalledWith("#ready", { state: "visible", timeout: timeoutMs });
-  expect(app.page.waitForFunction).toHaveBeenCalledWith("window.ready", undefined, { timeout: timeoutMs });
-  expect(app.page.waitForLoadState).toHaveBeenCalledWith("networkidle", { timeout: timeoutMs });
-  app.page.waitForFunction.mockRejectedValueOnce(new Error("timeout"));
-  expect((await app.call("wait", { condition: { kind: "function", expression: "false" } })).isError).toBe(true);
-  expect(app.page.snapshot).toHaveBeenCalledTimes(3);
 });
 
 it("queues subsequent actions until the user returns control, reporting an expired handoff", async () => {
@@ -268,55 +241,77 @@ it("reclaims the handed-off space even when the CLI exits before it can report",
   expect((await app.call("snapshot")).isError).toBe(false);
 });
 
-it("selects options, attaches files and resolves the reported dialog before reading the page", async () => {
+it("runs async scripts with the current task and page and combines JSON with formatted console output", async () => {
   const app = setup();
-  const options = [{ index: 0 }, { label: "A" }];
-  await app.call("select", { target: "select", options });
-  expect(app.page.selectOption).toHaveBeenCalledWith("select", options);
-  expect((await app.call("upload", { target: "@2", paths: ["relative.txt"] })).isError).toBe(true);
-  app.page.setInputFiles.mockResolvedValueOnce({ dialog: { type: "prompt", message: "Confirm upload?" } });
-  expect((await app.call("upload", { target: "@2", paths: ["/tmp/example.txt"] })).text).toContain("Confirm upload?");
-  expect(app.page.setInputFiles).toHaveBeenCalledExactlyOnceWith("@2", ["/tmp/example.txt"]);
-  expect(app.page.snapshot).toHaveBeenCalledTimes(1);
-  const info = { url: "https://example.test", title: "Example", dialog: { message: "Confirm upload?" } };
-  app.page.info.mockResolvedValueOnce(info);
-  expect((await app.call("dialog", { action: "inspect" })).text).toContain("Confirm upload?");
-  await app.call("dialog", { action: "accept", promptText: "yes" });
-  await app.call("dialog", { action: "dismiss" });
-  expect(app.page.acceptDialog).toHaveBeenCalledWith("yes");
-  expect(app.page.dismissDialog).toHaveBeenCalledOnce();
+  const result = await app.call("run", { script: `
+    console.log("space %d", task.spaceId);
+    console.log({ page: page.label });
+    return (await page.fetch("/items")).body;
+  ` });
+  expect(result).toEqual({ details, isError: false,
+    text: '<external source="browser" url="https://example.test/">"page response"\nspace 1\n{ page: \'p1\' }</external>' });
+  expect(app.page.fetch).toHaveBeenCalledExactlyOnceWith("/items");
+  expect(app.runner.mock.calls.at(-1)?.[1]?.timeoutMs).toBe(120_000);
+  const logOnly = await app.call("run", { script: 'console.log("</external>"); // no return' });
+  expect(logOnly.text).toContain("&lt;/external&gt;</external>");
+  expect(app.page.snapshot).not.toHaveBeenCalled();
 });
 
-it("switches and adopts only listed tabs in the task space, persisting the selected page", async () => {
-  const app = setup();
-  const list = await app.call("tabs");
-  expect(list.text).toContain('"targetId":"target-p3"');
-  expect(list.text).not.toContain('"page":');
-  expect((await app.call("switch", { label: "p3" })).isError).toBe(true);
-  expect((await app.call("switch", { label: "p2" })).isError).toBe(false);
-  expect(app.second.cdp).toHaveBeenCalledWith("Page.bringToFront");
-  await app.call("fill", { target: "@2", text: "second" });
-  expect(app.second.fill).toHaveBeenCalledWith("@2", "second");
-  expect((await app.call("adopt", { targetId: "other" })).isError).toBe(true);
-  expect((await app.call("adopt", { targetId: "target-p3" })).isError).toBe(false);
-  expect(app.docs.get(1)?.selected).toBe("p3");
-  expect((await app.call("adopt", { targetId: "target-p3" })).isError).toBe(true);
-  await app.call("snapshot");
-  expect(app.userTab.snapshot).toHaveBeenCalledTimes(2);
-  await app.call("snapshot", {}, 2);
-  expect(app.page.snapshot).toHaveBeenCalledOnce();
-  app.spaces.delete(1);
-  await app.call("snapshot");
-  expect(app.docs.get(1)?.selected).toBe("p1");
+it("clips script results and logs and reports script and serialization errors", async () => {
+  const app = setup(40);
+  for (const script of ['return "x".repeat(100);', 'console.log("x".repeat(100));']) {
+    expect(await app.call("run", { script })).toMatchObject({ details, isError: false,
+      text: expect.stringMatching(/x{39}… \[truncated\]<\/external>$/) });
+  }
+  for (const [script, message] of [['throw new Error("</external>");', "&lt;/external&gt;"], ["return 1n;", "TypeError"],
+    ["return (;", "SyntaxError"]] as const) {
+    expect(await app.call("run", { script })).toMatchObject({ isError: true, text: expect.stringContaining(message) });
+  }
+  expect(app.spaces.size).toBe(1);
 });
 
-it("navigates existing history entries in both directions and reports the end of history", async () => {
+it("rejects task space management anywhere in the script before accessing ego", async () => {
   const app = setup();
-  expect((await app.call("back")).isError).toBe(false);
-  expect((await app.call("back")).isError).toBe(true);
-  expect((await app.call("forward")).isError).toBe(false);
-  expect((await app.call("forward")).isError).toBe(true);
-  expect(app.page.cdp.mock.calls.filter(([name]) => name === "Page.navigateToHistoryEntry")).toEqual([
-    ["Page.navigateToHistoryEntry", { entryId: 10 }], ["Page.navigateToHistoryEntry", { entryId: 11 }],
-  ]);
+  for (const script of ['taskSpace(1)', '// listTaskSpaces', '"claimTaskSpace"', 'takeOverTaskSpace(2)', 'await task.finish ({});']) {
+    expect(await app.call("run", { script })).toMatchObject({ isError: true, text: expect.stringContaining("任务空间由插件管理") });
+  }
+  expect(app.runner).not.toHaveBeenCalled();
+});
+
+it("propagates the script timeout and can reuse the space after a timeout", async () => {
+  const app = setup();
+  await app.call("snapshot");
+  app.runner.mockRejectedValueOnce(new Error("ego-browser timed out after 1 seconds"));
+  expect(await app.call("run", { script: 'await page.waitForSelector("#ready");', timeoutMs: 1000 }))
+    .toMatchObject({ isError: true, text: expect.stringContaining("timed out") });
+  expect(app.runner.mock.calls.at(-1)?.[1]?.timeoutMs).toBe(1000);
+  expect((await app.call("run", { script: "return task.spaceId;", timeoutMs: 600_000 })).text).toContain(">1</external>");
+  expect(app.runner.mock.calls.at(-1)?.[1]?.timeoutMs).toBe(600_000);
+  expect(app.plugin.tools.find(t => t.name === "browser_run")?.parameters).toMatchObject({
+    properties: { timeoutMs: { type: "integer", minimum: 1, maximum: 600_000 } },
+  });
+});
+
+it("reads the complete installed guide once across conversations without accessing a space", async () => {
+  const app = setup(8);
+  const output = "ego-browser skill\n" + "指南\n".repeat(5000) + "[end of guide]\n";
+  app.skill.mockResolvedValue(output);
+  const [first, second] = await Promise.all([app.call("guide"), app.call("guide", {}, 2)]);
+  expect(first.isError).toBe(false);
+  const [variables, lifecycle, ...guide] = first.text.split("\n");
+  expect(variables).toMatch(/task.*page/);
+  expect(lifecycle).toMatch(/创建.*结束.*finish/);
+  expect(guide.join("\n")).toBe(output);
+  expect(second).toEqual(first);
+  expect(await app.call("guide")).toEqual(first);
+  expect(app.runner.mock.calls).toEqual([["", { command: "skill" }]]);
+  expect(app.taskSpace).not.toHaveBeenCalled();
+});
+
+it("reports guide retrieval errors and retries on the next call", async () => {
+  const app = setup();
+  app.skill.mockRejectedValueOnce(new Error("ego-browser unavailable"));
+  expect(await app.call("guide")).toMatchObject({ isError: true, text: expect.stringContaining("ego-browser unavailable") });
+  expect((await app.call("guide")).isError).toBe(false);
+  expect(app.skill).toHaveBeenCalledTimes(2);
 });

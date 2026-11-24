@@ -29,6 +29,16 @@ it("passes the script only on stdin and collects UTF-8 output from both streams"
   await expect(running).resolves.toBe("示例\nALTER_BROWSER 1\n");
 });
 
+it("requests the guide through the skill subcommand and preserves its output", async () => {
+  const proc = child();
+  const running = runEgo("", { command: "skill" });
+  expect(spawn).toHaveBeenCalledWith("ego-browser", ["skill"], { stdio: "pipe" });
+  expect(proc.stdin.read()).toBeNull();
+  proc.stdout.write("guide\n");
+  proc.emit("close", 0, null);
+  await expect(running).resolves.toBe("guide\n");
+});
+
 it("reports a failing exit with only the last 2048 stderr characters", async () => {
   const proc = child();
   const running = runEgo("example");
@@ -38,13 +48,16 @@ it("reports a failing exit with only the last 2048 stderr characters", async () 
   await expect(running).rejects.toThrow(new Error("ego-browser exited (2): " + "x".repeat(2043) + "error"));
 });
 
-it("kills the child and reports timeout at 90 seconds", async () => {
+it.each([undefined, 1234])("kills the child at the configured timeout (%s)", async timeoutMs => {
   vi.useFakeTimers();
   const proc = child();
-  const running = runEgo("example");
-  vi.advanceTimersByTime(90_000);
+  const running = runEgo("example", { timeoutMs });
+  const deadline = timeoutMs ?? 90_000;
+  vi.advanceTimersByTime(deadline - 1);
+  expect(proc.kill).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
   expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
-  await expect(running).rejects.toThrow("90 seconds");
+  await expect(running).rejects.toThrow(`${deadline / 1000} seconds`);
   proc.emit("close", null, "SIGKILL");
 });
 
