@@ -18,6 +18,7 @@ export type FeishuTransport = {
   sendText(chatId: string, text: string): Promise<void>;
   sendCard(chatId: string, card: object, uuid: string): Promise<string>;
   updateCard(messageId: string, card: object): Promise<void>;
+  react(messageId: string, emoji: string): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -75,6 +76,10 @@ export function sdkTransport(config: FeishuConfig, changed?: () => void): Feishu
     async updateCard(messageId, card) {
       const result = await client.im.message.patch({ path: { message_id: messageId }, data: { content: JSON.stringify(card) } });
       if (result.code) throw new Error(`Feishu message.patch failed (${result.code})`);
+    },
+    async react(messageId, emoji) {
+      const result = await client.im.messageReaction.create({ path: { message_id: messageId }, data: { reaction_type: { emoji_type: emoji } } });
+      if (result.code) throw new Error(`Feishu messageReaction.create failed (${result.code})`);
     },
     async close() { ws.close({ force: true }); },
   };

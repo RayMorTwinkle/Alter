@@ -29,6 +29,7 @@ async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(
       sendText: vi.fn(async (_chatId: string, _text: string) => {}),
       sendCard: vi.fn(async (_chatId: string, _card: object, uuid: string) => "om_" + uuid),
       updateCard: vi.fn(async (_id: string, _card: object) => {}),
+      react: vi.fn(async (_id: string, _emoji: string) => {}),
       close: vi.fn(async () => {}),
     } satisfies FeishuTransport;
     const surface = createFeishuSurface({ dataDir: dir, transport, now: () => clock.now });
@@ -127,6 +128,7 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
   await Promise.all([f.send("trusted", "你好"), f.send("trusted", "你好")]);
   await f.app.main.waitForIdle(context);
   expect(f.gateway.requests.map(r => r.model)).toEqual([...Array(4).fill("offline/task"), "offline/main"]);
+  expect(f.transport.react.mock.calls).toEqual([["image", "Get"], ["trusted", "Get"]]);
   expect(f.feed.snapshot().timeline.filter(item => item.kind === "user")).toMatchObject([{ source: "feishu", text: "你好" }]);
   await expect.poll(() => f.transport.sendText.mock.calls.at(-1)).toEqual(["private", "收到"]);
   await f.close();
@@ -136,6 +138,7 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
   await restarted.send("pair", "旧配对消息");
   expect(f.gateway.requests.map(r => r.model)).toEqual([...Array(4).fill("offline/task"), "offline/main"]);
   expect(restarted.transport.sendText).not.toHaveBeenCalled();
+  expect(restarted.transport.react).not.toHaveBeenCalled();
 });
 
 it.each([true, false])("routes completed replies by placed input even with a queued follow-up (web first=%s)", async webFirst => {
