@@ -47,7 +47,7 @@ it("removes only the lease tool and lease instruction when leasing is disabled",
   expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_set", "notify", "digest_source", "feedback_answer", "watch", "watch_list", "watch_cancel",
     "dispatch_task", "task_status", "task_message", "task_stop",
     "memory_read", "memory_search", "memory_write", "memory_delete"]);
-  expect(dispatch.instructions).toBe(lease.instructions!.replace("一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 写明理由自己租用；可指定 action 单租只读工具。", ""));
+  expect(dispatch.instructions).toBe(lease.instructions!.replace("一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。", ""));
 });
 
 it("leases once and renames the same calendar event across three user turns", async () => {
@@ -56,7 +56,7 @@ it("leases once and renames the same calendar event across three user turns", as
   const faux = fauxProvider();
   let id = "";
   faux.setResponses([
-    call("enable_tool", { capability: "calendar", reason: "建日程" }), call("calendar_create", { title: "站会" }),
+    call("enable_tool", { capability: "calendar" }), call("calendar_create", { title: "站会" }),
     ({ messages }) => { id = contentText(messages.at(-1)!.content); return say("已创建"); },
     () => call("calendar_update", { id, title: "晨会" }), say("已修改"),
     () => call("calendar_update", { id, title: "晨会（10:00）" }), say("已修改"),

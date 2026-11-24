@@ -47,7 +47,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
     finally { if (pending.get(name) === work) pending.delete(name); }
   }
 
-  async function operate(api: Api, ctx: Ctx, build?: () => string, timeoutMs?: number) {
+  async function operate(api: Api, ctx: Ctx, build?: () => string, handoffTimeoutMs?: number) {
     const name = `Alter ${api.conversationId}`;
     const save = (id: number | null, selected = "p1") => api.commit(async tx => {
       Object.assign(await tx.doc(Space, api.conversationId), { id, selected });
@@ -61,7 +61,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
         if (id !== null) {
           opened.set(name, id);
           result = await view(runner, name, id, action ?? "", snapshotLimit, {
-            close: action === undefined, label: selected, timeoutMs, signal: ctx.abortSignal,
+            close: action === undefined, label: selected, handoffTimeoutMs, signal: ctx.abortSignal,
           });
         }
         if (action === undefined) {
@@ -75,7 +75,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
           await save(id);
           stored = id;
           selected = "p1";
-          result = await view(runner, name, id, action, snapshotLimit, { timeoutMs, signal: ctx.abortSignal });
+          result = await view(runner, name, id, action, snapshotLimit, { handoffTimeoutMs, signal: ctx.abortSignal });
           if (!result) throw new Error("New browser space disappeared");
         }
         if (id !== stored || selected !== result.selected) {
@@ -105,14 +105,14 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
 
   return {
     capability: { id: "browser", mainLeasable: true, actions: [
-      { name: "open", effect: "write" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
+      { name: "open", effect: "read" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
       { name: "click", effect: "write" }, { name: "fill", effect: "write" },
       { name: "press", effect: "write" }, { name: "close", effect: "read" },
       { name: "eval", effect: "write" }, { name: "fetch", effect: "write" },
-      { name: "screenshot", effect: "read" }, { name: "wait", effect: "write" }, { name: "handoff", effect: "write" },
+      { name: "screenshot", effect: "read" }, { name: "wait", effect: "read" }, { name: "handoff", effect: "read" },
       { name: "select", effect: "write" }, { name: "upload", effect: "write" }, { name: "dialog", effect: "write" },
-      { name: "tabs", effect: "read" }, { name: "switch", effect: "read" }, { name: "adopt", effect: "write" },
-      { name: "back", effect: "write" }, { name: "forward", effect: "write" },
+      { name: "tabs", effect: "read" }, { name: "switch", effect: "read" }, { name: "adopt", effect: "read" },
+      { name: "back", effect: "read" }, { name: "forward", effect: "read" },
     ] },
     async describe({ tool, arguments: args }, state) {
       const name = `Alter ${state.conversationId}`;
@@ -152,7 +152,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
         execute: ({ condition, timeoutMs = 10000 }, api, ctx) => operate(api, ctx, () => actions.wait(condition, timeoutMs)) }),
       defineTool({ name: "browser_handoff", description: "Give the user browser control for login, CAPTCHA or another manual step. Wait until the user returns control. Default timeout is five minutes.",
         parameters: obj({ timeoutMs: opt(int({ minimum: 1, maximum: 1800000 })) }),
-        execute: ({ timeoutMs = 300000 }, api, ctx) => operate(api, ctx, () => actions.handoff(timeoutMs), timeoutMs + 90000) }),
+        execute: ({ timeoutMs = 300000 }, api, ctx) => operate(api, ctx, () => actions.handoff(timeoutMs), timeoutMs) }),
       defineTool({ name: "browser_select", description: "Choose options in a native select by value, visible label or zero-based index. An array selects multiple options and [] clears the selection.",
         parameters: obj({ target: nonempty, options: union([option, arr(option)]) }),
         execute: ({ target, options }, api, ctx) => operate(api, ctx, () => actions.select(target, options)) }),

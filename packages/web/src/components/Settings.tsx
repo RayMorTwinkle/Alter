@@ -5,6 +5,7 @@ import { useT } from "../i18n.tsx";
 import { clock } from "../format.ts";
 import { ExtPlugins } from "./ExtPlugins.tsx";
 import { Models } from "./Models.tsx";
+import { AlwaysAllowed } from "./AlwaysAllowed.tsx";
 import { Service } from "./Service.tsx";
 import type { ApprovalStats, ExtPluginView, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
@@ -351,6 +352,7 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
         </section>
       </>}
 
+      <AlwaysAllowed />
       <Service />
 
       <section className="settings-block">

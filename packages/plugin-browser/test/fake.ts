@@ -63,13 +63,14 @@ export function fakeEgo(document?: object) {
       return p;
     }, finish: (options: { keep: string[] }) => finish(id, options) };
   });
+  const takeOverTaskSpace = vi.fn(async (id: number) => { userControlled.delete(id); return taskSpace(id); });
   const runner = vi.fn(async (script: string, _options?: Parameters<EgoRunner>[1]) => {
     const lines: string[] = [];
     await runInNewContext(`(async () => {\n${script}\n})()`, {
-      taskSpace, listTaskSpaces: async () => Array.from(spaces, ([id, name]) => ({ id, name, ownership: userControlled.has(id) ? "agentDelegatedToUser" : "agent" })),
+      taskSpace, takeOverTaskSpace, listTaskSpaces: async () => Array.from(spaces, ([id, name]) => ({ id, name, ownership: userControlled.has(id) ? "agentDelegatedToUser" : "agent" })),
       document, NodeFilter: { SHOW_TEXT: 4 }, console: { log: (line: string) => lines.push(line) }, window: { innerHeight: 600, scrollBy },
     });
     return [...lines, "[ego-browser:notice] fixture"].join("\n");
   });
-  return { page, second, userTab, runner, spaces, taskSpace, finish, scrollBy, handOff, waitForControl };
+  return { page, second, userTab, runner, spaces, taskSpace, finish, scrollBy, handOff, waitForControl, takeOverTaskSpace };
 }

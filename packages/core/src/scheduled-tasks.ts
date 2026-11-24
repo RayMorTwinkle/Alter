@@ -232,7 +232,7 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
     return async () => { stop?.(); await pending; };
   }
   const actions: Capability["actions"] = [
-    { name: "create", effect: "write" }, { name: "list", effect: "write" },
+    { name: "create", effect: "write" }, { name: "list", effect: "read" },
     { name: "set", effect: "write" },
   ];
   const tools = [

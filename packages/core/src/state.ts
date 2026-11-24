@@ -34,6 +34,6 @@ export type LedgerEntry = { taskId: string; summary: string; refs: { kind: strin
 export const Ledger = conversationDoc<{ entries: LedgerEntry[] }>("ledger", () => ({ entries: [] }));
 
 export type PermissionItem = { tool: string; target: string; purpose: string };
-type Scope = { items: PermissionItem[]; shown?: number; full?: true;
-  late: { tool: string; argumentsJson: string }[]; declarations: string[] };
-export const ScopeDoc = conversationDoc<Scope>("permission-scope", () => ({ items: [], late: [], declarations: [] }));
+type Scope = { items: PermissionItem[]; shown?: number; capabilities?: string[];
+  late: { tool: string; expiresAt: number }[] };
+export const ScopeDoc = conversationDoc<Scope>("permission-scope", () => ({ items: [], late: [] }));

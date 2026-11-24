@@ -15,7 +15,7 @@ it("serves all installed plugins with partial credentials and changes the live c
   const start = new Date(Date.now() + 3_600_000).toISOString();
   const web = await setup(({ messages, model }, res) => {
     if (model === "offline/task") return say(res, '{"inScope":true,"reason":"符合说明"}');
-    if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar", reason: "book" });
+    if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar" });
     if (messages.at(-1)?.content === "Enabled calendar") return toolCall(res, "calendar_create", { title: "热重载验证", start });
     say(res, "done");
   }, false, undefined, Date.now, (app, dir) =>
@@ -49,7 +49,7 @@ it("serves all installed plugins with partial credentials and changes the live c
   expect(await (await reopened.read("/api/calendar")).json()).toMatchObject({ events: [{ title: "热重载验证" }] });
   const { leases } = await (await reopened.read("/api/stats?range=all")).json();
   expect(leases).toMatchObject({ count: 1, byTool: { calendar_create: 1, calendar_list: 1 },
-    dispatchAfterLeaseRate: 0, items: [{ reason: "book", approved: false, calls: 1, succeeded: 1 }] });
+    dispatchAfterLeaseRate: 0, items: [{ reason: "", approved: false, calls: 1, succeeded: 1 }] });
 });
 
 it("serializes reloads, checks and masks saved and environment credentials on every transport", async () => {

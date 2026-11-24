@@ -151,6 +151,7 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
   const storage = () => mode === "fresh" ? new MemoryStorage() : openNodeSqliteStorage(join(app.dir, "main.sqlite"));
   const open = async () => {
     const runtime = await openAlter(await storage(), app.models, app.mainModel, app.taskModel);
+    runtime.settings.set("off");
     cleanup.push(() => runtime.harness.close(context));
     return runtime;
   };

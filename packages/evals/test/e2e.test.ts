@@ -42,7 +42,7 @@ it("checks actual calendar state, removes each database, and excludes incorrect 
     const main = fauxProvider();
     const row = await runTask({ ...calendar, async setup(c) {
       dataDir = c.dataDir;
-      main.setResponses([call("enable_tool", { capability: "calendar", reason: "记入日历" }),
+      main.setResponses([call("enable_tool", { capability: "calendar" }),
         call("calendar_create", { title: "周报会", location: "A 会议室",
           start: new Date(c.day(1, hour)).toISOString(), end: new Date(c.day(1, hour + 1)).toISOString() }),
         say("已按要求创建。")]);
@@ -55,11 +55,11 @@ it("checks actual calendar state, removes each database, and excludes incorrect 
   const good = await run(15, 1);
   const bad = await run(16, 2);
   expect(good).toMatchObject({ status: "pass", tools: { enable_tool: 1, dispatch_task: 0 }, reply: "已按要求创建。",
-    usage: { main: { tokens: 9, calls: 1 }, task: { tokens: 0 }, total: { calls: 3 } } });
+    usage: { main: { tokens: 9, calls: 1 }, task: { tokens: 0 }, total: { calls: 2 } } });
   expect(bad).toMatchObject({ status: "fail", reason: expect.stringContaining("周报会"), usage: { main: { tokens: 1003 } } });
   const md = summary([good, bad]);
   expect(md.indexOf(bad.reason!)).toBeLessThan(md.indexOf("## 完成率"));
-  expect(md).toContain("| 总计 | 1 / 2 | 50.0% | 0 | 0 | 9 / 0 | 3 |");
+  expect(md).toContain("| 总计 | 1 / 2 | 50.0% | 0 | 0 | 9 / 0 | 2 |");
   expect(md).toContain("| 日历 | 1 / 2 | 50.0%");
   expect(md).toContain("| calendar-relative | 2 | fail");
 });
@@ -69,7 +69,7 @@ it.each([false, true])("answers a parked user request once and waits for the chi
   const worker = fauxProvider({ provider: "worker" });
   main.setResponses([call("dispatch_task", { brief: "send", context: "fresh", permission: "restricted" }),
     say("正在处理"), say("已收到任务报告")]);
-  worker.setResponses([call("outbox_send", { message: "测试" }), call("finish", { summary: "已处理", refs: [] })]);
+  worker.setResponses([call("outbox_send", { message: "测试" }), say('{"inScope":false,"reason":"请确认"}'), call("finish", { summary: "已处理", refs: [] })]);
   const approvalTask: Task = { id: "offline-approval", category: "日历", turns: ["发消息"],
     approvals: allow ? () => true : undefined,
     check: c => c.app.demo.outbox.length === Number(allow) ? undefined : "发送次数不符" };
@@ -131,7 +131,7 @@ it("requires a soft-deleted original and an intact sibling for the deletion orac
   const row = await runTask({ ...deletion, async setup(c: TaskContext) {
     await deletion.setup!(c);
     observed = await deletion.check(c);
-    main.setResponses([call("enable_tool", { capability: "calendar", reason: "取消日程" }),
+    main.setResponses([call("enable_tool", { capability: "calendar" }),
       call("calendar_delete", { id: "weekly" }), say("已取消周报会。")]);
   } }, setup(main));
   expect(observed).toBeTruthy();
@@ -177,7 +177,7 @@ it("cannot pass a reschedule by creating the final event only on the second turn
   const reschedule = task("calendar-reschedule");
   const main = fauxProvider();
   const row = await runTask({ ...reschedule, setup(c) {
-    main.setResponses([say("已经记好了。"), call("enable_tool", { capability: "calendar", reason: "修改" }),
+    main.setResponses([say("已经记好了。"), call("enable_tool", { capability: "calendar" }),
       call("calendar_create", { title: "导师会", start: new Date(c.day(1, 14)).toISOString(), end: new Date(c.day(1, 14, 30)).toISOString() }),
       say("改好了。")]);
   } }, setup(main));

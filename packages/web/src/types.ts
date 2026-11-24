@@ -10,7 +10,8 @@ export type TimelineItem = {
   source?: string;
 };
 
-export type ApprovalDecision = "once" | "task-full" | "deny";
+export type AlwaysAllowedCapabilities = { capabilities: string[] };
+export type ApprovalDecision = "once" | "capability" | "always" | "deny";
 export type HeartbeatSettings = { enabled: boolean; start: string; end: string };
 export type ModelOverrides = {
   contextWindow?: number; maxTokens?: number; input?: ("text" | "image")[]; reasoning?: boolean;

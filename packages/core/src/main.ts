@@ -5,7 +5,7 @@ import { Preferences } from "./feedback-settings.ts";
 import { borrowForSource, SourceBorrow } from "./source-borrow.ts";
 import { arr, obj, opt, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
-import { approvalClocks, createBroker, migrateRequests, Reviews } from "./broker.ts";
+import { approvalClocks, createBroker, migrateRequests } from "./broker.ts";
 import { activeLease, LeaseHistory, Leases, leaseTarget, leaseWindow } from "./leases.ts";
 import { judge } from "./approval-model.ts";
 import { compactionSettings, mainCompaction } from "./compaction.ts";
@@ -74,7 +74,7 @@ export async function openAlter(
     return capability.id === "memory" ? label : label + " [" + capability.actions.map(a => a.name).join(", ") + "]";
   })];
   const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
-    (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 写明理由自己租用；可指定 action 单租只读工具。" : ""));
+    (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : ""));
   const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。" +
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
@@ -179,23 +179,21 @@ export async function openAlter(
   ];
   if (leasing) controls.push(
     defineTool({
-      name: "enable_tool", description: "Lease an enabled capability or a single action for 30 idle turns. Give the reason.",
-      parameters: obj({ capability: str(), action: opt(str()), reason: str({ minLength: 1 }) }), replay: "safe",
-      async execute({ capability, action, reason }, api, ctx) {
+      name: "enable_tool", description: "Lease an enabled capability or a single action for 30 idle turns.",
+      parameters: obj({ capability: str(), action: opt(str()) }), replay: "safe",
+      async execute({ capability, action }, api, ctx) {
         if (capability === "schedule") return reply("Schedule is always available");
         if (capability === "memory") return reply("Memory is always available");
-        if (!reason.trim()) return reply("A lease requires a reason", true);
         return api.commit(async tx => {
           const target = leaseTarget(capabilities, capability, action);
           if (!target) return reply("Capability is not leasable", true);
           const history = await tx.doc(LeaseHistory, api.conversationId);
           const id = String(api.taskId);
           if (!history.byId[id]) {
-            const approved = (await tx.doc(Reviews, api.conversationId)).byId["permission-" + id]?.user === "once";
             const at = api.now();
             const wake = await activeWake(tx, api.conversationId, at);
-            history.byId[id] = { capability, tools: target.tools, reason: reason.trim(), at, ...(wake && { wakeId: wake.wakeId }),
-              approved, useWakeIds: [], calls: 0, succeeded: 0, failed: 0, dispatched: false };
+            history.byId[id] = { capability, tools: target.tools, reason: "", at, ...(wake && { wakeId: wake.wakeId }),
+              approved: false, useWakeIds: [], calls: 0, succeeded: 0, failed: 0, dispatched: false };
             const leases = await tx.doc(Leases, api.conversationId);
             leases.records ??= {};
             leases.records[target.key] = id;

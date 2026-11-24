@@ -88,6 +88,7 @@ it.each([
     if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send greeting", context: "fresh", permission });
     say(res, "ack");
   });
+  web.app.settings.set("off");
   await web.login();
   const feed = await stream(web.read);
   expect((await web.post("/api/messages", { text: "delegate" })).status).toBe(202);
@@ -99,7 +100,9 @@ it.each([
     context: "fresh", brief: "send greeting", permission, thinking: "high", status: "running", allow: [], pending: [request] });
   expect(task.createdAt).toBeGreaterThan(0);
   expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience,
-    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason, statement: [], defaultAt: expect.any(Number), expiresAt: expect.any(Number) });
+    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason,
+    statement: [{ tool: "", target: "", purpose: "delegate", isNew: false }, { tool: "", target: "任务 brief", purpose: "send greeting", isNew: false }],
+    defaultAt: expect.any(Number), expiresAt: expect.any(Number) });
   expect(request.expiresAt).toBeGreaterThan(task.createdAt);
   expect(feed.events).toContainEqual({ event: "tasks", data: [task] });
   const decide = () => web.post("/api/permissions/" + request.id, { decision: "once", note: "OK" });
@@ -224,7 +227,7 @@ it("serves the calendar agenda and pushes it when a leased calendar call changes
   const web = await setup(({ messages, model }, res) => {
     if (model === "offline/task") return say(res, '{"inScope":true,"reason":"符合说明"}');
     const tools = messages.filter(m => m.role === "tool").length;
-    if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar", reason: "book" });
+    if (messages.at(-1)?.content?.endsWith("\nbook")) return toolCall(res, "enable_tool", { capability: "calendar" });
     if (tools === 1) return toolCall(res, "calendar_create", { title: "周会", start, location: "A" });
     say(res, "booked");
   }, true);
@@ -618,4 +621,47 @@ it("authenticates model reads and replacements, validates overrides and clears t
   }
   expect(await (await put("offline/main", { input: ["text"] })).json()).toMatchObject({ input: ["text"], sources: { input: "manual" } });
   expect(await (await put("offline/main", {})).json()).toMatchObject({ input: ["text", "image"], sources: { input: "default" } });
+});
+
+it("shares an always grant across models and restarts, then asks again after API revocation", async () => {
+  const web = await setup(({ model, messages }, res) => {
+    const last = messages.at(-1)!;
+    if (model === "offline/task") {
+      if (last.role === "tool") return toolCall(res, "finish", { summary: "done", refs: [] });
+      return toolCall(res, "outbox_send", { message: "task" });
+    }
+    if (last.content?.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "send", context: "fresh", permission: "restricted" });
+    if (last.content?.endsWith("\nrent")) return toolCall(res, "enable_tool", { capability: "outbox" });
+    if (last.content?.endsWith("\nsend")) return toolCall(res, "outbox_send", { message: "main" });
+    say(res, "ack");
+  });
+  const path = "/api/settings/always-allowed";
+  expect((await web.read(path)).status).toBe(401);
+  await web.login();
+  web.app.settings.set("off");
+  await web.post("/api/messages", { text: "delegate" });
+  const pending = async (host: typeof web) => (await host.state()).pending[0];
+  await expect.poll(() => pending(web)).toMatchObject({ tool: "outbox_send" });
+  const request = (await pending(web))!;
+  expect((await web.post("/api/permissions/" + request.id, { decision: "always" })).status).toBe(204);
+  await expect.poll(async () => (await web.state()).tasks[0]?.status).toBe("completed");
+  await web.app.main.waitForIdle(context);
+  await web.close();
+
+  const g = await web.reopen();
+  await g.login();
+  expect(await (await g.read(path)).json()).toEqual({ capabilities: ["outbox"] });
+  for (const text of ["rent", "send"]) {
+    await g.post("/api/messages", { text });
+    await g.app.main.waitForIdle(context);
+  }
+  expect(g.app.demo.outbox).toEqual(["main"]);
+  expect((await fetch(g.base + path + "/outbox", { method: "DELETE",
+    headers: { cookie: g.sessionCookie(), "Content-Type": "application/json" } })).status).toBe(200);
+  expect(await (await g.read(path)).json()).toEqual({ capabilities: [] });
+  await g.post("/api/messages", { text: "send" });
+  const held = async () => (await g.state()).pending[0];
+  await expect.poll(held).toMatchObject({ taskId: "main", tool: "outbox_send" });
+  expect((await g.post("/api/permissions/" + (await held())!.id, { decision: "deny" })).status).toBe(204);
+  expect(g.app.demo.outbox).toEqual(["main"]);
 });

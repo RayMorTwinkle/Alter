@@ -84,7 +84,7 @@ async function* recordedResponses(app: AlterApp, taskId: string, task: TaskRecor
 
 function reviewStats(reviews: Record<string, Review>, askedUser: number, start: number, end: number) {
   const within = (at?: number) => at === undefined ? start === -Infinity : at >= start && at <= end;
-  const userDecisions = { once: 0, "task-full": 0, deny: 0 };
+  const userDecisions = { once: 0, capability: 0, always: 0, deny: 0 };
   const judgments = { inScope: 0, outOfScope: 0 };
   const counts = { user: 0, judge: 0, timeout: 0 };
   let expired = 0;

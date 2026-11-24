@@ -119,11 +119,11 @@ it("dates user and judge events independently and includes undated v1.10 reviews
   await app.main.commit(async tx => {
     const { byId } = await tx.doc(Reviews, app.main.id);
     byId.old = { user: "deny", judgment };
-    byId.split = { user: "task-full", userAt: yesterday, judgment, judgedAt: today };
+    byId.split = { user: "capability", userAt: yesterday, judgment, judgedAt: today };
     byId.late = { timeoutAt: yesterday, user: "once", userAt: today };
   }, context);
   const { approvals } = await query("day");
-  expect(approvals).toMatchObject({ userDecisions: { once: 1, "task-full": 0, deny: 0 }, judgments: { inScope: 1 }, timeouts: 0,
+  expect(approvals).toMatchObject({ userDecisions: { once: 1, capability: 0, always: 0, deny: 0 }, judgments: { inScope: 1 }, timeouts: 0,
     userApproved: 1, userDenied: 0 });
   const all = (await query("all")).approvals;
   expect(all).toMatchObject(await approvalStats(app.main));

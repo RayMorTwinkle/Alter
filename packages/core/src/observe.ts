@@ -14,7 +14,7 @@ import { assistantId, isInlineTaskReport, queuedItem, timelineEntries, type Time
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
-export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "checking"> & { arguments: unknown };
+export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "leaseId" | "checking"> & { arguments: unknown };
 type Task = Omit<TaskRecord, "watch" | "conversationId" | "worker" | "lastEntry" | "messages" | "wakeId" | "endedAt" | "status"> & {
   status: Exclude<TaskRecord["status"], "cancelled">;
   taskId: string; conversationId: string; allow: string[]; pending: PermissionRequest[];
@@ -136,7 +136,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     });
     seeding = false;
     await watch(Requests, value => {
-      state.pending = Object.values(value.pending).filter(req => !req.checking && req.audience === "user").map(({ toolTask, wakeKey, checking, argumentsJson, ...req }) => ({
+      state.pending = Object.values(value.pending).filter(req => !req.checking && req.audience === "user").map(({ toolTask, wakeKey, checking, leaseId, argumentsJson, ...req }) => ({
         ...req, arguments: JSON.parse(argumentsJson),
       }));
       emit({ event: "pending", data: state.pending });

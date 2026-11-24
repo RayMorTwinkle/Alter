@@ -71,8 +71,9 @@ function entryData(entry?: InputEntry) {
   return data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
 }
 
-export async function recentUserText(tx: Tx, conversationId: ConversationId) {
+export async function recentUserText(tx: Tx, conversationId: ConversationId, now: number) {
   const messages: string[] = [];
+  let length = 0;
   let cursor: Cursor | undefined;
   do {
     const page = await tx.scanEntries({ conversationId, order: "descending" }, 64, cursor);
@@ -80,10 +81,14 @@ export async function recentUserText(tx: Tx, conversationId: ConversationId) {
       if (entry.kind !== inputKind) continue;
       const data = entryData(entry);
       if (!userSources.has(String(data?.source)) || typeof data?.text !== "string" || !data.text.trim()) continue;
+      if (typeof data.at !== "number" || data.at > now) continue;
+      if (data.at < now - 2 * 60 * 60_000) return messages.reverse();
       // A truncated instruction could omit a restriction. Ask the user if it cannot fit.
-      if (data.text.length > 1000) return [];
+      if (data.text.length > 1000) return;
+      length += data.text.length;
+      if (length > 4000) return messages.reverse();
       messages.push(data.text);
-      if (messages.length === 3) return messages.reverse();
+      if (messages.length === 10) return messages.reverse();
     }
     cursor = page.next;
   } while (cursor);

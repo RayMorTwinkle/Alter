@@ -24,7 +24,7 @@ await app.main.waitForIdle(context);
 for (;;) {
   const state = await app.harness.snapshot(Requests, app.main.id, context);
   const pending = Object.values(state?.pending ?? {})[0];
-  if (pending && (await app.harness.getTask(pending.toolTask, context))?.state.status === "sleeping") {
+  if (pending && !pending.checking && (await app.harness.getTask(pending.toolTask, context))?.state.status === "sleeping") {
     process.channel!.ref();
     process.send!(pending.id);
     break;

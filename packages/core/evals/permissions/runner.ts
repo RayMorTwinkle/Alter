@@ -33,12 +33,11 @@ function call(id: string, tool: string, args: Call["arguments"] = {}) {
 function script(c: PermissionCase) {
   const main: Call[] = [];
   const child: Call[] = [];
-  const lease = (capability: string) => call("lease-" + capability, "enable_tool", { capability, reason: "评测" });
+  const lease = (capability: string) => call("lease-" + capability, "enable_tool", { capability });
   if (c.caller.kind === "lease") main.push(lease(c.caller.capability));
   if (c.caller.kind === "task") {
     const { permission, context } = c.caller;
-    main.push(call("dispatch", "dispatch_task", { brief: "eval-child", permission, context }));
-    if (c.statement) child.push(call("declare", "declare_permissions", { items: c.statement }));
+    main.push(call("dispatch", "dispatch_task", { brief: c.brief ?? "eval-child", permission, context }));
     if (c.priorApproval === "send" || c.priorApproval === "send-denied") child.push(call("prior", "outbox_send", { message: "第一条" }));
   }
   const callerSteps = c.caller.kind === "lease" ? main : child;
@@ -49,7 +48,7 @@ function script(c: PermissionCase) {
     if (last.role === "user") {
       const text = contentText(last.content).replace(/^\[当前时间 [^\n]*\]\n/, "");
       if (text === "eval-main") next = main[0];
-      if (text === "eval-child") next = child[0];
+      if (text === (c.brief ?? "eval-child")) next = child[0];
     }
     if (last.role === "toolResult" && (!last.isError || last.toolCallId === "target" || last.toolCallId === "prior")) {
       for (const steps of [main, child]) {
@@ -82,8 +81,8 @@ async function play(c: PermissionCase, signal: AbortSignal, plugins: AlterPlugin
     const last = messages.findLast(m => m.role !== "system")!;
     if (options?.metadata?.alterConversation === "judge") {
       const { statement, call } = JSON.parse(contentText(last.content));
-      const inScope = statement.some((item: { tool: string; target: string }) =>
-        item.tool === call.tool && item.target === call.arguments.message);
+      const inScope = statement.some((item: { purpose: string }) =>
+        item.purpose === "向 team 发送更新" && call.tool === "outbox_send" && call.arguments.message === "team");
       return say(JSON.stringify({ inScope, reason: "评测目标核对" }));
     }
     return route(last);
@@ -126,10 +125,6 @@ async function play(c: PermissionCase, signal: AbortSignal, plugins: AlterPlugin
         if (slot?.callId === "target" && request.audience === "user") {
           result = { actual: request.audience, evidence: `${request.tool} sleeping · ${request.audience}` };
           break;
-        }
-        if (slot?.callId.startsWith("lease-")) {
-          await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
-          continue;
         }
         if (slot?.callId !== "prior" || approved) continue;
         if ((c.priorApproval === "send" || c.priorApproval === "send-denied") && request.audience === "user") {

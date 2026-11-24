@@ -26,7 +26,7 @@ const hant = {
   emptyApprovals: "沒有待審批的請求",
   emptyLedger: "完成的任務會記在這裡",
   approve: "批准",
-  decisions: { once: "允許這一次", full: "本任務全權限", deny: "拒絕" },
+  decisions: { once: "允許這一次", capability: (cap: string) => `本次允許 ${cap} 全部功能`, always: (cap: string) => `始終允許 ${cap} 全部功能`, deny: "拒絕" },
   statement: "權限說明",
   statementNew: "新增",
   deferred: "任務已先去做別的，仍可在此批准",
@@ -241,6 +241,12 @@ const hant = {
     heartbeatHint: "只在這個時段內開始巡檢。間隔會按你的採納情況在 2–48 小時之間自動調整。",
     language: "語言",
   },
+  alwaysAllowed: {
+    title: "始終允許的能力",
+    hint: "在審批卡片上選過「始終允許」的能力，所有模型調用時都不再詢問。撤銷後恢復正常審批。",
+    empty: "目前沒有。",
+    revoke: "撤銷",
+  },
   service: {
     title: "後台運行",
     autostart: "開機自動啟動",
@@ -403,7 +409,7 @@ const hans: Strings = {
   emptyApprovals: "没有待审批的请求",
   emptyLedger: "完成的任务会记在这里",
   deny: "拒绝",
-  decisions: { once: "允许这一次", full: "本任务全权限", deny: "拒绝" },
+  decisions: { once: "允许这一次", capability: (cap: string) => `本次允许 ${cap} 全部功能`, always: (cap: string) => `始终允许 ${cap} 全部功能`, deny: "拒绝" },
   statement: "权限说明",
   statementNew: "新增",
   deferred: "任务已先去做别的，仍可在此批准",
@@ -611,6 +617,12 @@ const hans: Strings = {
     to: "到",
     heartbeatHint: "只在这个时段内开始巡检。间隔会按你的采纳情况在 2–48 小时之间自动调整。",
     language: "语言",
+  },
+  alwaysAllowed: {
+    title: "始终允许的能力",
+    hint: "在审批卡片上选过「始终允许」的能力，所有模型调用时都不再询问。撤销后恢复正常审批。",
+    empty: "目前没有。",
+    revoke: "撤销",
   },
   service: {
     title: "后台运行",

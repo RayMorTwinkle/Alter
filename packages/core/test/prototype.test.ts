@@ -46,7 +46,8 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
   clock: { timeZone?: string; now?: () => number } = {}, demos?: boolean, judgeReply?: (text: string) => AssistantMessage) {
   const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }] });
   faux.setResponses(Array.from({ length: 160 }, () => ({ messages }, options) => {
-    if (options?.metadata?.alterConversation === "judge") return judgeReply?.(contentText(messages.at(-1)!.content)) ?? say('{"inScope":true,"reason":"符合用户要求"}');
+    if (options?.metadata?.alterConversation === "judge") return judgeReply?.(contentText(messages.at(-1)!.content)) ?? say(JSON.stringify({
+      inScope: JSON.parse(contentText(messages.at(-1)!.content)).statement.some((item: { target: string }) => !item.target), reason: "核对用户要求" }));
     const tools = new Set<string>();
     for (const msg of messages) {
       if (msg.role !== "system") continue;
@@ -82,7 +83,7 @@ async function incoming(app: Alter) {
 
 const memoryTools = ["memory_delete", "memory_read", "memory_search", "memory_write"];
 const controls = ["digest_source", "dispatch_task", "enable_tool", "feedback_answer", ...memoryTools, "notify", "schedule_create", "schedule_list", "schedule_set", "task_message", "task_status", "task_stop", "watch", "watch_cancel", "watch_list"];
-const taskTools = ["calendar_create", "calendar_list", "calendar_update", "declare_permissions", "finish", ...memoryTools, "notes_read", "outbox_send"];
+const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
   const dir = await mkdtemp(join(tmpdir(), "alter-no-demos-"));
@@ -102,7 +103,7 @@ it("offers only real plugins when demos are off, so no simulated send exists", a
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   expect(system).toContain("calendar（日历");
   expect(system).not.toMatch(/outbox|notes|示例/);
-  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "declare_permissions", "finish", ...memoryTools]);
+  expect(taskSeen).toEqual(["calendar_create", "calendar_delete", "calendar_list", "calendar_restore", "calendar_update", "finish", ...memoryTools]);
 });
 
 it("dispatches a fresh notes task and delivers its ledger summary to the main model", async () => {
@@ -235,7 +236,7 @@ it("never asks the user twice in one task after a denial, while a new task asks 
   expect(second).toMatchObject({ audience: "user", tool: "outbox_send" });
 });
 
-it("keeps asking for each send after an approval", async () => {
+it("allows the same task to send rewritten arguments after once", async () => {
   let sends = 0;
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("send twice", "restricted");
@@ -248,9 +249,8 @@ it("keeps asking for each send after an approval", async () => {
   await input(app, "delegate");
   const first = await parked(app);
   await answerUserPermission(app.main, { requestId: first.id, decision: "once" });
-  await expect.poll(async () => Object.values((await app.harness.snapshot(Requests, app.main.id, context))?.pending ?? {})
-    .filter(r => r.audience === "user" && r.id !== first.id).length).toBe(1);
-  expect(app.demo.outbox).toEqual(["one"]);
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
+  expect(app.demo.outbox).toEqual(["one", "two"]);
 });
 
 it.each([true, false])("routes a restricted send to the user, allow=%s", async allow => {
@@ -279,7 +279,7 @@ it.each([true, false])("routes a restricted send to the user, allow=%s", async a
 async function parked(app: Alter) {
   const find = async () => {
     const requests = await app.harness.snapshot(Requests, app.main.id, context);
-    const request = Object.values(requests?.pending ?? {})[0];
+    const request = Object.values(requests?.pending ?? {}).find(req => !req.checking);
     if (!request) return;
     const task = (await app.harness.snapshot(Tasks, app.main.id, context))?.byId[request.taskId];
     const conversation = request.taskId === "main" ? app.main.id : task?.conversationId;
@@ -388,10 +388,10 @@ it("renews the calendar lease on use and expires it at thirty idle turns", async
   const offers = new Map<string, string[]>();
   const app = await open((text, last, _, offered) => {
     if (last.role === "user") offers.set(text, offered);
-    if (text === "calendar please") return call("enable_tool", { capability: "calendar", reason: "manage schedule" });
+    if (text === "calendar please") return call("enable_tool", { capability: "calendar" });
     if (text === "create") return call("calendar_create", { title: "meeting" });
     if (text === "update") return call("calendar_update", { id: eventId, title: "review" });
-    if (text === "outbox please") return call("enable_tool", { capability: "outbox", reason: "send" });
+    if (text === "outbox please") return call("enable_tool", { capability: "outbox" });
     if (last.role === "toolResult" && last.toolName === "calendar_create") eventId = text;
     return say("OK");
   });
@@ -521,7 +521,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
   const plugin = createMailPlugin(mailConfig, mail.clients);
   let leaseResult = "";
   const app = await open((text, last, _, offered) => {
-    if (text === "try lease") return call("enable_tool", { capability: "mail", action: "read", reason: "read inbox" });
+    if (text === "try lease") return call("enable_tool", { capability: "mail", action: "read" });
     if (last.role === "toolResult" && last.toolName === "enable_tool") leaseResult = text;
     if (text === "delegate") {
       expect(offered).not.toContain("mail_send");
@@ -548,7 +548,7 @@ it("parks the installed mail connector's auto send before SMTP and resumes it on
     .map(e => [e.effect, e.decision])).toEqual([["write", "park"], ["write", "allow"]]);
 });
 
-it.each(["restricted", "full"] as const)("requires approval before opening, clicking and filling in %s mode", async permission => {
+it.each(["restricted", "full"] as const)("opens directly and requires approval for clicking and filling in %s mode", async permission => {
   const ego = fakeEgo();
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("browse", permission);
@@ -561,10 +561,6 @@ it.each(["restricted", "full"] as const)("requires approval before opening, clic
     return say("OK");
   }, new MemoryStorage(), [createBrowserPlugin({ runner: ego.runner })]);
   await input(app, "delegate");
-  const navigation = await parked(app);
-  expect(navigation).toMatchObject({ audience: "user", tool: "browser_open" });
-  expect(ego.page.goto).not.toHaveBeenCalled();
-  await answerUserPermission(app.main, { requestId: navigation.id, decision: "once" });
   const request = await parked(app);
   expect(request.tool).toBe("browser_click");
   await answerUserPermission(app.main, { requestId: request.id, decision: "once" });
@@ -703,7 +699,7 @@ it("leases a declared plugin only in the harness where it is installed", async (
   })] };
   const results: string[] = [];
   const route: Route = (text, last, _, offered) => {
-    if (text === "clock please") return call("enable_tool", { capability: "clock", reason: "check time" });
+    if (text === "clock please") return call("enable_tool", { capability: "clock" });
     if (text === "time" && offered.includes("clock_read")) return call("clock_read", {});
     if (text === "read clock") return call("clock_read", {});
     if (last.role === "toolResult") results.push(text);
@@ -768,11 +764,12 @@ it.each(["send", "delete", "run"])("requires user approval for a restricted task
 
 it("gates individual leased writes with the model off and withdraws a stopped turn", async () => {
   const { plugin, execute } = externalPlugin();
+  let now = Date.now();
   const app = await open(text => {
-    if (text === "lease") return call("enable_tool", { capability: "remote", action: "send", reason: "use remote" });
+    if (text === "lease") return call("enable_tool", { capability: "remote", action: "send" });
     if (text === "send") return call("remote_send", {});
     return say("OK");
-  }, new MemoryStorage(), [plugin]);
+  }, new MemoryStorage(), [plugin], undefined, { now: () => now });
   await userInput(app, "lease");
   await userInput(app, "send");
   app.settings.set("off");
@@ -784,6 +781,7 @@ it("gates individual leased writes with the model off and withdraws a stopped tu
   await answerUserPermission(app.main, { requestId: req.id, decision: "once" });
   await app.main.waitForIdle(context);
   expect(execute).toHaveBeenCalledTimes(2);
+  now += 600_000;
   await app.main.submit({ type: "input", content: "send" }, context);
   await parked(app);
   await stopMainTurn(app);
@@ -791,14 +789,14 @@ it("gates individual leased writes with the model off and withdraws a stopped tu
   expect(execute).toHaveBeenCalledTimes(2);
 });
 
-it("leases read actions directly and gates both a send lease and its concrete call", async () => {
+it("leases read and write actions directly and gates the concrete write", async () => {
   const { plugin, execute } = externalPlugin();
   plugin.capability.mainLeasable = false; // Pre-#95 manifest.
   const dir = await mkdtemp(join(tmpdir(), "alter-lease-stats-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const app = await open((text, last) => {
     if (last.role !== "user") return say("OK");
-    if (text.startsWith("rent ")) return call("enable_tool", { capability: "remote", action: text.slice(5), reason: text });
+    if (text.startsWith("rent ")) return call("enable_tool", { capability: "remote", action: text.slice(5) });
     if (text === "read" || text === "send") return call("remote_" + text, {});
     if (text === "delegate") return dispatch("child");
     if (text === "child") return finish("done");
@@ -813,31 +811,26 @@ it("leases read actions directly and gates both a send lease and its concrete ca
   async function decide(input: string, tool: string, decision: "once" | "deny") {
     await app.main.submit({ type: "input", content: input }, context);
     const request = await parked(app);
-    expect(request).toMatchObject({ taskId: "main", tool, reason: "rent send" });
-    if (tool === "enable_tool") expect(JSON.parse(request.argumentsJson)).toMatchObject({ capability: "remote", action: "send" });
+    expect(request).toMatchObject({ taskId: "main", tool, reason: "Main session tool call" });
     expect((await answerUserPermission(app.main, { requestId: request.id, decision })).isError).toBe(false);
     await app.main.waitForIdle(context);
   }
-  await decide("rent send", "enable_tool", "deny");
-  expect((await app.main.agent(context)).tools.map(t => t.name)).not.toContain("remote_send");
-  await input(app, "send");
-  expect(execute).not.toHaveBeenCalled();
-  await decide("rent send", "enable_tool", "once");
+  await input(app, "rent send");
   await decide("send", "remote_send", "deny");
   expect(execute).not.toHaveBeenCalled();
   await decide("send", "remote_send", "once");
   expect(execute).toHaveBeenCalledTimes(1);
   await input(app, "delegate");
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
-  await expect.poll(async () => (await stats("all", "UTC", { app, dir })).approvals.askedUser).toBe(4);
+  await expect.poll(async () => (await stats("all", "UTC", { app, dir })).approvals.askedUser).toBe(2);
   const result = await query();
-  expect(result.items.find(item => item.approved)?.useWakeIds).toHaveLength(1);
+  expect(result.items.find(item => item.tools.includes("remote_send"))?.useWakeIds).toHaveLength(1);
   expect(result).toMatchObject({ count: 3, dispatchAfterLeaseRate: 2 / 3,
     byTool: { remote_read: 2, remote_send: 1 } });
   expect(result.items).toEqual(expect.arrayContaining([
-    expect.objectContaining({ reason: "rent read", approved: false, calls: 1, succeeded: 1, dispatched: false }),
-    expect.objectContaining({ reason: "rent read", approved: false, calls: 0, dispatched: true }),
-    expect.objectContaining({ tools: ["remote_send"], approved: true, calls: 1, succeeded: 1, failed: 0, dispatched: true }),
+    expect.objectContaining({ reason: "", approved: false, calls: 1, succeeded: 1, dispatched: false }),
+    expect.objectContaining({ reason: "", approved: false, calls: 0, dispatched: true }),
+    expect.objectContaining({ tools: ["remote_send"], approved: false, calls: 1, succeeded: 1, failed: 0, dispatched: true }),
   ]));
 });
 
@@ -848,7 +841,7 @@ it("leases only the installed calendar tools and creates a timed event in the sa
   let created = "";
   let leased: string[] = [];
   const app = await open((text, last, _, offered) => {
-    if (text === "schedule") return call("enable_tool", { capability: "calendar", reason: "schedule meeting" });
+    if (text === "schedule") return call("enable_tool", { capability: "calendar" });
     if (last.role === "toolResult" && last.toolName === "enable_tool") {
       leased = offered.filter(name => name.startsWith("calendar_"));
       return call("calendar_create", { title: "站会", start: "2026-11-23T15:00", location: "A" });
@@ -980,7 +973,7 @@ it("lets a main search and write memory without asking, even after reading exter
   let id = "";
   const app = await open((text, last) => {
     if (last.role !== "user") return say("OK");
-    if (text === "lease") return call("enable_tool", { capability: "remote", action: "read", reason: "read" });
+    if (text === "lease") return call("enable_tool", { capability: "remote", action: "read" });
     if (text === "read") return call("remote_read", {});
     if (text === "search") return call("memory_search", { query: "考试" });
     if (text.endsWith("write")) return call("memory_write", { op: "add", type: "goal", title: "考试", body: "考试" });
@@ -1004,7 +997,7 @@ it("offers schedules without leases and lets the main session manage them withou
   const at = Date.parse("2026-11-22T03:00Z");
   const app = await open((text, last) => {
     if (last.role !== "user") return say("OK");
-    if (text === "lease") return call("enable_tool", { capability: "remote", action: "read", reason: "read" });
+    if (text === "lease") return call("enable_tool", { capability: "remote", action: "read" });
     if (text === "read") return call("remote_read", {});
     if (text === "list") return call("schedule_list", {});
     if (text === "create") return call("schedule_create", { type: "reminder", brief: "回电话", trigger: { kind: "daily", time: "11:30" } });
@@ -1223,12 +1216,11 @@ it.each(["exact limit", "over limit", "failed"])("keeps the review usable with p
     capability: { id: "fixture", mainLeasable: false, actions: [{ name: "send", effect: "write" }] },
     tools: [defineTool({ name: tool, description: "send", parameters: obj({ message: str() }), execute: executed })], describe,
   };
-  const statement = [{ tool, target: "team", purpose: "update" }];
+  const statement = [{ tool: "", target: "任务 brief", purpose: "send" }];
   const payloads: unknown[] = [];
   const app = await open((text, last) => {
     if (text === "delegate") return dispatch("send");
-    if (text === "send") return call("declare_permissions", { items: statement });
-    if (last.role === "toolResult" && last.toolName === "declare_permissions") return call(tool, args);
+    if (text === "send") return call(tool, args);
     if (last.role === "toolResult" && last.toolName === tool) return finish("done");
     return say("ok");
   }, new MemoryStorage(), [plugin], undefined, {}, undefined, text => {

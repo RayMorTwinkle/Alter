@@ -32,11 +32,11 @@ it("classifies each browser tool and can be leased by main", () => {
   const registry = createCapabilityRegistry([plugin]);
   expect(Object.fromEntries([...registry.toolActions].filter(([, a]) => a.capability === "browser")
     .map(([name, a]) => [name, a.effect]))).toEqual({
-    browser_open: "write", browser_snapshot: "read", browser_scroll: "read", browser_click: "write",
+    browser_open: "read", browser_snapshot: "read", browser_scroll: "read", browser_click: "write",
     browser_fill: "write", browser_press: "write", browser_close: "read",
-    browser_eval: "write", browser_fetch: "write", browser_screenshot: "read", browser_wait: "write",
-    browser_handoff: "write", browser_select: "write", browser_upload: "write", browser_dialog: "write",
-    browser_tabs: "read", browser_switch: "read", browser_adopt: "write", browser_back: "write", browser_forward: "write",
+    browser_eval: "write", browser_fetch: "write", browser_screenshot: "read", browser_wait: "read",
+    browser_handoff: "read", browser_select: "write", browser_upload: "write", browser_dialog: "write",
+    browser_tabs: "read", browser_switch: "read", browser_adopt: "read", browser_back: "read", browser_forward: "read",
   });
 });
 
@@ -244,10 +244,28 @@ it("queues subsequent actions until the user returns control, reporting an expir
   app.waitForControl.mockRejectedValueOnce(new Error("control timeout"));
   expect(await app.call("handoff", { timeoutMs: 20 })).toMatchObject({ isError: true, text: expect.stringContaining("control timeout") });
   expect(app.waitForControl).toHaveBeenLastCalledWith({ timeout: 20 });
-  expect(await app.call("snapshot")).toMatchObject({ isError: true, text: expect.stringContaining("control is with the user") });
-  const stop = await app.plugin.start!({ emit: async () => {} });
-  await stop();
-  expect(app.finish).not.toHaveBeenCalled();
+  expect(app.takeOverTaskSpace).toHaveBeenCalledOnce();
+  expect((await app.call("snapshot")).isError).toBe(false);
+  app.waitForControl.mockResolvedValueOnce(false);
+  app.takeOverTaskSpace.mockRejectedValueOnce(new Error("busy")).mockRejectedValueOnce(new Error("busy"));
+  expect((await app.call("handoff")).text).toContain("重新 enable_tool 不能解决");
+  expect((await app.call("snapshot")).text).toContain("请等用户归还或告诉用户");
+  expect((await app.call("snapshot")).isError).toBe(false);
+  expect(app.takeOverTaskSpace).toHaveBeenCalledTimes(4);
+});
+
+it("reclaims the handed-off space even when the CLI exits before it can report", async () => {
+  const app = setup();
+  await app.call("snapshot");
+  const run = app.runner.getMockImplementation()!;
+  app.waitForControl.mockResolvedValueOnce(false);
+  app.runner.mockImplementationOnce(async (script, options) => {
+    await run(script, options);
+    throw new Error("ego-browser timed out");
+  });
+  expect(await app.call("handoff")).toMatchObject({ isError: true, text: expect.stringContaining("ego-browser timed out") });
+  expect(app.takeOverTaskSpace).toHaveBeenCalledOnce();
+  expect((await app.call("snapshot")).isError).toBe(false);
 });
 
 it("selects options, attaches files and resolves the reported dialog before reading the page", async () => {

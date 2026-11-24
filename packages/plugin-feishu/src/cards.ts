@@ -9,14 +9,14 @@ const plain = (content: string) => ({ tag: "plain_text", content });
 function card(request: PermissionRequest) {
   const args = JSON.stringify(request.arguments);
   const summary = args.length > 500 ? args.slice(0, 499) + "…" : args;
-  const labels = { once: "允许这一次", "task-full": "本任务全权限（含不可逆）", deny: "拒绝" };
-  const items = request.statement?.map(item => `${item.isNew ? "【新增】" : ""}${item.tool} · ${item.target} · ${item.purpose}`) ?? [];
+  const labels = { once: "允许这一次", capability: `本次允许${request.capability}全部功能`, always: `始终允许${request.capability}全部功能`, deny: "拒绝" };
+  const items = request.statement?.map(item => `${item.isNew ? "【新增】" : ""}${[item.tool, item.target, item.purpose].filter(Boolean).join(" · ")}`) ?? [];
   return {
     config: { update_multi: true },
     header: { title: plain(`审批 · ${request.tool}`) },
     elements: [
       { tag: "div", text: plain(`任务 ${request.taskId}\n${summary}${items.length ? "\n" + items.join("\n") : ""}`) },
-      { tag: "action", actions: choices.filter(choice => request.taskId !== "main" || choice === "once" || choice === "deny").map(decision => ({
+      { tag: "action", actions: choices.map(decision => ({
         tag: "button", type: decision === "deny" ? "danger" : "default", text: plain(labels[decision]), value: { requestId: request.id, decision },
       })) },
     ],
