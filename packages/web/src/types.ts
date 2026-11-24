@@ -1,10 +1,13 @@
-// Mirrors docs/architecture/web-api.md (v1.22).
+// Mirrors docs/architecture/web-api.md (v1.23).
 
 export type TimelineItem = {
   id: string;
-  kind: "user" | "assistant" | "report" | "permission" | "notice";
+  kind: "user" | "assistant" | "thinking" | "tool" | "message" | "report" | "permission" | "notice";
   text: string;
   at: number;
+  tool?: string;
+  args?: string;
+  isError?: boolean;
   taskId?: string;
   model?: string;
   source?: string;
@@ -75,7 +78,7 @@ export type ScheduledTask = {
 
 export type Notification = {
   category?: string; // v1.20 external event kind.
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -111,7 +114,7 @@ export type MemoryItem = {
   updatedAt: number;
 };
 
-export type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
+export type LedgerEntry = { kind?: "unreplied"; taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
 
 export type Lease = { capability: string; idleTurns: number; window: number };
 
@@ -193,6 +196,7 @@ export type StatsWake = {
 export type StatsLatency = { samples: number; p50Ms: number | null; p95Ms: number | null };
 
 export type Stats = {
+  unreplied: number;
   range: StatsRange; timeZone: string; at: number; total: StatsUsage;
   byRole: (StatsUsage & { role: string })[]; byModel: (StatsUsage & { model: string })[];
   leases: {

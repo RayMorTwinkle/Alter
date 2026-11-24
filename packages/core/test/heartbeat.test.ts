@@ -153,17 +153,17 @@ it("defers busy main past its due time and skips once over an hour late", async 
   await f.app.main.waitForIdle(context);
 });
 
-it("attributes notify and its feedback once per inspection, preserving EWMA and the schedule on restart", async () => {
+it("attributes send_message and its feedback once per inspection, preserving EWMA and the schedule on restart", async () => {
   const f = await setup();
   await f.notice("digest");
-  f.provider.setResponses([call("notify", { level: "now", title: "巡检", body: "提醒" }), say("无事")]);
+  f.provider.setResponses([call("send_message", { text: "提醒" }), say("无事")]);
   const at = start + 5 * hour;
   await f.advance(at);
   await f.app.main.waitForIdle(context);
   const surface = await observeSurface(f.app, () => {});
-  expect(surface.snapshot().timeline).toMatchObject([{ kind: "notice", text: "巡检调用 notify" }]);
+  expect(surface.snapshot().timeline).toMatchObject([{ kind: "notice", text: "巡检调用 send_message" }]);
   const item = surface.snapshot().notifications[0]!;
-  expect(item).toMatchObject({ source: "alter", level: "now", kind: "notify", heartbeatAt: at });
+  expect(item).toMatchObject({ source: "alter", level: "now", kind: "message", heartbeatAt: at });
   surface.detach();
   for (const feedback of ["useful", "useful", "useless"] as const) {
     await updateNotification(f.app.main, item.id, { feedback });
@@ -386,7 +386,7 @@ it("records effective quiet-hour notification levels and the ID of a created sch
   vi.stubEnv("ALTER_HEARTBEAT_HOURS", "23:00-07:00");
   const f = await setup();
   f.clock.now = start + 15 * hour;
-  f.provider.setResponses([call("notify", { level: "now", title: "活动", body: "已开始报名" }),
+  f.provider.setResponses([call("send_message", { text: "已开始报名" }),
     call("schedule_create", { type: "reminder", brief: "查看活动", trigger: { kind: "at", at: "2026-12-02T12:00Z" } }), say("已安排")]);
   const run = await f.app.heartbeat.run();
   f.app.harness.resume();
@@ -394,9 +394,9 @@ it("records effective quiet-hour notification levels and the ID of a created sch
   expect(Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {})).toEqual([]);
   const record = (await f.app.heartbeat.view()).runs.find(row => row.id === run.id)!;
   expect(record.notified).toBe(true);
-  const notice = (await f.app.harness.snapshot(Notifications, f.app.main.id, context))!.entries.find(row => row.kind === "notify")!;
+  const notice = (await f.app.harness.snapshot(Notifications, f.app.main.id, context))!.entries.find(row => row.kind === "message")!;
   const schedule = (await f.app.schedules.list()).find(item => item.brief === "查看活动")!;
-  expect(record.actions).toEqual([{ tool: "notify", id: notice.id, level: "digest" }, { tool: "schedule_create", id: schedule.id }]);
+  expect(record.actions).toEqual([{ tool: "send_message", id: notice.id, level: "now" }, { tool: "schedule_create", id: schedule.id }]);
 });
 
 it("extracts a watch ID from a successful tool result and recovers a placed run after restart", async () => {

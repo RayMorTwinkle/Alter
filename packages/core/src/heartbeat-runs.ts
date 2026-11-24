@@ -1,9 +1,8 @@
 import { contentText } from "@earendil-works/pi-ai";
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import { recordAdoption } from "./heartbeat-state.ts";
-import { NotifyReceipt } from "./notifications.ts";
 import { context, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Cursor, type Harness, type Tx } from "./runtime.ts";
-import { isInlineTaskReport } from "./timeline.ts";
+import { startsTurn } from "./wake.ts";
 import { Reports, type ReportView } from "./report-state.ts";
 import { Schedules } from "./scheduler.ts";
 
@@ -54,7 +53,7 @@ export async function rateRun(tx: Tx, id: string, feedback: NonNullable<Heartbea
 }
 
 function actionId(tool: string, result: string) {
-  if (!["dispatch_task", "watch", "watch_create", "notify", "schedule_create", "schedule_set", "task_stop"].includes(tool)) return;
+  if (!["dispatch_task", "watch", "watch_create", "send_message", "schedule_create", "schedule_set", "task_stop"].includes(tool)) return;
   if (/^[\w.-]+$/.test(result)) return result;
   if (result.startsWith("{")) {
     try {
@@ -76,8 +75,8 @@ async function finish(tx: Tx, id: string, at: number) {
       const page = await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID, order: "ascending",
         minEntryId: submission.entry, maxEntryId: submission.answer }, 100, cursor);
       for (const entry of page.items) {
+        if (entry.id !== submission.entry && startsTurn(entry)) break entries;
         for (const msg of entry.model ?? []) {
-          if (msg.role === "user" && entry.id !== submission.entry && !isInlineTaskReport(entry)) break entries;
           if (msg.role === "assistant") {
             run.tokens += msg.usage.totalTokens;
             run.finalReply = contentText(msg.content);
@@ -88,8 +87,8 @@ async function finish(tx: Tx, id: string, at: number) {
           const action: HeartbeatRun["actions"][number] = { tool };
           const id = actionId(tool, result);
           if (id) action.id = id;
-          if (tool === "notify" && action.id) {
-            action.level = (await tx.doc(NotifyReceipt, action.id, null)).level;
+          if (tool === "send_message" && action.id) {
+            action.level = "now";
             run.notified = true;
           }
           run.actions.push(action);

@@ -1,3 +1,4 @@
+import { isInlineTaskReport, PendingReplies } from "./wake.ts";
 import { interacted } from "./feedback-settings.ts";
 import { randomUUID } from "node:crypto";
 import { contentText } from "@earendil-works/pi-ai";
@@ -9,9 +10,12 @@ import { context, InboxDoc, LiveDoc, type TaskId, type ConversationId, type Conv
 
 export type TimelineItem = {
   id: string;
-  kind: "user" | "assistant" | "report" | "permission" | "notice";
+  kind: "user" | "assistant" | "thinking" | "tool" | "message" | "report" | "permission" | "notice";
   text: string;
   at: number;
+  tool?: string;
+  args?: string;
+  isError?: boolean;
   taskId?: string;
   model?: string;
   source?: string;
@@ -45,6 +49,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   const state = await tx.doc(Heartbeat, main.id);
   state.lastActivity = input.at;
   if (input.user) {
+    (await tx.doc(PendingReplies, main.id)).ids.push(input.id);
     await interacted(tx, input.at);
     await userActivity(tx, state, input.at);
     if (typeof input.data.text === "string") {
@@ -104,10 +109,6 @@ export async function hasUserInput(tx: Tx, id: ConversationId) {
     if (entry?.kind === inputKind && typeof source === "string" && userSources.has(source)) return true;
   }
   return false;
-}
-
-export function isInlineTaskReport(entry: InputEntry) {
-  return entry.kind === "alter.task-report" && entryData(entry)?.inline === true;
 }
 
 export async function queuedReports(tx: Tx, id: ConversationId, wakeId?: string) {
@@ -176,7 +177,10 @@ export function assistantId(taskId: number, at: number) {
   return `assistant-${taskId}-${at}`;
 }
 
-type Turn = { source?: string; heartbeat?: boolean };
+type Turn = {
+  source?: string; heartbeat?: boolean;
+  calls?: Map<string, { item: TimelineItem; message?: string }>;
+};
 export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] {
   const data = entryData(entry);
   if (entry.kind === "alter.schedule-notice" && typeof data?.text === "string" && typeof data.at === "number") {
@@ -195,19 +199,49 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
     if (msg.role === "user") {
       const item = inputItem(entry, contentText(msg.content), id, at);
       if (!isInlineTaskReport(entry)) {
+        turn.calls?.clear();
         turn.source = item.source;
         turn.heartbeat = entry.kind === heartbeatKind;
       }
       if (entry.kind !== heartbeatKind) items.push(item);
     }
+    if (msg.role === "toolResult") {
+      const call = turn.calls?.get(msg.toolCallId);
+      if (!call || call.item.tool !== msg.toolName) continue;
+      turn.calls?.delete(msg.toolCallId);
+      const result = !msg.isError && msg.toolName === "dispatch_task" ? contentText(msg.content) : "";
+      const taskId = /^task-\d+$/.test(result) ? result : undefined;
+      items.push({ ...call.item, isError: msg.isError, ...(taskId && { taskId }) });
+      if (!msg.isError && call.message !== undefined) {
+        items.push({ id: `${call.item.id}-message`, kind: "message", text: call.message, at: Math.max(at, call.item.at) });
+      }
+      continue;
+    }
     if (msg.role !== "assistant") continue;
     const text = contentText(msg.content);
-    const calls = msg.content.filter(part => part.type === "toolCall");
-    if (calls.length) {
-      if (turn.heartbeat) items.push({ kind: "notice", id, at, text: "巡检调用 " + calls.map(call => call.name).join("、") });
+    const end = at + (msg.durationMs ?? 0);
+    if (turn.heartbeat) {
+      const calls = msg.content.filter(part => part.type === "toolCall");
+      if (calls.length) items.push({ kind: "notice", id, at, text: "巡检调用 " + calls.map(call => call.name).join("、") });
+    } else {
+      let shownText = false;
+      for (const [index, part] of msg.content.entries()) {
+        const partId = `${id}-${index}`;
+        if (part.type === "thinking" && !part.redacted && part.thinking.trim()) {
+          items.push({ id: partId, kind: "thinking", text: part.thinking, at, model: msg.model });
+        } else if (part.type === "text" && !shownText && text.trim()) {
+          items.push({ id: entry.byTaskId === undefined ? id : assistantId(entry.byTaskId, at),
+            kind: "assistant", text, at: end, model: msg.model });
+          shownText = true;
+        } else if (part.type === "toolCall") {
+          const item: TimelineItem = { id: partId, kind: "tool", text: part.name, at: end, tool: part.name,
+            args: Array.from(JSON.stringify(part.arguments)).slice(0, 600).join("") };
+          const message = part.name === "send_message" && typeof part.arguments.text === "string" ? part.arguments.text : undefined;
+          (turn.calls ??= new Map()).set(part.id, { item, message });
+          items.push(item);
+        }
+      }
     }
-    if (text.trim() && !turn.heartbeat) items.push({ id: entry.byTaskId === undefined ? id : assistantId(entry.byTaskId, at),
-      kind: "assistant", text, at: at + (msg.durationMs ?? 0), model: msg.model });
     if (msg.errorMessage) items.push({ kind: "notice", id: `${id}-error`, at, text: `[模型错误] ${msg.model} · ${msg.errorMessage}` });
   }
   return items;

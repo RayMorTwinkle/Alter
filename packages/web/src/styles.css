@@ -145,6 +145,17 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .msg.user time { position: absolute; right: 4px; bottom: -20px; }
 .msg.assistant { padding-right: 24px; }
 .msg.streaming .md > :last-child { display: inline; }
+.draft, .thinking { color: var(--muted); font-size: 13px; border-left: 2px solid var(--fill); padding-left: 10px; }
+.draft.streaming .md > :last-child { display: inline; }
+.process-label { font-size: 12px; color: var(--faint); margin-right: 4px; }
+.thinking > summary { cursor: pointer; list-style: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thinking[open] > summary { margin-bottom: 4px; }
+.tool-call { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 13px; }
+.tool-call svg { flex: none; }
+.tool-call code { flex: none; color: var(--ink-2); }
+.tool-args { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+.tool-call.failed code, .tool-error { color: var(--accent); }
+.tool-call .link { flex: none; font-size: 12px; }
 .caret { display: inline-block; width: 7px; height: 1.1em; margin-left: 2px; vertical-align: text-bottom; background: var(--ink); animation: pulse 1s steps(2) infinite; }
 
 .typing { display: flex; gap: 5px; padding: 6px 0; }

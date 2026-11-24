@@ -73,6 +73,67 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   expect(await (await web.read("/api/usage")).json()).toMatchObject([{ model: "offline/main", calls: 2 }]);
 });
 
+it("publishes the whole turn and counts unanswered user turns once across reconnects", async () => {
+  const text = "回".repeat(79) + "\n" + "明细".repeat(1960);
+  const web = await setup(({ messages }, res) => {
+    const last = messages.at(-1)!;
+    if (last.content.endsWith("\n回答我")) {
+      delta(res, { reasoning_content: "先检查日程" });
+      delta(res, { content: "内部草稿" });
+      return toolCall(res, "schedule_list", {});
+    }
+    if (last.role === "tool" && !last.content.startsWith("message-") && messages.some(m => m.content?.endsWith("\n回答我"))) {
+      return toolCall(res, "send_message", { text });
+    }
+    if (last.content.endsWith("\n只检查")) return toolCall(res, "task_status", {});
+    say(res, "结束草稿");
+  });
+  await web.login();
+  const feed = await stream(web.read);
+  const missing = await (await web.post("/api/messages", { text: "只检查" })).json();
+  await web.app.main.waitForIdle(context);
+  await web.post("/api/messages", { text: "回答我" });
+  await web.app.main.waitForIdle(context);
+  await feed.seen(e => e.event === "timeline" && e.data.kind === "message");
+  const state = await web.state();
+  expect(state.ledger).toMatchObject([{ kind: "unreplied", summary: "用户消息未回复", refs: [{ kind: "input", ref: missing.id }] }]);
+  expect(state.notifications).toMatchObject([{ kind: "message", channel: "web", level: "now", title: "回".repeat(60), body: text }]);
+  expect(state.timeline).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "thinking", text: "先检查日程" }),
+    expect.objectContaining({ kind: "assistant", text: "内部草稿" }),
+    expect.objectContaining({ kind: "message", text }),
+  ]));
+  const calls = state.timeline.filter(item => item.kind === "tool");
+  expect(calls).toMatchObject([
+    { tool: "task_status", args: "{}", isError: false },
+    { tool: "schedule_list", args: "{}", isError: false },
+    { tool: "send_message", args: JSON.stringify({ text }).slice(0, 600), isError: false },
+  ]);
+  const updates = feed.events.filter(e => e.event === "timeline" && e.data.id === calls[2]!.id);
+  expect(updates).toMatchObject([{ data: { tool: "send_message" } }, { data: { tool: "send_message", isError: false } }]);
+  expect(await (await web.read("/api/stats?range=day")).json()).toMatchObject({ unreplied: 1 });
+  await web.close();
+  const next = await web.reopen();
+  await next.login();
+  expect((await next.state()).timeline).toEqual(state.timeline);
+  expect(await (await next.read("/api/stats?range=all")).json()).toMatchObject({ unreplied: 1 });
+});
+
+it("records an invalid send as a failed tool call only", async () => {
+  const web = await setup(({ messages }, res) => {
+    if (messages.at(-1)?.role === "user") return toolCall(res, "send_message", { text: "长".repeat(4001) });
+    say(res, "草稿");
+  });
+  await web.login();
+  await web.post("/api/messages", { text: "测试长度" });
+  await web.app.main.waitForIdle(context);
+  const state = await web.state();
+  expect(state.timeline.filter(item => item.kind === "tool")).toMatchObject([{ tool: "send_message", isError: true }]);
+  expect(state.timeline.filter(item => item.kind === "message")).toEqual([]);
+  expect(state.notifications).toEqual([]);
+  expect(await (await web.read("/api/stats")).json()).toMatchObject({ unreplied: 0 });
+});
+
 const send = { tool: "outbox_send", capability: "outbox", arguments: { message: "hello" }, reason: "send greeting" };
 it.each([
   { permission: "auto", call: send, audience: "user" },
@@ -109,9 +170,10 @@ it.each([
   const decisions = await Promise.all([decide(), decide()]);
   expect(decisions.map(r => r.status).sort()).toEqual([204, 409]);
   await feed.seen(e => e.event === "timeline" && e.data.kind === "report" && e.data.taskId === task.taskId);
-  await feed.seen(e => e.event === "ledger" && e.data[0]?.summary === "sent invitation");
+  await feed.seen(e => e.event === "ledger" && e.data.some((row: { taskId: string }) => row.taskId === task.taskId));
   const updated = await web.state();
-  expect(updated.ledger).toEqual([{ taskId: task.taskId, summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }], at: expect.any(Number) }]);
+  expect(updated.ledger.filter(row => row.taskId === task.taskId)).toEqual([{ taskId: task.taskId, summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }], at: expect.any(Number) }]);
+  expect(updated.timeline.filter(i => i.kind === "tool" && i.tool === "dispatch_task")).toMatchObject([{ taskId: task.taskId, isError: false }]);
   expect(updated.tasks[0]).toMatchObject({ status: "completed", pending: [] });
   expect(updated.pending).toEqual([]);
   expect(web.app.demo.outbox).toEqual(["hello"]);
@@ -152,6 +214,8 @@ it("stops only the active turn and continues an already queued input", async () 
   await web.post("/api/messages", { text: "queued" });
   expect((await web.post("/api/stop")).status).toBe(204);
   await feed.seen(e => e.event === "timeline" && e.data.text === "continued");
+  await web.app.main.waitForIdle(context);
+  expect(await (await web.read("/api/stats")).json()).toMatchObject({ unreplied: 2 });
   expect(feed.events).toContainEqual({ event: "timeline", data: expect.objectContaining({ kind: "assistant", text: "partial",
     id: feed.events.find(e => e.event === "delta")!.data.id }) });
 });
@@ -190,7 +254,7 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
   });
   await web.login();
   await web.post("/api/messages", { text: "delegate" });
-  await expect.poll(async () => (await web.state()).ledger.length).toBe(1);
+  await expect.poll(async () => (await web.state()).ledger.filter(row => row.taskId !== "main").length).toBe(1);
   await web.app.main.waitForIdle(context);
   const task = (await web.state()).tasks[0]!;
   const transcript = await (await web.read(`/api/tasks/${task.taskId}/transcript`)).json();
@@ -340,7 +404,7 @@ it("requires user approval before sending as a Feishu user after a full task rea
   expect(api.send).not.toHaveBeenCalled();
   const [pending] = (await web.state()).pending;
   expect((await web.post("/api/permissions/" + pending!.id, { allow: true })).status).toBe(204);
-  await expect.poll(async () => (await web.state()).ledger[0]?.summary).toBe("delivered");
+  await expect.poll(async () => (await web.state()).ledger.find(row => row.taskId !== "main")?.summary).toBe("delivered");
   expect(api.send).toHaveBeenCalledExactlyOnceWith("test-user-token", "chat", "hello");
 });
 
@@ -502,11 +566,11 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
     const { id } = await busy.json();
     expect((await view()).runs[0]).toMatchObject({ id, status: "skipped", skipReason: "busy" });
     expect((await web.post(`/api/heartbeat/${id}/feedback`, { feedback: "useful" })).status).toBe(409);
-  } finally { toolCall(pending!, "notify", { level: "now", title: "周末活动", body: "报名已开放" }); }
+  } finally { toolCall(pending!, "send_message", { text: "报名已开放" }); }
   await events.seen(e => e.event === "heartbeat" && e.data.type === "end" && e.data.id === run.id);
   const finished = (await view()).runs.find((row: HeartbeatRun) => row.id === run.id);
   expect(finished).toMatchObject({ finalReply: "已安排，请查阅通知", notified: true, tokens: 22, feedback: null,
-    actions: [{ tool: "notify", id: expect.stringMatching(/^notify-/), level: "now" }] });
+    actions: [{ tool: "send_message", id: expect.stringMatching(/^message-/), level: "now" }] });
   expect(events.events.filter(e => (e.event === "timeline" || e.event === "delta") && e.data.text === finished.finalReply)).toEqual([]);
   expect((await web.state()).timeline.some(item => item.text === finished.finalReply)).toBe(false);
   const url = `/api/heartbeat/${run.id}/feedback`;

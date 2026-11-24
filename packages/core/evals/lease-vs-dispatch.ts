@@ -57,7 +57,7 @@ async function playTurns(app: AlterApp, scenario: Scenario, tools: ToolCounts, t
   if (scenario === "list") for (const [id, title] of seed) demo.calendar.set(id, title);
   const surface = await observeSurface(app, event => {
     lastActivity = performance.now();
-    if (event.event === "timeline" && event.data.kind === "assistant") lastReply = event.data.text;
+    if (event.event === "timeline" && event.data.kind === "message") lastReply = event.data.text;
   });
   const commits = harness.observeCommits({
     advance({ changes }) {

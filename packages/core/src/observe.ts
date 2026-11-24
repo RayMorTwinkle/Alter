@@ -10,7 +10,9 @@ import {
 import { ScheduledTasks, type ScheduledTask } from "./scheduled-tasks.ts";
 import { watchList, type WatchItem } from "./watch.ts";
 import { Ledger, Tasks, type LedgerEntry, type TaskRecord } from "./state.ts";
-import { assistantId, isInlineTaskReport, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
+import { heartbeatKind } from "./heartbeat-state.ts";
+import { startsTurn } from "./wake.ts";
+import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
 export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
@@ -36,7 +38,7 @@ const limit = 200;
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
 export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
   const state: SurfaceState = { timeline: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
-  const turn: { source?: string; heartbeat?: boolean } = {};
+  const turn: Parameters<typeof timelineEntries>[1] = {};
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
   let streamedId: string | undefined;
@@ -46,7 +48,14 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
 
   function add(item: TimelineItem, publish = true) {
     const timeline = state.timeline;
-    if (timeline.some(old => old.id === item.id)) return;
+    const index = timeline.findIndex(old => old.id === item.id);
+    if (index >= 0) {
+      if (item.kind === "tool" && item.isError !== undefined) {
+        timeline[index] = item;
+        if (publish) emit({ event: "timeline", data: item }, turn.source);
+      }
+      return;
+    }
     // Order by event time even when queued items are placed later or an audit
     // document is replayed on startup. Preserve entry order for millisecond ties.
     timeline.push(item);
@@ -91,7 +100,8 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     function readTurn() {
       const historyTurn = latest ? turn : {};
       const items = segment.reverse().flatMap(entry => timelineEntries(entry, historyTurn));
-      recent.push(...items.reverse().slice(0, limit - recent.length));
+      const byId = new Map(items.map(item => [item.id, item]));
+      recent.push(...[...byId.values()].reverse().slice(0, limit - recent.length));
       segment.length = 0;
       latest = false;
     }
@@ -99,7 +109,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       const page = await main.entries({}, limit, cursor, context);
       for (const entry of page.items) {
         segment.push(entry);
-        if (!isInlineTaskReport(entry) && entry.model?.some(msg => msg.role === "user")) readTurn();
+        if (startsTurn(entry)) readTurn();
         if (recent.length >= limit) break;
       }
       cursor = page.next;
@@ -156,7 +166,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     });
     await watch(InboxDoc, value => {
       for (const item of value.items) {
-        if (item.mode === "write" || shownQueued.has(item.id)) continue;
+        if (item.mode === "write" || item.entry?.kind === heartbeatKind || shownQueued.has(item.id)) continue;
         shownQueued.add(item.id);
         add(queuedItem(item));
       }

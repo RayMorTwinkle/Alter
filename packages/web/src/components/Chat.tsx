@@ -1,4 +1,4 @@
-import { ArrowUp, CheckCircle, Stop, WarningCircle, HandPalm } from "@phosphor-icons/react";
+import { ArrowUp, CheckCircle, Stop, WarningCircle, HandPalm, Wrench } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { clock } from "../format.ts";
 import { useT } from "../i18n.tsx";
@@ -40,7 +40,7 @@ export function Chat({ state, onSend, onStop, onAnswer, onOpenTask }: Props) {
             <Item key={item.id} item={item} pending={state.pending} onAnswer={onAnswer} onOpenTask={onOpenTask} />
           ))}
           {state.draft && (
-            <article className="msg assistant streaming">
+            <article className="draft streaming">
               <Markdown text={state.draft.text} />
               <span className="caret" aria-hidden />
             </article>
@@ -61,12 +61,36 @@ function Item({ item, pending, onAnswer, onOpenTask }: {
   switch (item.kind) {
     case "user":
       return <article className="msg user"><Markdown text={item.text} /><time>{item.source === "feishu" && `${t.viaFeishu} · `}{clock(item.at)}</time></article>;
-    case "assistant":
+    case "message":
       return (
         <article className="msg assistant">
           <Markdown text={item.text} />
-          <time title={item.model}>{clock(item.at)}</time>
+          <time>{clock(item.at)}</time>
         </article>
+      );
+    // The model's plain text never reaches the user; show it as working notes.
+    case "assistant":
+      return (
+        <article className="draft">
+          <span className="process-label">{t.steps.draft}</span>
+          <Markdown text={item.text} />
+        </article>
+      );
+    case "thinking":
+      return (
+        <details className="thinking">
+          <summary><span className="process-label">{t.steps.thinking}</span> {item.text.split("\n")[0]}</summary>
+          <Markdown text={item.text} />
+        </details>
+      );
+    case "tool":
+      return (
+        <p className={`tool-call ${item.isError ? "failed" : ""}`}>
+          <Wrench /> <code>{item.tool}</code>
+          {item.args && item.args !== "{}" && <span className="tool-args">{item.args}</span>}
+          {item.isError && <span className="tool-error">{t.steps.failed}</span>}
+          {item.taskId && <button className="link" onClick={() => onOpenTask(item.taskId!)}>{item.taskId}</button>}
+        </p>
       );
     case "report": {
       const failed = /^task \S+ failed/i.test(item.text);

@@ -98,7 +98,7 @@ it("checks writes against the dispatch snapshot and brief, then asks for out-of-
   expect(outside.statement).toEqual([{ ...original, isNew: false }, { ...brief, isNew: false }]);
   expect(f.judged.map(j => j.statement)).toEqual(Array(3).fill([original, brief]));
   expect(f.app.demo.outbox).toEqual(["team", "team"]);
-  expect(f.surface.snapshot().ledger[0]?.summary).toContain("审批模型放行");
+  expect(f.surface.snapshot().ledger.find(row => row.taskId !== "main")?.summary).toContain("审批模型放行");
   await f.decide(outside.id, "once");
   const irreversible = await f.park("fixture_delete");
   expect(f.deletes()).toBe(0);
@@ -201,7 +201,7 @@ it("resumes statement authorizations from SQLite without asking again for an in-
   await expect.poll(() => g.surface.snapshot().tasks[0]?.status).toBe("completed");
   expect(g.app.demo.outbox).toEqual(["team"]);
   expect(f.judged.map(j => j.statement)).toEqual(Array(2).fill([original, brief]));
-  expect(g.surface.snapshot().ledger.map(row => row.summary)).toEqual([expect.stringContaining("审批模型放行"), expect.stringContaining("审批模型放行"), "done"]);
+  expect(g.surface.snapshot().ledger.filter(row => row.taskId !== "main").map(row => row.summary)).toEqual([expect.stringContaining("审批模型放行"), expect.stringContaining("审批模型放行"), "done"]);
 });
 
 it("leases without review and judges the write against ten recent original user inputs", async () => {

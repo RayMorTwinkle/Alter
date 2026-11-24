@@ -1,4 +1,4 @@
-# Web API 契约（v1.22）
+# Web API 契约（v1.23）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -56,12 +56,15 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 ```ts
 type TimelineItem = {
   id: string;                 // 稳定 ID（条目 ID 或提交 ID），前端据此去重
-  kind: "user" | "assistant" | "report" | "permission" | "notice";
+  kind: "user" | "assistant" | "thinking" | "tool" | "message" | "report" | "permission" | "notice";
   text: string;
   at: number;                 // 毫秒时间戳
-  taskId?: string;            // report / permission 关联的任务
+  tool?: string;              // tool：调用的工具名
+  args?: string;              // tool：参数的 JSON 文本，最多 600 个字符，截断后可能不是完整 JSON
+  isError?: boolean;          // tool：结果返回后写入
+  taskId?: string;            // report / permission 关联的任务，或 dispatch_task 成功返回的任务 ID
   source?: string;            // v1.4：user 项带来源；web / feishu，旧记录返回 web
-  model?: string;             // assistant：实际作答的模型
+  model?: string;             // assistant / thinking：产生该条目的模型
 };
 
 type Task = {
@@ -110,7 +113,7 @@ type Watch = {
 };
 
 type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing"; status: "unread" | "read";
   feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -225,6 +228,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 |---|---|
 | `total`、`byRole[]`、`byModel[]`、`daily[].usage` | 按调用开始时间累加模型尝试。角色为可扩展字符串，如 `main`、`task`、`triage`、`goal`、`judge`、`watch`、`schedule`、`heartbeat` |
 | `tasks` | 按创建时间筛选任务，明细含截至采样时的用量、模型、思考强度、轮数、工具名与次数、耗时、审计条目、结果摘要、`continuedFrom` 和发起派单的 `wakeId`。成功率为完成数除以已结束数，失败和取消均计入分母，分母为零返回 `null` |
+| `unreplied` | 所选时间范围内，由用户输入触发且结束时没有任何 `send_message` 调用的主会话回合数，按该输入开始回合的时间归档。 |
 | `wakes` | 按实际开始的主会话回合筛选。来源示例为 `user-web`、`user-feishu`、`user-cli`、`report`、`approval`、`schedule`、`watch`。同一次唤醒内的工具循环和回退共用 ID。多条输入同时启动一个回合时取第一条来源。用量只合计该主会话回合；派单数由任务创建记录关联。单纯投递通知不产生唤醒 |
 | `approvals` | `decisions` 按窗口内的 Audit 时间分别计数，`park` 表示曾等待审批，`allow` 和 `deny` 包含自动策略决定。`pending` 为采样时待处理的请求。三种用户决定、模型放行、转问用户和最终过期分别计数，详见下文 |
 | `latency` | `firstToken` 与 `total` 各返回 `samples / p50Ms / p95Ms`。用毫秒最近秩计算，只纳入相应延迟已上报的尝试，无样本时分位数为 `null` |
@@ -247,6 +251,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 ```json
 {
   "range": "day",
+  "unreplied": 1,
   "timeZone": "Asia/Taipei",
   "at": 1795399200000,
   "total": {"calls": 1, "input": 6, "output": 3, "cacheRead": 2, "cacheWrite": 0, "tokens": 11, "costUsd": null, "cacheHitRate": 0.25, "errors": 0, "aborted": 0, "fallbacks": 0, "retries": 0},
@@ -275,7 +280,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 | `ext-plugins` | `ExtPluginView[]` | 首连、重连、审批、运行状态或版本变更时整体替换（v1.17） |
 | `sources` | `SourceView[]` | 首次连接、重连、实例配置或轮询状态变化时整体替换（v1.16） |
 | `snapshot` | 同 `/api/state` | 首次连接与重连时 |
-| `timeline` | `TimelineItem` | 新条目（含用户自己发的消息回显） |
+| `timeline` | `TimelineItem` | 按 id 新增或更新条目，含用户消息回显与工具结果状态 |
 | `delta` | `{ id: string; text: string }` | 主会话正在生成的回答，`text` 为**累计全文**，结束时由同 `id` 的 `timeline` 条目取代 |
 | `tasks` | `Task[]` | 任务列表整体替换 |
 | `pending` | `PermissionRequest[]` | 待审批列表整体替换 |
@@ -311,10 +316,10 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 | `status, skipReason` | `ran / skipped / deferred`。运行时原因为 `null`，其他取值为 `disabled / outside-hours / busy / busy-timeout / recent-activity / unchanged / budget` |
 | `counts` | 六类线索限长展示前的条数，字段为 `goals, memories, agenda, chat, tasks, digests`。聊天取最近八轮用户输入，记忆包含用户偏好和最近八条事实 |
 | `actions` | 按执行顺序列出本轮主会话成功调用的工具，每项含 `tool`。派单、盯梢、通知、创建或取消调度附返回的 `id`。通知的 `level` 是安静时段处理后的实际级别 |
-| `notified, finalReply` | 是否成功写入了面向用户的通知（立即或摘要），以及主会话本轮最后回复。巡检简报、回复正文与流式片段均在 Web 对话中隐藏。工具调用仍可显示为时间线提示 |
+| `notified, finalReply` | 是否成功写入了面向用户的消息（立即投递），以及主会话本轮最后回复。巡检简报、回复正文与流式片段均在 Web 对话中隐藏。工具调用仍可显示为时间线提示 |
 | `tokens, feedback` | 本轮主会话对话中模型报告的 token 总数（含缓存），以及对本轮的直接反馈 `useful / useless / null` |
 
-主会话自行决定是否告知用户、派任务、开盯梢、另寻线索或什么都不做。`notify` 写入来源为 `alter` 的通知，遵循立即投递与安静时段规则。报告、调度的普通回复进 Web 时间线，飞书用户消息照常回到原渠道。巡检及其派单的请求按 `role: "heartbeat"` 计入每日主动预算，主会话的唤醒来源为 `heartbeat`。
+主会话自行决定是否告知用户、派任务、开盯梢、另寻线索或什么都不做。主会话调用 `send_message` 时立即写入通知。普通正文保留为网页草稿，巡检草稿只进巡检记录。巡检及其派单的请求按 `role: "heartbeat"` 计入每日主动预算，主会话的唤醒来源为 `heartbeat`。
 
 ## 盯梢（v1.14）
 
@@ -457,8 +462,8 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 - `GET /api/schedules`、`GET /api/state` 和 `schedules` SSE 中的每项都提供 `type: "reminder" | "task" | "wake"`。保留同值的旧字段 `action` 供现有客户端读取。旧安排保留 ID、暂停状态和到期时间。三个类型分别直接通知、直接派任务、唤醒主会话。
 - 主会话通过 `schedule_create({ type, trigger, brief, thinking?, continue_from? })` 创建，`schedule_list({})` 查看，`schedule_set({ id, trigger?, brief?, thinking?, status? })` 修改。状态接受 `active | paused | deleted`。任务中断工具为 `task_stop`，可用 `dispatch_task` 的 `continue_from` 接续。
 - `GET /api/heartbeat` 增加 `report: { intervalDays, activeDays, time, nextAt, paused }`。活跃天数按用户时区统计最近七个日历日，计入聊天、审批、通知读回执与反馈、Web 登录和显式写操作。SSE 重连和后台轮询不计入。每晚检查一次，`intervalDays` 固定为 1。首次检查在安装后的第一个报告时刻。时间采用 `ALTER_REPORT_TIME`（默认 21:00），落在巡检窗外时取窗内时刻。`nextAt` 为 Unix 毫秒，长期无互动或在下次报告前将进入暂停时为 null。连续 168 小时无互动时暂停巡检和报告。恢复互动后继续晚间检查。巡检跳过原因增加 `inactive`。
-- `heartbeat` SSE 增加 `{ type: "report", report }`，报告设置变化时同步。重连时读取 `GET /api/heartbeat`。唤醒统计增加 `triage` 和 `report-due` 两种来源。分诊的 now 事件由主会话判断，只有主会话调用 notify 才会转告用户。通知的安静时段规则继续生效。报告通知的 source 为 report。分诊事件保留在通知记录中，漏斗的 pushed 仅将有投递凭据的历史 now 事件算作已推送。
-- 自上次发送报告以来，任务账本中至少有两个不同的已完成任务才生成报告。摘要消息不计入门槛。任务和摘要游标在主会话调用 `notify` 发送报告时一并推进，未发送的内容留到下次检查。
+- `heartbeat` SSE 增加 `{ type: "report", report }`，报告设置变化时同步。重连时读取 `GET /api/heartbeat`。唤醒统计增加 `triage` 和 `report-due` 两种来源。主会话决定是否将分诊的 now 事件转告用户，投递规则见 v1.23。报告通知的 source 为 report。分诊事件保留在通知记录中，漏斗的 pushed 仅将有投递凭据的历史 now 事件算作已推送。
+- 自上次发送报告以来，任务账本中至少有两个不同的已完成任务才生成报告。摘要消息不计入门槛。任务和摘要游标在主会话显式发送报告时一并推进，未发送的内容留到下次检查。
 - 报告从通知中心取出游标之后仍保留的摘要，排除报告自身。任务模型低思考强度调用一次，忽略低价值通知、按主题合并为中文短句，每行末尾附经核对的来源 ID（优先用 `ref`）。模型失败、超时或格式无效时沿用原始摘要行。主会话可用只读工具 `digest_source({ ids: [...] })` 查看对应的来源、标题、完整正文、引用和时间。
 - `ALTER_DIGEST_TIME` 已废弃。目标复查和固定每日摘要停止调度，审批最终过期通过任务报告反馈。历史统计仍可含 goal 角色。
 
@@ -472,3 +477,11 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 - `items` 按取得时间倒序，含租约 ID、能力、工具列表、理由、时间、发起回合的 `wakeId` 和是否经用户批准（`approved`）。`calls` 是该租约下 Broker 已放行的调用数；`succeeded` 和 `failed` 是已收到结果的成功和失败数。审批挂起、拒绝和恢复重放不增加调用数。单动作与整组租约重叠时，调用归单动作租约。
 - `dispatchAfterLeaseRate` 是有效期内主会话成功执行过 `dispatch_task` 的租约占比，分子按租约去重。并存租约可关联同一派单，指标不判定派单原因。两项比例的分母均为 `count`，零分母返回 `null`。
 - 用 `wakeId` 和 `useWakeIds` 分别关联取得租约及实际使用工具的回合，按去重后的回合 ID 从 `wakes.items[].usage` 取主会话 token。派单次数、任务 token 和结果见 `tasks`。同一回合可能同时租用和派单。
+
+## v1.23 主会话发消息与时间线（#125）
+
+主会话调用 `send_message({ text })` 写入一条 `kind: "message"`、`level: "now"` 的通知。正文最多 4000 字，`body` 为全文，`title` 为首行的前 60 字。网页发起的回合写入 `channel: "web"`，只在网页显示。其他来源的回合沿用飞书通知投递，已配对的飞书账号收到一次全文。安静时段同样立即投递。框架提醒与分诊沿用各自的级别规则。
+
+`GET /api/state` 和 `timeline` SSE 共用条目 ID。`thinking.text` 为模型提供的可读思考内容，`assistant.text` 为普通正文草稿，`tool.text` 与 `tool.tool` 均为工具名。收到结果后，服务端用同一 ID 更新工具条目，成功执行的 `send_message` 另产生一条 `message`，其 `text` 为完整消息。巡检时间线仍仅显示「巡检调用 …」提示，发送的内容可在通知记录中查看。
+
+网页、飞书和 CLI 用户触发的回合结算后，缺少 `send_message` 调用会写入一条 `kind: "unreplied"` 的主会话账本记录。其 `refs` 引用原始输入 ID，`GET /api/stats` 的 `unreplied` 返回窗口内的记录数。计数从启用本版本后提交的消息开始。

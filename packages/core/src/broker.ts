@@ -246,7 +246,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         const isMain = api.conversationId === main.id;
         const control = call.name === "finish" || call.name === "sleep";
         const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write" }
-          : isMain && call.name === "notify" ? { capability: "notifications", action: "notify", effect: "write" }
+          : isMain && call.name === "send_message" ? { capability: "notifications", action: "send_message", effect: "write" }
           : isMain && call.name === "digest_source" ? { capability: "notifications", action: "digest_source", effect: "read" }
           : registry.toolActions.get(call.name);
         const borrowed = call.parent && /^ext:([a-z0-9-]+):([^:]+):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
@@ -309,7 +309,7 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
             return;
           }
           // The main session's own notes, schedules and notifications are bookkeeping, not actions on the outside world.
-          const internal = control || (isMain && !leasedCall && (call.name === "notify" || capability === "memory" || capability === "schedule"));
+          const internal = control || (isMain && !leasedCall && (call.name === "send_message" || capability === "memory" || capability === "schedule"));
           const needsApproval = effect !== "read" && !internal &&
             !(effect === "irreversible" && task?.permission === "full");
           if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
