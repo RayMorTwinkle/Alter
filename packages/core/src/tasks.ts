@@ -1,7 +1,7 @@
 import { arr, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
 import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
-import { submitWake } from "./timeline.ts";
+import { recentUserText, submitWake } from "./timeline.ts";
 import { LeaseHistory, Leases } from "./leases.ts";
 import { Audit, Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
@@ -17,7 +17,6 @@ const nonempty = str({ minLength: 1 });
 const reminder = "Complete the task by calling finish with a summary and refs. Call finish alone.";
 const maxReminders = 3;
 export const workerInstructions = "Carry out the assigned brief using the enabled plugin tools. " +
-  "Before sensitive operations, call declare_permissions with the tools, targets and purposes. Append changes to the plan. " +
   "Call the tool directly; the system handles approval. If approval is pending, work on something else or finish and report. " +
   "Do not retry a declined operation using another tool or task. " + reminder;
 
@@ -79,27 +78,10 @@ export async function finishTask(raw: string, refs: { kind: string; ref: string 
   }, ctx);
 }
 
-export const declarePermissions = defineTool({
-  name: "declare_permissions", description: "Append the tools, targets and purposes planned for this task.",
-  parameters: obj({ items: arr(obj({ tool: nonempty, target: nonempty, purpose: nonempty }), { minItems: 1 }) }),
-  replay: "safe",
-  async execute({ items }, api, ctx) {
-    return api.commit(async tx => {
-      const scope = await tx.doc(ScopeDoc, api.conversationId);
-      const id = String(api.taskId);
-      if (!scope.declarations.includes(id)) {
-        scope.items.push(...items);
-        scope.declarations.push(id);
-      }
-      return reply("权限说明已追加");
-    }, ctx);
-  },
-});
-
 export const TaskTools = defineExtension({
   name: "alter.task-tools", tasks: [ReviewAnswer],
   hooks: [hook(GenerationTask, { onYield: () => ({ tasks: [hookTask(ReviewAnswer, null)] }) })],
-  tools: [finish, declarePermissions],
+  tools: [finish],
 });
 
 export async function clearRequests(tx: Tx, mainId: ConversationId, taskId: string, keepDeferred = false) {
@@ -173,10 +155,11 @@ type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "conti
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
   resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
   return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs,
-    watch?: { worker: TaskId; settings: NonNullable<TaskRecord["watch"]>; tools: Extension; instructions: string }) => {
+    watch?: { createWorker: () => Promise<TaskId>; settings: NonNullable<TaskRecord["watch"]>; tools: Extension; instructions: string }) => {
     const tasks = await tx.doc(Tasks, mainId);
     if (tasks.byId[taskId]) return;
     const stamp = clock();
+    const inputs = await recentUserText(tx, mainId, stamp.at);
     const wake = !args.triggerSource ? await activeWake(tx, mainId, stamp.at) : undefined;
     const inspection = args.triggerSource ? undefined : await activeHeartbeat(tx);
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
@@ -189,7 +172,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       const end = await tx.latestEntryId(previous.conversationId);
       if (end !== undefined) latest.lastEntry = end;
     }
-    const worker = watch?.worker ?? await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
+    const worker = watch ? await watch.createWorker() : await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
       ownership: { kind: "conversation" }, background: true,
     });
     const options = { ownership: { kind: "task" as const, taskId: worker } };
@@ -208,13 +191,13 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       provider.sessionId = inspection ? "heartbeat-" + session : session;
     }
     const identity = await tx.doc(TaskIdentity, childId);
+    const scope = await tx.doc(ScopeDoc, childId);
+    scope.items = inputs ? [...inputs.map(purpose => ({ tool: "", target: "", purpose })),
+      { tool: "", target: "任务 brief", purpose: args.brief }] : [];
     if (previous) {
-      const scope = await tx.doc(ScopeDoc, childId);
-      scope.items = [];
       scope.late = [];
-      scope.declarations = [];
+      delete scope.capabilities;
       delete scope.shown;
-      delete scope.full;
     }
     const scheduled = args.triggerSource === "scheduled" || wake?.wakeSource === "schedule";
     if (scheduled) identity.scheduled = true;

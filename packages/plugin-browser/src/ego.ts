@@ -36,12 +36,14 @@ async function run(runner: EgoRunner, script: string, options?: RunOptions) {
   return JSON.parse(frame.slice("ALTER_BROWSER ".length));
 }
 
+const controlError = "浏览器控制权在用户手里，请等用户归还或告诉用户；重新 enable_tool 不能解决";
+
 function existingSpace(id: number, name: string, cleanup = false) {
   return `await (async () => {
     const entry = (await listTaskSpaces()).find(s => s.id === ${JSON.stringify(id)} && s.name === ${JSON.stringify(name)});
     if (!entry) return null;
     if (entry.ownership === "user" || entry.ownership === "agentDelegatedToUser") {
-      ${cleanup ? "return null;" : 'throw new Error("Browser control is with the user");'}
+      ${cleanup ? "return null;" : `try { return await takeOverTaskSpace(entry.id); } catch { throw new Error(${JSON.stringify(controlError)}); }`}
     }
     return taskSpace(entry.id);
   })()`;
@@ -128,8 +130,8 @@ export function clip(text: string, limit: number) {
 }
 
 export async function view(runner: EgoRunner, name: string, id: number, action: string, limit: number,
-  { close = false, label = "p1", ...options }: RunOptions & { close?: boolean; label?: string } = {}): Promise<View | null> {
-  const result = await run(runner, `
+  { close = false, label = "p1", handoffTimeoutMs, ...options }: RunOptions & { close?: boolean; label?: string; handoffTimeoutMs?: number } = {}): Promise<View | null> {
+  const script = `
 const task = ${existingSpace(id, name)};
 if (!task) {
   report(null);
@@ -149,7 +151,16 @@ if (!task) {
   }
   ${close ? "await task.finish({ keep: [] });" : ""}
   report({ url, text, isError, selected });
-}`, options);
+}`;
+  let result;
+  try {
+    result = await run(runner, script, handoffTimeoutMs === undefined ? options : { ...options, timeoutMs: handoffTimeoutMs + 90_000 });
+  } finally {
+    // A timed-out CLI process cannot reclaim the space from inside its script.
+    if (handoffTimeoutMs !== undefined && result !== null && result?.isError !== false) {
+      await run(runner, `const task = ${existingSpace(id, name)}; report(Boolean(task));`);
+    }
+  }
   if (result === null) return null;
   if (typeof result?.text !== "string" || typeof result.url !== "string" || typeof result.isError !== "boolean" || typeof result.selected !== "string") {
     throw new Error("Invalid ego-browser page response");

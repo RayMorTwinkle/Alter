@@ -1,5 +1,5 @@
 import type { Action } from "./store.ts";
-import type { Agenda, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -59,6 +59,9 @@ export const api = {
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<Settings>("/api/settings", { method: "PATCH", body: patch }),
   service: () => request<ServiceState>("/api/service"),
+  alwaysAllowed: () => request<AlwaysAllowedCapabilities>("/api/settings/always-allowed"),
+  revokeAlwaysAllowed: (capability: string) =>
+    request<AlwaysAllowedCapabilities>("/api/settings/always-allowed/" + encodeURIComponent(capability), { method: "DELETE" }),
   updateService: (patch: Partial<Record<ServiceFlag, boolean>>) => request<ServiceState>("/api/service", { method: "PUT", body: patch }),
   approvalStats: () => request<ApprovalStats>("/api/approvals/stats"),
   heartbeat: () => request<HeartbeatView>("/api/heartbeat"),

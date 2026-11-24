@@ -1,10 +1,11 @@
-import { normalizeEffect, type CapabilityRegistry, type Effect } from "./capabilities.ts";
+import type { CapabilityRegistry } from "./capabilities.ts";
 import { conversationDoc } from "./runtime.ts";
 
 export const leaseWindow = 30;
-export const Leases = conversationDoc<{
-  turns: number; lastUsed: Record<string, number>; records?: Record<string, string>;
-}>("leases", () => ({ turns: 0, lastUsed: {} }));
+type LeaseState = {
+  turns: number; lastUsed: Record<string, number>; records?: Record<string, string>; grants?: Record<string, string>;
+};
+export const Leases = conversationDoc<LeaseState>("leases", () => ({ turns: 0, lastUsed: {} }));
 
 export type LeaseRecord = {
   capability: string; tools: string[]; reason: string; at: number; wakeId?: string;
@@ -19,16 +20,19 @@ export function leaseTarget(registry: CapabilityRegistry, capability: unknown, a
   if (!cap || cap.id === "memory" || cap.id === "schedule") return;
   const actions = cap.actions.filter(item => action === undefined || item.name === action);
   if (!actions.length) return;
-  const effects: Effect[] = ["irreversible", "write", "read"];
-  return { key: action === undefined ? cap.id : cap.id + "/" + action, capability: cap.id,
-    tools: actions.map(item => cap.id + "_" + item.name),
-    effect: effects.find(effect => actions.some(item => normalizeEffect(item.effect) === effect))! };
+  return { key: action === undefined ? cap.id : cap.id + "/" + action,
+    tools: actions.map(item => cap.id + "_" + item.name) };
 }
 
 export function activeLease(lastUsed: Record<string, number>, capability: string, action: string) {
   const key = capability + "/" + action;
   if (Object.hasOwn(lastUsed, key)) return key;
   if (Object.hasOwn(lastUsed, capability)) return capability;
+}
+
+export function holdsLease(leases: LeaseState, capability: string, id?: string) {
+  return id !== undefined && Object.keys(leases.lastUsed).some(key =>
+    (key === capability || key.startsWith(capability + "/")) && (leases.records?.[key] ?? key) === id);
 }
 
 export function leaseStats(records: Record<string, LeaseRecord>, includes: (at: number) => boolean) {

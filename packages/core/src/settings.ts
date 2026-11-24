@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { conversationDoc } from "./runtime.ts";
 import type { FeedbackSettings } from "./feedback-settings.ts";
 
 export const defaultCompactAtTokens = 400_000;
 export const isCompactAtTokens = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+export const AllowedCapabilities = conversationDoc<{ capabilities: string[] }>("always-allowed-capabilities", () => ({ capabilities: [] }));
 
 export type ApprovalMode = "on" | "off";
 export const isApprovalMode = (value: unknown): value is ApprovalMode =>

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import {
-  answerUserPermission, approvalStats, isApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
+  AllowedCapabilities, answerUserPermission, approvalStats, parseApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
   validModelOverrides, FeedbackError, MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
@@ -224,8 +224,8 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "POST" && /^\/api\/permissions\/[^/]+$/.test(path)) {
       const input = await body(req);
       const { note } = input;
-      const decision = "decision" in input ? input.decision : input.allow === true ? "once" : input.allow === false ? "deny" : undefined;
-      if (!isApprovalDecision(decision) || ("decision" in input && "allow" in input) || (note !== undefined && typeof note !== "string")) {
+      const decision = "decision" in input ? parseApprovalDecision(input.decision) : input.allow === true ? "once" : input.allow === false ? "deny" : undefined;
+      if (!decision || ("decision" in input && "allow" in input) || (note !== undefined && typeof note !== "string")) {
         throw new HttpError(400, "Expected an approval decision and optional string note");
       }
       const answer = await answerUserPermission(app.main, { requestId: path.split("/")[3]!, decision, note });
@@ -359,6 +359,17 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       const result = app.modelCapabilities?.replace(path.slice("/api/models/".length), values);
       if (!result) throw new HttpError(404, "Unknown configured model");
       return mutation(200, result);
+    } else if (method === "GET" && path === "/api/settings/always-allowed") {
+      const grants = await app.harness.snapshot(AllowedCapabilities, app.main.id, context);
+      return json(res, 200, { capabilities: grants?.capabilities ?? [] });
+    } else if (method === "DELETE" && /^\/api\/settings\/always-allowed\/[^/]+$/.test(path)) {
+      const capability = decodeURIComponent(path.split("/")[4]!);
+      const capabilities = await app.main.commit(async tx => {
+        const grants = await tx.doc(AllowedCapabilities, app.main.id);
+        grants.capabilities = grants.capabilities.filter(id => id !== capability);
+        return [...grants.capabilities];
+      }, context);
+      return json(res, 200, { capabilities });
     } else if ((method === "GET" || method === "PATCH") && path === "/api/settings") {
       if (method === "PATCH") {
         const patch = await body(req);

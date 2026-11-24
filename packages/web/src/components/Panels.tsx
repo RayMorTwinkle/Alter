@@ -97,7 +97,6 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
     return () => clearInterval(timer);
   }, []);
   const left = remaining(request.expiresAt - now);
-  const lease = request.taskId === "main";
   const statement = request.statement ?? [];
   const fallback = request.defaultAt && request.defaultAt > now && !request.deferred ? remaining(request.defaultAt - now) : undefined;
 
@@ -140,7 +139,8 @@ export function ApprovalCard({ request, onAnswer, inline = false }: {
           <input value={note} onChange={event => setNote(event.target.value)} placeholder={t.notePlaceholder} />
           <div className="approval-buttons">
             <button className="btn" disabled={busy} onClick={() => void answer("deny")}>{t.decisions.deny}</button>
-            {!lease && <button className="btn quiet" disabled={busy} onClick={() => void answer("task-full")}>{t.decisions.full}</button>}
+            <button className="btn quiet" disabled={busy} onClick={() => void answer("always")}>{t.decisions.always(request.capability)}</button>
+            <button className="btn quiet" disabled={busy} onClick={() => void answer("capability")}>{t.decisions.capability(request.capability)}</button>
             <button className="btn primary" disabled={busy} onClick={() => void answer("once")}>{t.decisions.once}</button>
           </div>
           <span className="approval-expiry">

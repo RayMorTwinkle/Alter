@@ -177,7 +177,7 @@ it("requires ordinary user approval for a scheduled send and skips a continuatio
   f.faux.setResponses([action("outbox_send", { message: "定时问候" }), action("finish", { summary: "已发送", refs: [] }), say("完成")]);
   const schedule = await f.app.schedules.create({ brief: "发送问候", type: "task", trigger: { kind: "at", at: new Date(initial).toISOString() } });
   f.advance(initial);
-  const pending = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {})[0];
+  const pending = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {}).find(req => !req.checking);
   await expect.poll(pending).toMatchObject({ audience: "user", tool: "outbox_send" });
   const request = (await pending())!;
   expect(f.app.demo.outbox).toEqual([]);

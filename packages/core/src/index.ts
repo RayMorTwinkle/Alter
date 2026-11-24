@@ -1,6 +1,6 @@
 export { FeedbackError, pickQuestions, type FeedbackQuestion, type Issued as IssuedFeedback } from "./feedback.ts";
 export { Preferences, type FeedbackSettings } from "./feedback-settings.ts";
-export { approvalStats, choices, isApprovalDecision, type ApprovalDecision, answerUserPermission, Audit, Requests, type PermissionState } from "./broker.ts";
+export { approvalStats, choices, isApprovalDecision, parseApprovalDecision, type ApprovalDecision, answerUserPermission, Audit, Requests, type PermissionState } from "./broker.ts";
 export {
   createCapabilityRegistry, permitsBorrow, demoManifests as manifests, toolActions,
   type AlterPlugin, type Capability, type CapabilityRegistry, type Effect, type ExternalEvent, type WatchWhere, type WatchSource, type PluginHost,
@@ -24,7 +24,7 @@ export type { ScheduleItem } from "./scheduler.ts";
 export { calendarTime } from "./calendar-time.ts";
 export { judge, type ApprovalCall, type ApprovalContext, type Judgment } from "./approval-model.ts";
 export { validModelOverrides } from "./model-capabilities.ts";
-export { isCompactAtTokens, isApprovalMode, type ApprovalMode } from "./settings.ts";
+export { AllowedCapabilities, isCompactAtTokens, isApprovalMode, type ApprovalMode } from "./settings.ts";
 export { stats, type StatsRange } from "./stats.ts";
 export { subscribeHeartbeat, type HeartbeatEvent, type HeartbeatRun } from "./heartbeat-runs.ts";
 export type { PluginCheck, PluginDescription, PluginField, PluginStatus, PluginView } from "./plugin-settings.ts";

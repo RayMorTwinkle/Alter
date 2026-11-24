@@ -9,14 +9,16 @@ import { answerUserPermission, approvalStats, Audit, isApprovalDecision, submitM
 import { context, defineTool, MemoryStorage, openNodeSqliteStorage, reply, type Storage } from "../src/runtime.ts";
 import { obj } from "@earendil-works/pi-schema";
 
+import { recentUserText } from "../src/timeline.ts";
+import { ScopeDoc, Tasks } from "../src/state.ts";
 import { Reviews } from "../src/broker.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 const call = (tool: string, args: Parameters<typeof fauxToolCall>[1]) => say(fauxToolCall(tool, args), { stopReason: "toolUse" });
 const first = { tool: "outbox_send", target: "team", purpose: "status" };
-const extra = { tool: "outbox_send", target: "other", purpose: "follow up" };
-const declare = (item = first) => call("declare_permissions", { items: [item] });
+const brief = { tool: "", target: "任务 brief", purpose: "work" };
+const original = { tool: "", target: "", purpose: "start" };
 const send = (message = "team") => call("outbox_send", { message });
 const finish = call("finish", { summary: "done", refs: [] });
 const ref = { provider: "worker", modelId: "faux-1" };
@@ -44,9 +46,9 @@ async function setup(steps: FauxResponseStep[], verdict: FauxResponseStep = posi
   async function open(storage: Storage) {
     const app = await openAlter(storage, models, { provider: "faux", modelId: "faux-1" }, ref, {}, {
       now: () => clock.now, approvalDefaultMs: 60_000, plugins: [{
-        capability: { id: "fixture", mainLeasable: false, actions: [{ name: "delete", effect: "irreversible" }] },
-        tools: [defineTool({ name: "fixture_delete", description: "delete", parameters: obj({}),
-          execute: async () => { deletes++; return reply("deleted"); } })],
+        capability: { id: "fixture", mainLeasable: false, actions: [{ name: "delete", effect: "irreversible" }, { name: "erase", effect: "irreversible" }] },
+        tools: ["delete", "erase"].map(action => defineTool({ name: "fixture_" + action, description: action, parameters: obj({}),
+          execute: async () => { deletes++; return reply("deleted"); } })),
       }],
     });
     const surface = await observeSurface(app, () => {});
@@ -64,7 +66,7 @@ async function setup(steps: FauxResponseStep[], verdict: FauxResponseStep = posi
   const reopen = async () => open(dir ? await openNodeSqliteStorage(join(dir, "main.sqlite")) : new MemoryStorage());
   const f = await reopen();
   return { ...f, mainModel: main, dir, clock, judged, deletes: () => deletes, reopen,
-    start: () => f.app.main.submit({ type: "input", content: "start" }, context) };
+    start: (text = "start") => submitMessage(f.app.main, text) };
 }
 
 it("judges with only the statement and call, low reasoning and no tools, and fails closed", async () => {
@@ -86,15 +88,15 @@ it("judges with only the statement and call, low reasoning and no tools, and fai
   expect(mock.state.callCount).toBe(4);
 });
 
-it("checks writes against the latest declaration, then asks for out-of-scope and irreversible calls", async () => {
-  const f = await setup([declare(), send(), declare(extra), send(), send("other"), call("fixture_delete", {}), finish],
+it("checks writes against the dispatch snapshot and brief, then asks for out-of-scope and irreversible calls", async () => {
+  const f = await setup([send(), send(), send("other"), call("fixture_delete", {}), finish],
     ctx => JSON.parse(contentText(ctx.messages.at(-1)!.content)).call.arguments.message === "team"
       ? positive() : say('{"inScope":false,"reason":"对象不同"}'), true);
   f.app.settings.set("on");
   await f.start();
   const outside = await f.park("outbox_send", "other");
-  expect(outside.statement).toEqual([{ ...first, isNew: false }, { ...extra, isNew: false }]);
-  expect(f.judged.map(j => j.statement)).toEqual([[first], [first, extra], [first, extra]]);
+  expect(outside.statement).toEqual([{ ...original, isNew: false }, { ...brief, isNew: false }]);
+  expect(f.judged.map(j => j.statement)).toEqual(Array(3).fill([original, brief]));
   expect(f.app.demo.outbox).toEqual(["team", "team"]);
   expect(f.surface.snapshot().ledger[0]?.summary).toContain("审批模型放行");
   await f.decide(outside.id, "once");
@@ -105,25 +107,26 @@ it("checks writes against the latest declaration, then asks for out-of-scope and
   await expect.poll(() => f.surface.snapshot().tasks[0]?.status).toBe("completed");
   expect(f.deletes()).toBe(0);
   const { approvals } = await stats("day", f.app.timeZone, { app: f.app, dir: f.dir! });
-  expect(approvals).toMatchObject({ userDecisions: { once: 1, deny: 1, "task-full": 0 },
+  expect(approvals).toMatchObject({ userDecisions: { once: 1, deny: 1, capability: 0, always: 0 },
     byApprover: [{ approver: "user", count: 2 }, { approver: "judge", count: 2 }, { approver: "timeout", count: 0 }] });
 });
 
-it("honors task-full for subsequent irreversible operations even with the model off", async () => {
-  const f = await setup([send(), call("fixture_delete", {}), finish]);
+it("scopes a capability grant to the selected capability", async () => {
+  const f = await setup([call("fixture_delete", {}), call("fixture_erase", {}), send(), finish]);
   f.app.settings.set("off");
   await f.start();
-  await f.decide((await f.park()).id, "task-full");
-  await expect.poll(f.deletes).toBe(1);
+  await f.decide((await f.park("fixture_delete")).id, "capability");
+  await f.decide((await f.park()).id, "deny");
+  expect(f.deletes()).toBe(2);
   expect(f.judged).toEqual([]);
 });
 
-it("keeps a deferred approval across restart and consumes it once for matching arguments", async () => {
+it("keeps a deferred approval across restart and allows rewritten arguments for ten minutes", async () => {
   const results: string[] = [];
-  const f = await setup([declare(), send(), ctx => {
+  const f = await setup([send(), ctx => {
     results.push(contentText(ctx.messages.at(-1)!.content));
     return call("fixture_delete", {});
-  }, send("other"), send(), send(), finish], say('{"inScope":false,"reason":"待确认"}'), true);
+  }, send("other"), () => { f.clock.now += 599_999; return send(); }, () => { f.clock.now++; return send(); }, finish], say('{"inScope":false,"reason":"待确认"}'), true);
   f.app.settings.set("on");
   await f.start();
   const req = await f.park();
@@ -141,7 +144,6 @@ it("keeps a deferred approval across restart and consumes it once for matching a
   expect(g.app.settings.approvalModel).toBe("on");
   await g.decide(req.id, "once");
   await g.decide((await g.park("fixture_delete")).id, "once");
-  await g.decide((await g.park("outbox_send", "other")).id, "once");
   const repeat = await g.park("outbox_send", "team");
   expect(g.app.demo.outbox).toEqual(["other", "team"]);
   await g.decide(repeat.id, "deny");
@@ -172,11 +174,11 @@ it("defers an irreversible call without a judge and expires its detached card on
   expect(f.deletes()).toBe(0);
 });
 
-it("asks directly when the worker has no statement", async () => {
+it("asks directly when a user instruction is too long to snapshot", async () => {
   let result = "";
   const f = await setup([send(), ctx => { result = contentText(ctx.messages.at(-1)!.content); return finish; }]);
   f.app.settings.set("on");
-  await f.start();
+  await f.start("x".repeat(1001));
   const req = await f.park();
   f.clock.now = req.defaultAt!;
   f.app.harness.resume();
@@ -188,7 +190,7 @@ it("asks directly when the worker has no statement", async () => {
 });
 
 it("resumes statement authorizations from SQLite without asking again for an in-scope call", async () => {
-  const f = await setup([declare(), send(), call("fixture_delete", {}), send(), finish], positive, true);
+  const f = await setup([send(), call("fixture_delete", {}), send(), finish], positive, true);
   f.app.settings.set("on");
   await f.start();
   const held = await f.park("fixture_delete");
@@ -198,16 +200,16 @@ it("resumes statement authorizations from SQLite without asking again for an in-
   await g.decide(held.id, "once");
   await expect.poll(() => g.surface.snapshot().tasks[0]?.status).toBe("completed");
   expect(g.app.demo.outbox).toEqual(["team"]);
-  expect(f.judged.map(j => j.statement)).toEqual([[first], [first]]);
+  expect(f.judged.map(j => j.statement)).toEqual(Array(2).fill([original, brief]));
   expect(g.surface.snapshot().ledger.map(row => row.summary)).toEqual([expect.stringContaining("审批模型放行"), expect.stringContaining("审批模型放行"), "done"]);
 });
 
-it("uses only the last three original user inputs for both the lease and its write", async () => {
+it("leases without review and judges the write against ten recent original user inputs", async () => {
   const f = await setup([]);
-  const texts = ["旧指示", "给团队写更新", "只发本周进度", "现在发送"];
-  f.mainModel.setResponses([say("模型回复"), say("模型回复"), say("模型回复"), say("系统唤醒"),
-    call("enable_tool", { capability: "outbox", reason: "模型写的理由" }), send(), say("完成")]);
-  for (const text of texts.slice(0, 3)) {
+  const texts = Array.from({ length: 12 }, (_, i) => "用户原话 " + i);
+  f.mainModel.setResponses([...texts.slice(0, -1).map(() => say("模型回复")), say("系统唤醒"),
+    call("enable_tool", { capability: "outbox" }), send(), say("完成")]);
+  for (const text of texts.slice(0, -1)) {
     await submitMessage(f.app.main, text);
     await f.app.main.waitForIdle(context);
   }
@@ -216,14 +218,14 @@ it("uses only the last three original user inputs for both the lease and its wri
   await f.app.main.commit(tx => tx.appendEntry(f.app.main.id, {
     kind: "alter.task-report", data: { source: "web", text: "工具执行结果和任务报告" },
   }), context);
-  await submitMessage(f.app.main, texts[3]!);
+  await submitMessage(f.app.main, texts.at(-1)!);
   await f.app.main.waitForIdle(context);
   expect(f.app.demo.outbox).toEqual(["team"]);
-  expect(f.judged.map(j => j.call.tool)).toEqual(["enable_tool", "outbox_send"]);
+  expect(f.judged.map(j => j.call.tool)).toEqual(["outbox_send"]);
   for (const { statement } of f.judged) {
-    expect(statement).toEqual(texts.slice(1).map(purpose => ({ tool: "", target: "", purpose })));
+    expect(statement).toEqual(texts.slice(-10).map(purpose => ({ tool: "", target: "", purpose })));
   }
-  expect(await approvalStats(f.app.main)).toEqual({ modelAllowed: 2, askedUser: 0, userApproved: 0, userDenied: 0 });
+  expect(await approvalStats(f.app.main)).toEqual({ modelAllowed: 1, askedUser: 0, userApproved: 0, userDenied: 0 });
 });
 
 it("migrates stored approval modes, audit effects and statement decisions on reopen", async () => {
@@ -252,7 +254,7 @@ it("migrates stored approval modes, audit effects and statement decisions on reo
 
 it("requires a user decision for an unrecognized runtime effect even with an in-scope statement", async () => {
   const tool = "fixture_delete";
-  const f = await setup([declare({ tool, target: "fixture", purpose: "remove" }), call(tool, {}), finish]);
+  const f = await setup([call(tool, {}), finish]);
   // Simulate a stale runtime descriptor after registration of a valid manifest.
   Object.assign(f.app.capabilities.toolActions.get(tool)!, { effect: "future-effect" });
   await f.start();
@@ -272,4 +274,104 @@ it("lets the main session write memories without asking", async () => {
   await f.app.main.waitForIdle(context);
   expect(f.surface.snapshot().pending).toEqual([]);
   expect(f.judged).toEqual([]);
+});
+
+it("ends a main capability grant with the lease that prompted it", async () => {
+  const f = await setup([]);
+  f.app.settings.set("off");
+  const rent = call("enable_tool", { capability: "fixture" });
+  f.mainModel.setResponses([rent, call("fixture_delete", {}), call("fixture_erase", {}), say("完成"),
+    ...Array(30).fill(say("空闲")), rent, call("fixture_erase", {}), say("完成")]);
+  await f.start();
+  await f.decide((await f.park("fixture_delete")).id, "capability");
+  await f.app.main.waitForIdle(context);
+  expect(f.deletes()).toBe(2);
+  for (let i = 0; i < 30; i++) {
+    await submitMessage(f.app.main, "空闲");
+    await f.app.main.waitForIdle(context);
+  }
+  await f.start();
+  await f.decide((await f.park("fixture_erase")).id, "deny");
+  expect(f.deletes()).toBe(2);
+});
+
+it("uses the inclusive two-hour boundary and keeps up to 4000 characters of complete messages", async () => {
+  const f = await setup([]);
+  const at = f.clock.now;
+  const add = (text: string, time: number) => f.app.main.commit(tx => tx.appendEntry(f.app.main.id, {
+    kind: "alter.user-input", data: { source: "cli", text, at: time },
+  }), context);
+  const window = () => f.app.main.commit(tx => recentUserText(tx, f.app.main.id, at), context);
+  await add("旧".repeat(1001), at - 7200001);
+  await add("边界", at - 7200000);
+  expect(await window()).toEqual(["边界"]);
+  const latest = ["甲", "乙", "丙", "丁"].map(c => c.repeat(1000));
+  for (const text of latest) await add(text, at);
+  expect(await window()).toEqual(latest);
+  await add("新", at);
+  expect(await window()).toEqual([...latest.slice(1), "新"]);
+  await add("超".repeat(1001), at);
+  expect(await window()).toBeUndefined();
+});
+
+it("migrates a legacy task-wide decision to its capability and keeps existing statement items", async () => {
+  const f = await setup([send(), call("fixture_delete", {}), send("again"), call("fixture_erase", {}), finish], positive, true);
+  f.app.settings.set("off");
+  await f.start();
+  const firstRequest = await f.park();
+  await f.decide(firstRequest.id, "capability");
+  const held = await f.park("fixture_delete");
+  await f.app.main.commit(async tx => {
+    const task = (await tx.doc(Tasks, f.app.main.id)).byId[held.taskId]!;
+    const scope = await tx.doc(ScopeDoc, task.conversationId);
+    delete scope.capabilities;
+    Object.assign(scope, { full: true, items: [first], declarations: ["legacy"] });
+    Object.assign((await tx.doc(Reviews, f.app.main.id)).byId[firstRequest.id]!, { user: "task-full" });
+  }, context);
+  await f.close();
+  const g = await f.reopen();
+  g.app.harness.resume();
+  await g.decide(held.id, "once");
+  const other = await g.park("fixture_erase");
+  expect(other.statement).toEqual([{ ...first, isNew: false }]);
+  expect(g.app.demo.outbox).toEqual(["again"]);
+  expect((await g.app.harness.snapshot(Reviews, g.app.main.id, context))?.byId[firstRequest.id]?.user).toBe("capability");
+  await g.decide(other.id, "deny");
+});
+
+it.each(["once", "capability"] as const)("does not carry %s into a task continuing the same conversation", async decision => {
+  const f = await setup([send(), finish, send("new"), finish]);
+  f.app.settings.set("off");
+  await f.start();
+  const held = await f.park();
+  await f.decide(held.id, decision);
+  await expect.poll(() => f.surface.snapshot().tasks[0]?.status).toBe("completed");
+  await f.app.main.waitForIdle(context);
+  f.mainModel.setResponses([call("dispatch_task", { brief: "new brief", continue_from: held.taskId }), say("working"), say("done")]);
+  await f.start("new instructions");
+  const next = await f.park("outbox_send", "new");
+  expect(next.taskId).not.toBe(held.taskId);
+  expect(next.statement?.map(item => item.purpose)).toEqual(["start", "new instructions", "new brief"]);
+  await f.decide(next.id, "deny");
+  expect(f.app.demo.outbox).toEqual(["team"]);
+});
+
+it("recovers a recent pre-upgrade once decision from its click time", async () => {
+  const f = await setup([send(), call("fixture_delete", {}), send("rewritten"), finish], positive, true);
+  f.app.settings.set("off");
+  await f.start();
+  const req = await f.park();
+  await f.decide(req.id, "once");
+  const held = await f.park("fixture_delete");
+  await f.app.main.commit(async tx => {
+    const task = (await tx.doc(Tasks, f.app.main.id)).byId[req.taskId]!;
+    Object.assign(await tx.doc(ScopeDoc, task.conversationId), { late: [{ tool: req.tool, argumentsJson: '{"message":"team"}' }] });
+  }, context);
+  await f.close();
+  f.clock.now += 599_999;
+  const g = await f.reopen();
+  g.app.harness.resume();
+  // The unrelated irreversible request has reached its soft deadline during downtime.
+  await g.decide(held.id, "once");
+  await expect.poll(() => g.app.demo.outbox).toEqual(["rewritten"]);
 });

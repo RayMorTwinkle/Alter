@@ -1,5 +1,5 @@
 import type { Effect } from "../../src/capabilities.ts";
-import type { Permission, PermissionItem, TaskRecord } from "../../src/state.ts";
+import type { Permission, TaskRecord } from "../../src/state.ts";
 
 export const decisions = ["allow", "user", "deny"] as const;
 export type Decision = typeof decisions[number];
@@ -8,7 +8,7 @@ type Caller = { kind: "task"; permission: Permission; context: TaskRecord["conte
 export type PermissionCase = {
   id: string; note: string; caller: Caller; tool: string;
   args: Record<string, string | string[]>; effect: Effect; expected: Decision;
-  statement?: PermissionItem[];
+  brief?: string;
   priorApproval?: "send" | "send-denied";
 };
 
@@ -23,7 +23,7 @@ const fixtureActions = [
 
 function row(id: string, caller: Caller, labels: [Decision, Decision, Decision]): PermissionCase[] {
   return fixtureActions.map(([name, effect], i) => ({
-    id: id + "-" + name, note: "未提供权限说明。", caller, tool: "fixture_" + name, args: {}, effect, expected: labels[i]!,
+    id: id + "-" + name, note: "用户未给出具体操作要求。", caller, tool: "fixture_" + name, args: {}, effect, expected: labels[i]!,
   }));
 }
 
@@ -40,13 +40,13 @@ export const cases: PermissionCase[] = [
   ...row("lease", leased("fixture"), ["allow", "user", "user"]),
   ...["team", "other"].map((target): PermissionCase => ({
     id: "scoped-write-" + target, caller: task("restricted"), tool: "outbox_send", args: { message: target },
-    statement: [{ tool: "outbox_send", target: "team", purpose: "更新" }], effect: "write",
-    note: "模拟审批模型核对声明的目标。", expected: target === "team" ? "allow" : "user",
+    brief: "向 team 发送更新", effect: "write",
+    note: "模拟审批模型核对派单时的目标。", expected: target === "team" ? "allow" : "user",
   })),
   single("13-outbox", "#13 受限任务可使用发件箱，发送需要审批。", task("restricted"),
     "outbox_send", { message: "通知" }, "write", "user"),
-  single("3-repeat-send", "全权任务第一次发送经用户同意，第二次仍需批准。", task("full"),
-    "outbox_send", { message: "第二条" }, "write", "user", "send"),
+  single("3-repeat-send", "全权任务第一次发送经用户同意，十分钟内第二次放行。", task("full"),
+    "outbox_send", { message: "第二条" }, "write", "allow", "send"),
   single("30-denied-retry", "#30 用户拒绝发送后，同一任务再次发送直接拒绝，不再询问。", task("restricted"),
     "outbox_send", { message: "再试一次" }, "write", "deny", "send-denied"),
   single("30-denied-retry-full", "#30 全权任务用户拒绝发送后，同一任务再次发送直接拒绝。", task("full"),

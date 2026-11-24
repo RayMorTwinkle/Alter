@@ -1,4 +1,4 @@
-import { isApprovalDecision, type ApprovalDecision } from "@alter/core";
+import { parseApprovalDecision, type ApprovalDecision } from "@alter/core";
 import { Client, Domain, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import type { FeishuConfig } from "./config.ts";
 
@@ -52,7 +52,7 @@ export function dispatcher(handlers: FeishuHandlers) {
       }
       return handlers.action({ openId: operator?.open_id, messageId: context?.open_message_id,
         requestId: typeof value?.requestId === "string" ? value.requestId : undefined,
-        decision: isApprovalDecision(value?.decision) ? value.decision : value?.decision === undefined && typeof value?.allow === "boolean" ? (value.allow ? "once" : "deny") : undefined });
+        decision: value?.decision !== undefined ? parseApprovalDecision(value.decision) : typeof value?.allow === "boolean" ? (value.allow ? "once" : "deny") : undefined });
     },
   });
 }

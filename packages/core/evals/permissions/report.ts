@@ -43,7 +43,7 @@ function summary(rows: Result[]) {
     lines.push(`| 副作用 | ${name} | ${accuracy(rows.filter(r => r.effect === name))} |`);
   }
   lines.push("", "## 标注依据", "",
-    "- ADR-0018：读和内部控制动作直接放行，缺少说明的写操作转问用户。不可逆操作须用户批准，全权限任务可直接执行。",
+    "- ADR-0018、ADR-0021：读取和租用直接放行，写操作结合派单说明或近期用户原话审批。单次批准对同一调用方的同一工具生效十分钟。",
     "- 无效工具名由运行时拒绝。证据列记录了拦截或挂起的位置。");
   return lines.join("\n") + "\n";
 }

@@ -287,7 +287,7 @@ it("does not count a completed heartbeat task whose requested action the user de
     return say("收到");
   }));
   await f.advance(start + 5 * hour);
-  const pending = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {});
+  const pending = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {}).filter(req => !req.checking);
   await expect.poll(pending).toMatchObject([{ tool: "outbox_send" }]);
   await answerUserPermission(f.app.main, { requestId: (await pending())[0]!.id, decision: "deny" });
   await expect.poll(async () => Object.values((await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId)[0]?.status).toBe("completed");
@@ -407,15 +407,13 @@ it("extracts a watch ID from a successful tool result and recovers a placed run 
   const run = await f.app.heartbeat.run();
   expect(run.finishedAt).toBeNull();
   await f.app.close();
-  f.provider.setResponses([call("enable_tool", { capability: "watch", reason: "查看活动" }), call("watch_create", {}), say("准备好了")]);
+  f.provider.setResponses([call("enable_tool", { capability: "watch" }), call("watch_create", {}), say("准备好了")]);
   const g = await f.open();
   g.app.settings.set("off");
   g.app.harness.resume();
   const pending = async () => Object.values((await g.app.harness.snapshot(Requests, g.app.main.id, context))?.pending ?? {})[0];
-  for (const tool of ["enable_tool", "watch_create"]) {
-    await expect.poll(pending).toMatchObject({ tool });
-    await answerUserPermission(g.app.main, { requestId: (await pending())!.id, decision: "once" });
-  }
+  await expect.poll(pending).toMatchObject({ tool: "watch_create" });
+  await answerUserPermission(g.app.main, { requestId: (await pending())!.id, decision: "once" });
   await expect.poll(async () => (await g.app.heartbeat.view()).runs[0]?.finalReply).toBe("准备好了");
   expect((await g.app.heartbeat.view()).runs[0]).toMatchObject({ id: run.id, notified: false,
     actions: [{ tool: "enable_tool" }, { tool: "watch_create", id: "watch-17" }] });
