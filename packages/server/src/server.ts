@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import {
   answerUserPermission, approvalStats, isApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
@@ -12,6 +13,7 @@ import { templates, SourceError } from "@alter/plugin-sources";
 import { PluginError } from "@alter/plugin-runtime";
 import type { PluginManager } from "./plugin-manager.ts";
 import { redirectUri, settingsWriter } from "./settings-api.ts";
+import { openService, type ServiceOptions } from "./service.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
 
 const cookieName = "alter_session";
@@ -56,12 +58,14 @@ export type Agenda = { timeZone: string; agenda(): unknown[]; subscribe(listener
 type WebOptions = {
   password: string; dataDir: string; dist?: string; calendar?: Agenda; plugins?: PluginManager;
   feishu?: { pairing(): FeishuPairing }; feishuAccount?: FeishuAccount;
+  service?: ServiceOptions;
 };
 
 export async function createWebServer(app: AlterApp, options: WebOptions) {
   if (!options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const passwordHash = digest(options.password);
   const sessions = openSessions(join(options.dataDir, "web-sessions.json"), passwordHash);
+  const service = openService(options.dataDir, options.service);
   const clients = new Map<ServerResponse, string>();
   function write(res: ServerResponse, frame: string) {
     // A disconnected or stalled client can rebuild from a snapshot on reconnect.
@@ -184,6 +188,16 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (token) sessions.delete(token);
       for (const [client, owner] of clients) if (owner === token) { clients.delete(client); client.end(); }
       res.setHeader("Set-Cookie", `${cookieName}=; Max-Age=0; ${cookieOptions}`);
+    } else if (method === "GET" && path === "/api/service") {
+      return json(res, 200, service.state());
+    } else if (method === "PUT" && path === "/api/service") {
+      const change = service.update(await body(req));
+      json(res, 200, change.state);
+      try {
+        await finished(res, { cleanup: true });
+        await activity();
+      } finally { await change.apply(); }
+      return;
     } else if (method === "GET" && path === "/api/state") {
       return json(res, 200, surface.snapshot());
     } else if (method === "GET" && path === "/api/events") {
@@ -378,6 +392,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     });
   });
   function dispose() {
+    service.close();
     clearInterval(ping);
     stopHeartbeat();
     stopPlugins?.();

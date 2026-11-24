@@ -1,9 +1,25 @@
 import { once } from "node:events";
+import type { Server } from "node:net";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { createGatewayModels, gatewayConfig, loadRepoEnv, openAlter, openNodeSqliteStorage } from "@alter/core";
 import { mkdir } from "node:fs/promises";
 import { installedPlugins } from "./plugins.ts";
 import { createWebServer } from "./server.ts";
+
+export async function listen(server: Server, port: number, host: string) {
+  const deadline = performance.now() + 15_000;
+  for (;;) {
+    try {
+      server.listen(port, host);
+      await once(server, "listening");
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || performance.now() >= deadline) throw error;
+      await delay(250);
+    }
+  }
+}
 
 async function start() {
   loadRepoEnv();
@@ -22,22 +38,21 @@ async function start() {
   try {
     const plugins = installedPlugins(app, config.dataDir);
     const web = await createWebServer(app, { password, dataDir: config.dataDir, plugins });
+    let shutdown!: () => void;
+    const stopped = new Promise<void>(resolve => { shutdown = resolve; });
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
     try {
-      web.server.listen(port, host);
-      await once(web.server, "listening");
+      await listen(web.server, port, host);
       await plugins.start();
       app.harness.resume();
       console.log("Alter web listening on", web.server.address());
-      await new Promise<void>(resolve => {
-        function shutdown() {
-          process.off("SIGINT", shutdown);
-          process.off("SIGTERM", shutdown);
-          resolve();
-        }
-        process.once("SIGINT", shutdown);
-        process.once("SIGTERM", shutdown);
-      });
-    } finally { try { await web.close(); } finally { await plugins.close(); } }
+      await stopped;
+    } finally {
+      process.off("SIGINT", shutdown);
+      process.off("SIGTERM", shutdown);
+      try { await web.close(); } finally { await plugins.close(); }
+    }
   } finally { await app.close(); }
 }
 
