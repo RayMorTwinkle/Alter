@@ -67,6 +67,8 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
       const event = { source: "feishu", kind: "message", ref: id, at: message.at, untrusted: true as const,
         chatId, ...(openId && { contact: openId }), text: text || message.content || `[${message.type}]`, summary: (text || `[${message.type}]`).slice(0, 512) };
       if (privateUser && owner?.openId === openId) {
+        // Feishu has no read receipt for bots, so a reaction tells the owner this machine got the message.
+        transport.react(id, "Get").catch(() => {});
         await app.watches.message(event);
         if (message.type !== "text") await transport.sendText(owner.chatId, "目前只支持文字");
         else if (text) await submitMessage(app.main, text, "feishu", `feishu-${id}`);

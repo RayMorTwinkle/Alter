@@ -18,7 +18,7 @@ export const feishuDescription: PluginDescription = { id: "feishu", name: "飞�
   ] };
 
 export function feishuGuide(redirectUri: string) {
-  const tenant = ["im:message.p2p_msg:readonly", "im:message.group_at_msg:readonly", "im:message:send_as_bot"];
+  const tenant = ["im:message.p2p_msg:readonly", "im:message.group_at_msg:readonly", "im:message:send_as_bot", "im:message.reactions:write_only"];
   return { permissionsJson: JSON.stringify({ scopes: { tenant, user: scopes } }, null, 2), redirectUri, eventsMode: "long-connection" as const,
     steps: ["创建企业自建应用并启用机器人，在设置页保存 App ID 和 App Secret。",
       "在权限管理中批量导入权限 JSON，并将下方回调地址登记到安全设置。",
