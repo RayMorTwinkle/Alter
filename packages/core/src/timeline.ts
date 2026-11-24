@@ -28,15 +28,23 @@ export type TranscriptItem =
 const inputKind = "alter.user-input";
 const userSources = new Set(["web", "feishu", "cli"]);
 
+const sourceLabels: Record<string, string> = { web: "网页", feishu: "飞书", cli: "命令行" };
+const wakeLabels: Record<string, string> = { "alter.task-report": "任务报告", "alter.heartbeat": "巡检",
+  "alter.schedule": "定时安排", "alter.report-due": "近况报告", "alter.triage": "消息分诊" };
 const defaultClock = inputClock();
-// Keep the public submitMessage(main, text) API while each open host supplies the model input prefix.
-export const mainInputContext = new WeakMap<Conversation, typeof defaultClock>();
+// Keep the public submitMessage(main, text) API while each open host supplies the clock for input headers.
+export const mainInputContext = new Map<ConversationId, typeof defaultClock>();
 
 export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   id: string; kind: string; at: number; content: string; data: JsonObject; user?: boolean;
 }) {
   if (await tx.submissionByRequest(main.id, input.id)) return;
   const notices = await wakeNotifications(tx);
+  // Every model input opens with who is speaking, so the user's words never blend into framework wakes.
+  const { time } = (mainInputContext.get(main.id) ?? defaultClock)(input.at);
+  const source = String(input.data.source ?? "");
+  const label = input.user ? `用户消息 · ${sourceLabels[source] ?? source}` : `系统消息 · ${wakeLabels[input.kind] ?? input.kind}`;
+  const header = `[${label} · ${time}]`;
   let content = input.content;
   if (notices.pushed.count > notices.cursor) {
     const count = notices.pushed.count - notices.cursor;
@@ -46,6 +54,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
     notices.cursor = notices.pushed.count;
     notices.pushed.lines = [];
   }
+  content = header + "\n" + content;
   const state = await tx.doc(Heartbeat, main.id);
   state.lastActivity = input.at;
   if (input.user) {
@@ -63,8 +72,8 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
 
 export async function submitMessage(main: Conversation, text: string, source = "web", requestId?: string) {
   const id = requestId ?? randomUUID();
-  const { at, prefix } = (mainInputContext.get(main) ?? defaultClock)();
-  await main.commit(tx => submitWake(tx, main, { id, at, kind: inputKind, content: prefix + "\n" + text,
+  const { at } = (mainInputContext.get(main.id) ?? defaultClock)();
+  await main.commit(tx => submitWake(tx, main, { id, at, kind: inputKind, content: text,
     user: userSources.has(source), data: { id, at, text, source } }), context);
   return id;
 }

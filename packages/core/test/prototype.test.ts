@@ -56,7 +56,7 @@ async function open(route: Route, storage: Storage = new MemoryStorage(), plugin
     }
     const last = messages.findLast(msg => msg.role !== "system")!;
     const text = contentText(last.content);
-    return route(last.role === "user" ? text.replace(/^\[当前时间 [^\n]*\]\n/, "") : text, last, messages, [...tools].sort(), options?.signal);
+    return route(last.role === "user" ? text.replace(/^\[(?:当前时间|用户消息|系统消息) [^\n]*\]\n/, "") : text, last, messages, [...tools].sort(), options?.signal);
   }));
   const models = createModels();
   models.setProvider(faux.provider);
@@ -883,9 +883,10 @@ it("stamps each model input at submission or dispatch and preserves the original
   await app.main.waitForIdle(context);
   await submitMessage(app.main, "下一条");
   await app.main.waitForIdle(context);
-  expect(seen).toContain("[当前时间 2026-11-22 周日 11:50 Asia/Shanghai]\n" + raw);
+  expect(seen).toContain("[用户消息 · 网页 · 2026-11-22 周日 11:50 Asia/Shanghai]\n" + raw);
   expect(seen).toContain("[当前时间 2026-11-22 周日 11:51 Asia/Shanghai]\n查日历");
-  expect(seen).toContain("[当前时间 2026-11-22 周日 11:51 Asia/Shanghai]\n下一条");
+  expect(seen.some(content => content.startsWith("[系统消息 · 任务报告 · 2026-11-22 周日 11:51 Asia/Shanghai]\n"))).toBe(true);
+  expect(seen).toContain("[用户消息 · 网页 · 2026-11-22 周日 11:51 Asia/Shanghai]\n下一条");
   expect(surface.snapshot().timeline.find(item => item.id === id)?.text).toBe(raw);
   const [task] = Object.values((await app.harness.snapshot(Tasks, app.main.id, context))!.byId);
   const history = await observeSurface(app, () => {});
