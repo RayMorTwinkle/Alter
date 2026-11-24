@@ -426,14 +426,14 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 
 ## 反馈闭环（v1.20）
 
-报告和每周回访共享题库。每次出题得到独立的 `id`，两个渠道使用同一个 ID 作答。`candidateId` 标识题库条目，`batch` 标识同组出题。时间戳单位为 Unix 毫秒。
+回访已暂停。历史题库中每次出题都有独立的 `id`，两个渠道使用同一个 ID 作答。`candidateId` 标识题库条目，`batch` 标识同组出题。时间戳单位为 Unix 毫秒。
 
 | 方法 | 路径 | 请求与结果 |
 |---|---|---|
 | GET | `/api/feedback` | `FeedbackView` 含待答 `pending`、历史 `history` 和 `changes`。题目含选项、来源、原因、结构化效果、出口、出题时间。历史记录含作答时间、选项、补充文字与 `changeIds`。 |
 | POST | `/api/feedback/:id/answer` | `{"options":["部分对"],"other":"只在周末"}`。成功返回 204。单选最多选一项，多选可选多项。允许其他时可以只提交文字。使用该题实际显示的选项。猜测选“部分对”须写下修正；选“不对”并补充文字会修正条目，只选“不对”会删除。 |
 | POST | `/api/feedback/:id/skip` | `{}`，返回 204。 |
-| POST | `/api/feedback/more` | `{}`，返回 `FeedbackQuestion[]`，最多 5 题。题库冷却时返回空数组。 |
+| POST | `/api/feedback/more` | `{}`，暂停期间返回空数组。 |
 | POST | `/api/feedback/changes/:id/undo` | `{}`，返回 204。按变更 ID 回退，并在历史记录中追加逆向变更。 |
 | GET | `/api/feedback/stats` | `FeedbackStats`，含全部历史统计、对应指标的变更前后样本及每周产品反馈。 |
 | GET | `/api/feedback/export` | 下载 `alter-weekly-feedback.json`，内容是 `FeedbackWeek[]`，含周汇总和用户针对新功能提交的选项与补充文字。 |
@@ -442,9 +442,7 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 
 `effect.kind` 取 `memory`、`param` 或 `metric`。记忆变更通过 `memoryAction` 区分确认、修正、删除等操作，并引用 `memoryChangeId`，可在记忆历史中查看完整快照。参数变更给出键、前值、后值；分诊和权限说明另有来源或工具 `scope`。撤销记录含 `undoOf`，原记录含 `undoneBy`。部署目录的 `feedback.sqlite` 提供可直接查询的 `feedback_questions`、`feedback_issues`、`feedback_changes` 和 `feedback_param_changes`。这些表从主事务的已提交状态恢复。
 
-两个出口以最近 7 天有用户互动为前提。自动回访从启用满一周起，到期后在本地 08:00–23:00、最近一小时有互动、主会话和收件箱空闲时发送。一次需有 3–5 道可问的题。连续两次整组明确跳过，下一次间隔为 14 天。出题后冷却 7 天，跳过后冷却 14 天，沟通方式题作答后冷却 28 天。手动取题属于用户互动。报告侧通过 `pickQuestions(tx, { outlet: "report", limit: 2 })` 取题，同一事务内登记出口和冷却。报告间隔乘数由 `(await tx.doc(Preferences, ROOT_CONVERSATION_ID)).reportFrequency` 读取，默认 1，取值 0.5、1、2。
-
-出题时用记忆索引和近 7 天使用概况审阅候选题。模型以低思考强度运行，用量归入 `feedback`。已明确的回复长度偏好会跳过。新功能需在 30 天内上线或安装，且近 14 天内至少调用三次或产生过结果。每批最多展示一道新功能题，满意度和主动产出有用率合计最多一道。
+暂停期间取消每周回访调度，手动取题和报告均停止出题。已有待答题仍可作答或跳过，历史记录、撤销和统计接口继续可用。旧的 `reportFrequency` 偏好保留在存储中。
 
 改写题的 `optionMap` 将显示选项映射到原选项，参数效果的 `mapping` 直接以显示选项为键。某题映射验证失败时使用该题模板。带补充的猜测修正会合并为短标题和完整正文，模型不可用或输出无效时按用户原话保存，均可撤销。
 
@@ -458,9 +456,10 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 
 - `GET /api/schedules`、`GET /api/state` 和 `schedules` SSE 中的每项都提供 `type: "reminder" | "task" | "wake"`。保留同值的旧字段 `action` 供现有客户端读取。旧安排保留 ID、暂停状态和到期时间。三个类型分别直接通知、直接派任务、唤醒主会话。
 - 主会话通过 `schedule_create({ type, trigger, brief, thinking?, continue_from? })` 创建，`schedule_list({})` 查看，`schedule_set({ id, trigger?, brief?, thinking?, status? })` 修改。状态接受 `active | paused | deleted`。任务中断工具为 `task_stop`，可用 `dispatch_task` 的 `continue_from` 接续。
-- `GET /api/heartbeat` 增加 `report: { intervalDays, activeDays, time, nextAt, paused }`。活跃天数按用户时区统计最近七个日历日，计入聊天、审批、通知读回执与反馈、Web 登录和显式写操作。SSE 重连和后台轮询不计入。基础间隔为 1、2、3 天，乘以反馈设置 `reportFrequency`（0.5、1、2，默认 1），四舍五入后最短一天。首次检查在安装后的第一个报告时刻。时间采用 `ALTER_REPORT_TIME`（默认 21:00），落在巡检窗外时取窗内时刻。`nextAt` 为 Unix 毫秒，长期无互动或在下次报告前将进入暂停时为 null。连续 168 小时无互动时暂停巡检和报告。回来后有内容就立即补报，空报告跳过。巡检跳过原因增加 `inactive`。
+- `GET /api/heartbeat` 增加 `report: { intervalDays, activeDays, time, nextAt, paused }`。活跃天数按用户时区统计最近七个日历日，计入聊天、审批、通知读回执与反馈、Web 登录和显式写操作。SSE 重连和后台轮询不计入。每晚检查一次，`intervalDays` 固定为 1。首次检查在安装后的第一个报告时刻。时间采用 `ALTER_REPORT_TIME`（默认 21:00），落在巡检窗外时取窗内时刻。`nextAt` 为 Unix 毫秒，长期无互动或在下次报告前将进入暂停时为 null。连续 168 小时无互动时暂停巡检和报告。恢复互动后继续晚间检查。巡检跳过原因增加 `inactive`。
 - `heartbeat` SSE 增加 `{ type: "report", report }`，报告设置变化时同步。重连时读取 `GET /api/heartbeat`。唤醒统计增加 `triage` 和 `report-due` 两种来源。分诊的 now 事件由主会话判断，只有主会话调用 notify 才会转告用户。通知的安静时段规则继续生效。报告通知的 source 为 report。分诊事件保留在通知记录中，漏斗的 pushed 仅将有投递凭据的历史 now 事件算作已推送。
-- 报告末尾按题号展示最多两道反馈题，保留出题时的题干和选项。用户可在 Web「回访与反馈」或直接回复作答。主会话用 `feedback_answer({ issueId, options, other? })` 提交，`issueId` 为该次出题的 `id`，选项为显示原文。与 Web 作答共用校验、幂等和偏好变更记录。
+- 自上次发送报告以来，任务账本中至少有两个不同的已完成任务才生成报告。摘要消息不计入门槛。任务和摘要游标在主会话调用 `notify` 发送报告时一并推进，未发送的内容留到下次检查。
+- 报告从通知中心取出游标之后仍保留的摘要，排除报告自身。任务模型低思考强度调用一次，忽略低价值通知、按主题合并为中文短句，每行末尾附经核对的来源 ID（优先用 `ref`）。模型失败、超时或格式无效时沿用原始摘要行。主会话可用只读工具 `digest_source({ ids: [...] })` 查看对应的来源、标题、完整正文、引用和时间。
 - `ALTER_DIGEST_TIME` 已废弃。目标复查和固定每日摘要停止调度，审批最终过期通过任务报告反馈。历史统计仍可含 goal 角色。
 
 ## v1.22 主会话租用统计（#95）

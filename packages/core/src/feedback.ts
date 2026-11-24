@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Audit, Reviews } from "./broker.ts";
-import { Preferences, Interaction, triageScope, type PreferenceKey, type PreferenceValue } from "./feedback-settings.ts";
+import { feedbackPaused, Preferences, Interaction, triageScope, type PreferenceKey, type PreferenceValue } from "./feedback-settings.ts";
 import { heartbeatResponse } from "./heartbeat-state.ts";
 import { recentRuns } from "./heartbeat-runs.ts";
 import { MemoryInbox } from "./memory-inbox.ts";
@@ -176,7 +176,7 @@ export async function pickQuestions(tx: Tx, options: { outlet: Outlet; limit: nu
 export async function issueQuestions(tx: Tx, { outlet, limit, minimum = 1, batch = randomUUID() }:
   { outlet: Outlet; limit: number; minimum?: number; batch?: string }, at: number): Promise<FeedbackQuestion[]> {
   const bank = await tx.doc(Feedback, root);
-  if (at - await lastInteraction(tx) >= 7 * day) return [];
+  if (feedbackPaused || at - await lastInteraction(tx) >= 7 * day) return [];
   await ruleQuestions(tx, bank, at);
   const editor = feedbackEditors.get(bank.runtimeId ?? "");
   const memory = editor?.memory();

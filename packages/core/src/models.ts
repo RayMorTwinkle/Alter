@@ -45,7 +45,7 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
     const heartbeat = attribution?.wakeSource === "heartbeat" || options?.sessionId?.startsWith("heartbeat-");
     const scheduled = attribution?.role === "schedule" || attribution?.wakeSource === "schedule";
     const proactiveRole = attribution?.role === "watch" ? "watch" : scheduled ? "schedule" : heartbeat ? "heartbeat"
-      : attribution?.wakeSource === "report-due" ? "report-due" : options?.sessionId === "proactive-memory" ? "memory" : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
+      : attribution?.wakeSource === "report-due" || options?.sessionId === "proactive-report-digest" ? "report-due" : options?.sessionId === "proactive-memory" ? "memory" : options?.sessionId?.startsWith("proactive-") ? "goal" : undefined;
     const proactive = proactiveRole !== undefined;
     if (scheduled && attribution?.thinking) {
       const level = clampThinkingLevel(model, attribution.thinking);
@@ -138,7 +138,7 @@ function chainStreams(config: Config, conversation: Conversation, catalog: Map<s
     const triage = options.metadata?.alterConversation === "triage";
     const role = options.metadata?.alterRole ?? options.metadata?.alterConversation;
     const accounting = attemptContext.getStore();
-    const chain = triage || role === "feedback" ? candidates.slice(0, 1) : candidates;
+    const chain = triage || role === "feedback" || options.sessionId === "proactive-report-digest" ? candidates.slice(0, 1) : candidates;
     for (const [index, id] of chain.entries()) {
       options.signal?.throwIfAborted();
       const model = { ...catalog.get(id)!, input: catalog.get(route.id)!.input };

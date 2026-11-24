@@ -21,10 +21,11 @@ import { defaultTimeZone, inputClock } from "./clock.ts";
 import { calendarTime } from "./calendar-time.ts";
 import { emitEvent, startEventBus } from "./events.ts";
 import { observeHeartbeatRuns } from "./heartbeat-runs.ts";
+import { digestSummary } from "./digest-summary.ts";
 import { registerReports } from "./reports.ts";
 import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
-import { addNotification, claim, isClaimed, notifyTool, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
+import { addNotification, claim, isClaimed, digestSource, notifyTool, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
 import { createProactiveBudget } from "./usage.ts";
 import { gatewayCapabilities, auxiliaryModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
@@ -78,7 +79,7 @@ export async function openAlter(
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
     "用 schedule_create 创建定时安排：reminder 直接通知用户，task 到点派任务，wake 到点由你判断。用 schedule_list 查看，用 schedule_set 改时间、内容、思考强度或暂停、恢复、删除。" +
-    "用户直接回复反馈题时，按报告中的顺序将题号对应到该次出题的 id，用 feedback_answer 提交用户选择的原文选项及补充，工具会记录对应偏好。指代不清时先问清楚。" +
+    "用户直接回复历史反馈题时，核对该题的 id，用 feedback_answer 提交用户选择的原文选项及补充，工具会记录对应偏好。指代不清时先问清楚。" +
     "需要在一段时间内关注飞书或邮件，等特定消息出现或到期总结时，用 watch。" +
     "多步、耗时、可并行、要翻多页或产出长的工作用 dispatch_task 派单。" +
     "同一目标的后续步骤用 continue_from 接续已结束的任务，新目标另开任务。按复杂度选择 thinking。" +
@@ -126,7 +127,9 @@ export async function openAlter(
   });
   const time = calendarTime(timeZone);
   const budget = createProactiveBudget(time, proactive.budget, now, dir);
-  const reports = registerReports(scheduler, () => main, now, budget, timeZone, proactive.reportTime, () => settings.heartbeat);
+  const meteredModels = () => withUsage(currentModels(), budget, dir, now);
+  const reports = registerReports(scheduler, () => main, now, budget, timeZone, proactive.reportTime, () => settings.heartbeat,
+    digestSummary(meteredModels, taskModel, now));
   const heartbeat = registerHeartbeat(scheduler, () => main, memory, () => plugins.find(p => p.capability.id === "calendar"), budget, timeZone, () => settings.heartbeat, now);
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
@@ -155,7 +158,7 @@ export async function openAlter(
   const cancellation = createTaskCancellation(() => harness);
   const watches = createWatches(() => main, () => harness, () => plugins, dispatch, cancellation, budget, time, now);
   const controls: ToolRegistration[] = [
-    ...scheduler.tools, notifyTool(time),
+    ...scheduler.tools, notifyTool(time), digestSource,
     defineTool({
       name: "feedback_answer", description: "代用户提交已明确回答的反馈题。issueId 为本次出题的 id，options 使用显示的选项原文，other 为用户补充。",
       parameters: obj({ issueId: str({ minLength: 1 }), options: arr(str()), other: opt(str()) }), replay: "safe",
@@ -246,7 +249,6 @@ export async function openAlter(
     ],
   });
   for (const extension of [...taskExtensions, WatchTools, controlPlane]) registry.install(extension);
-  const meteredModels = () => withUsage(currentModels(), budget, dir, now);
   const harness = await Harness.open(storage, {
     models: typeof models === "function" ? meteredModels : meteredModels(),
     registry, now: options.now, setTimer: options.setTimer, settings: () => ({ toolExecution: "sequential", retry: { enabled: false },
