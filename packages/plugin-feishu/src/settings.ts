@@ -23,7 +23,7 @@ export function feishuGuide(redirectUri: string) {
     steps: ["创建企业自建应用并启用机器人，在设置页保存 App ID 和 App Secret。",
       "在权限管理中批量导入权限 JSON，并将下方回调地址登记到安全设置。",
       "为事件和回调选择长连接，订阅 im.message.receive_v1 和 card.action.trigger，发布应用版本。",
-      "运行连接检查，在机器人私聊中发送配对码。", "点击连接飞书账号，完成用户身份授权，再次检查状态。"] };
+      "运行连接检查，在机器人私聊中发送配对码。", "点击连接飞书账号，完成用户身份授权，再次检查状态。已有账号在新增权限并发布版本后，需要重新连接飞书账号。"] };
 }
 
 // Existing installations keep their original files. Other app identities get independent owners and OAuth tokens.
@@ -59,13 +59,13 @@ export function feishuInstance(env: NodeJS.ProcessEnv, dir: string, changed: () 
     }
     const connection = transport.connection();
     const paired = surface.isPaired();
-    const authorized = (await connector.account.status()).connected;
+    const account = await connector.account.status();
     const checks = [{ id: "credentials", label: "应用凭证有效", ok: !credentialError, ...(credentialError && { detail: credentialError }) },
       { id: "connection", label: "长连接已连上", ok: connection === "connected" },
-      { id: "pairing", label: "机器人已配对", ok: paired }, { id: "account", label: "用户账号已授权", ok: authorized }];
+      { id: "pairing", label: "机器人已配对", ok: paired }, { id: "account", label: "用户账号已授权", ok: account.connected, ...(account.detail && { detail: account.detail }) }];
     if (credentialError) return { state: "error", detail: credentialError, checks };
     if (connection !== "connected") return { state: connection === "failed" ? "error" : "connecting", detail: "飞书长连接尚未建立。", checks };
-    return paired && authorized ? { state: "ok", checks } : { state: "needs-config", detail: "请完成机器人配对和用户账号授权。", checks };
+    return paired && account.connected ? { state: "ok", checks } : { state: "needs-config", detail: account.detail ?? "请完成机器人配对和用户账号授权。", checks };
   }
   return { plugin: connector.plugin, surface, account: connector.account, status };
 }

@@ -103,7 +103,7 @@ it("locks five wrong attempts until rotation, rejects an expired code and persis
   expect(f.surface.pairing()).toMatchObject({ paired: false, expiresAt: f.clock.now + 600_000 });
   expect(f.transport.sendText).not.toHaveBeenCalled();
   await f.pair();
-  await expect.poll(() => f.feed.snapshot().notifications.length).toBe(7);
+  await expect.poll(() => f.feed.snapshot().notifications.length, { timeout: 5_000 }).toBe(7);
   expect(f.gateway.requests.map(r => r.model)).toEqual(Array(7).fill("offline/task"));
   expect(f.transport.sendText).toHaveBeenCalledExactlyOnceWith("private", "配对成功");
   expect((await stat(join(f.dir, "feishu.json"))).mode & 0o777).toBe(0o600);

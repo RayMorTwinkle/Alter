@@ -53,3 +53,33 @@
 - 离线：假飞书服务器上测配对、非主人消息只进事件列表、群聊消息不触发主会话、卡片回调拒绝非主人。
 - 提示注入测试集（M3 验收）：在邮件、网页、飞书消息里植入越权指令，统计执行成功的攻击数，目标为 0；同时统计"智能体提出了攻击要求的操作、被审批拦下"的次数，它代表用户被打扰的代价。
 - 真实环境：手机飞书完成一次 对话 → 派任务 → 卡片审批 → 收到回复。
+
+## 修订（Issue #123，飞书用户账号连接器）
+
+连接器通过已连接账号的 `user_access_token` 操作，读取结果继续标记为不可信外部数据。工具效果按 ADR-0021 分级。
+
+| 工具 | 效果 | 用途 |
+|---|---|---|
+| `feishu_chats` | `read` | 分页列出单聊和群聊，可按会话名筛选。当前页筛选后即使为空，也可用返回的 `page_token` 继续。 |
+| `feishu_messages` | `read` | 按会话、时间范围和顺序分页读取消息，默认从新到旧，每页最多 50 条。返回消息 ID、发送者、富文本的纯文本、资源键和话题关联。 |
+| `feishu_search` | `read` | 按关键词搜索用户可见消息，可限定会话、发送者 open_id 和时间。返回命中片段及消息 ID，可据此读取全文。 |
+| `feishu_message` | `read` | 按消息 ID 读取原始内容，保留合并转发子消息，展开可访问的话题回复。 |
+| `feishu_download` | `read` | 按消息 ID、资源键和类型下载图片或文件，保存到插件数据目录的 `downloads/`，返回绝对路径、类型及字节数。 |
+| `feishu_contacts` | `read` | 按姓名、邮箱或手机号搜索可见联系人。省略关键词时列出聊过的人，返回 open_id、姓名及可见的邮箱和部门。 |
+| `feishu_chat_members` | `read` | 分页列出会话内可见的用户成员，返回 open_id 和姓名。 |
+| `feishu_reply` | `write` | 以本人身份回复指定消息，支持在话题中回复。 |
+| `feishu_send` | `write` | 以本人身份向一个会话发文字，或按 open_id 发起私聊。 |
+
+消息时间范围接受 ISO 日期时间或 Unix 毫秒，包含起点、排除终点。原生搜索无权使用或接口不可用时，指定会话可逐页筛选历史消息。未指定会话时只筛选最近活跃的 10 个会话中、时间范围内最新的各 50 条。通讯录搜索不可用或没有命中时，按单聊对方的身份聚合，可按名字匹配。回退结果说明实际来源和覆盖范围。
+
+新增三项**用户身份权限**。OAuth 授权请求与设置页的批量导入 JSON 共用同一份清单。
+
+| 新权限 | 用途 |
+|---|---|
+| `search:message` | 搜索本人可见的消息。[飞书消息搜索接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/search) |
+| `contact:user:search` | 查询通讯录，获取搜索结果公开给当前用户的资料。[飞书官方 CLI 的通讯录搜索实现](https://github.com/larksuite/cli/blob/main/shortcuts/contact/contact_search_user.go) |
+| `im:chat.members:read` | 读取群成员。[飞书群成员接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/chat-members/get) |
+
+消息详情与资源下载沿用已有的 `im:message` 及单聊、群聊用户身份读取权限。发送和回复沿用 `im:message` 与 `im:message.send_as_user`。[消息资源接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-resource/get)、[回复消息接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/reply)
+
+升级时，在飞书开放平台导入设置页的权限 JSON 并发布应用版本，然后在 Alter 重新连接飞书账号。连接状态会提示权限不足或旧凭证未记录授权范围。重新授权后，连接器保存飞书实际授予的权限，刷新令牌时保留或更新这份记录。

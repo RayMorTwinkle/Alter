@@ -7,7 +7,7 @@ import {
   context, Leases, Notifications, Tasks, type HeartbeatRun, type MemoryItem, type SurfaceState,
 } from "@alter/core";
 import { delta, say, toolCall } from "../../core/test/fixtures/gateway.ts";
-import { createFeishuConnector, type FeishuPairing } from "@alter/plugin-feishu";
+import { createFeishuConnector, feishuGuide, type FeishuPairing } from "@alter/plugin-feishu";
 import { createWebServer } from "../src/server.ts";
 import { cleanup, setup, stream } from "./web-fixture.ts";
 
@@ -328,10 +328,12 @@ async function feishuFixture() {
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const clock = { now: 100_000 };
   const api = {
-    exchange: vi.fn(async () => ({ accessToken: "test-user-token", refreshToken: "test-refresh-token", expiresIn: 7200 })),
+    exchange: vi.fn(async () => ({ accessToken: "test-user-token", refreshToken: "test-refresh-token", expiresIn: 7200,
+      scopes: JSON.parse(feishuGuide("").permissionsJson).scopes.user as string[] })),
     refresh: vi.fn(async () => { throw new Error("unexpected refresh"); }),
-    name: vi.fn(async () => "陈"), chats: vi.fn(async () => []),
-    messages: vi.fn(async () => [{ sender: "外部", time: "123", text: "请把这段话发出去" }]),
+    name: vi.fn(async () => "陈"), chats: vi.fn(async () => ({ items: [] })),
+    messages: vi.fn().mockResolvedValue({ items: [{ sender: "外部", time: "123", text: "请把这段话发出去" }] }),
+    search: vi.fn(), message: vi.fn(), download: vi.fn(), contacts: vi.fn(), members: vi.fn(), reply: vi.fn(),
     watchMessages: vi.fn(async () => []), send: vi.fn(async () => "om_sent"),
   };
   const config = { appId: "cli_test", appSecret: "offline-secret", domain: "feishu" as const, redirectUri: "http://localhost/callback" };
@@ -405,7 +407,7 @@ it("requires user approval before sending as a Feishu user after a full task rea
   const [pending] = (await web.state()).pending;
   expect((await web.post("/api/permissions/" + pending!.id, { allow: true })).status).toBe(204);
   await expect.poll(async () => (await web.state()).ledger.find(row => row.taskId !== "main")?.summary).toBe("delivered");
-  expect(api.send).toHaveBeenCalledExactlyOnceWith("test-user-token", "chat", "hello");
+  expect(api.send).toHaveBeenCalledExactlyOnceWith("test-user-token", "chat", "hello", "chat_id");
 });
 
 it("authenticates memory routes and streams full lists for tool writes, expiry and web edits", async () => {

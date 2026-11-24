@@ -5,8 +5,8 @@ import type { FeishuUserConfig } from "./config.ts";
 import type { FeishuUserApi } from "./user-api.ts";
 
 export const scopes = ["offline_access", "im:chat:read", "im:message", "im:message.p2p_msg:get_as_user",
-  "im:message.group_msg:get_as_user", "im:message.send_as_user"];
-type Tokens = { accessToken: string; refreshToken: string; expiresAt: number; refreshAt: number; name?: string };
+  "im:message.group_msg:get_as_user", "im:message.send_as_user", "search:message", "contact:user:search", "im:chat.members:read"];
+type Tokens = { accessToken: string; refreshToken: string; expiresAt: number; refreshAt: number; scopes?: string[]; name?: string };
 
 export function openAccount(config: FeishuUserConfig, dataDir: string, api: FeishuUserApi, now: () => number, changed?: () => void) {
   const path = join(dataDir, "feishu-user.json");
@@ -44,13 +44,13 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
     changed?.();
     clearTimeout(timer);
   }
-  function save(result: Awaited<ReturnType<FeishuUserApi["exchange"]>>, name?: string) {
+  function save(result: Awaited<ReturnType<FeishuUserApi["exchange"]>>, name?: string, previousScopes?: string[]) {
     const { accessToken, refreshToken, expiresIn } = result;
     if (!accessToken || !refreshToken || !expiresIn || !Number.isFinite(expiresIn) || expiresIn <= 0) {
       throw new Error("Incomplete Feishu token response");
     }
     const expiresAt = now() + expiresIn * 1000;
-    const next = { accessToken, refreshToken, expiresAt, refreshAt: expiresAt - Math.min(60_000, expiresIn * 100), name };
+    const next = { accessToken, refreshToken, expiresAt, refreshAt: expiresAt - Math.min(60_000, expiresIn * 100), name, scopes: result.scopes ?? previousScopes };
     mkdirSync(dataDir, { mode: 0o700, recursive: true });
     const temp = path + "." + randomUUID();
     try {
@@ -64,7 +64,7 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
   function current() {
     return ordered(async () => {
       if (tokens && tokens.refreshAt <= now()) {
-        try { save(await api.refresh(tokens.refreshToken), tokens.name); }
+        try { save(await api.refresh(tokens.refreshToken), tokens.name, tokens.scopes); }
         catch { clear(); }
       }
       return tokens;
@@ -79,7 +79,14 @@ export function openAccount(config: FeishuUserConfig, dataDir: string, api: Feis
     async accessToken() { return (await current())?.accessToken; },
     async status() {
       const value = await current();
-      return value ? { connected: true, name: value.name } : { connected: false };
+      if (!value) return { connected: false };
+      const granted = value.scopes;
+      if (!Array.isArray(granted)) return { connected: false, name: value.name,
+        detail: "未记录用户授权的权限范围，请重新连接飞书账号。" };
+      const missingScopes = scopes.filter(scope => !granted.includes(scope));
+      if (missingScopes.length) return { connected: false, name: value.name, missingScopes,
+        detail: `用户授权缺少权限 ${missingScopes.join("、")}，请重新连接飞书账号。` };
+      return { connected: true, name: value.name };
     },
     start(redirectUri = config.redirectUri) {
       const at = now();
