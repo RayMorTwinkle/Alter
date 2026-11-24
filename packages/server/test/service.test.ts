@@ -65,13 +65,13 @@ it.each([[true, false], [false, true], [true, true]])("writes a reboot-safe plis
   expect(xml).toContain("<key>KeepAlive</key>" + (keepAlive ? "<dict><key>SuccessfulExit</key><false/></dict>" : "<false/>"));
   expect(xml).toContain("<key>AbandonProcessGroup</key><true/>");
   expect(xml).toContain("<key>ThrottleInterval</key><integer>10</integer>");
-  const log = join(f.dir, "logs/server.log");
+  const log = join(f.dir, "Library/Logs/Alter/server.log");
   for (const key of ["StandardOutPath", "StandardErrorPath"]) expect(xml).toContain(`<key>${key}</key><string>${log}</string>`);
 });
 
 it("loads the agent, skips an unchanged job, and restarts unmanaged after removing it", async () => {
   const f = await fixture(true);
-  const log = join(f.dir, "logs/server.log");
+  const log = join(f.dir, "Library/Logs/Alter/server.log");
   const service = openService(f.dir, f.options);
   await service.update({ autostart: true }).apply();
   // Exercise the actual shell branches with the fake executables and an already exited PID.
@@ -107,7 +107,7 @@ it("loads the agent, skips an unchanged job, and restarts unmanaged after removi
 
 it("falls back to an unmanaged start and reports it when launchd cannot keep Alter listening", async () => {
   const f = await fixture(false, false);
-  const log = join(f.dir, "logs/server.log");
+  const log = join(f.dir, "Library/Logs/Alter/server.log");
   await openService(f.dir, f.options).update({ autostart: true, keepAlive: true }).apply();
   const [sh, args, opts] = f.spawn.mock.calls.at(-1)!;
   const helperArgs = [...args];

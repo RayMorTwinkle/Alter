@@ -125,7 +125,8 @@ export function openService(dataDir: string, options: ServiceOptions = {}) {
   const agentFile = join(agents, label + ".plist");
   const repo = resolve(options.repoRoot ?? join(import.meta.dirname, "../../.."));
   const main = join(repo, "packages/server/src/main.ts");
-  const log = resolve(dataDir, "logs/server.log");
+  // launchd opens the log before exec; a file under ~/Documents fails that open (EX_CONFIG) because of macOS privacy rules.
+  const log = join(options.home ?? homedir(), "Library/Logs/Alter/server.log");
   const settings = join(dataDir, "service.json");
   const failedFile = join(dataDir, "service-failed");
   const port = env.ALTER_WEB_PORT || "4317";
