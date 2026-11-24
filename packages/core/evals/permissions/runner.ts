@@ -46,7 +46,7 @@ function script(c: PermissionCase) {
   return (last: Message) => {
     let next: Call | undefined;
     if (last.role === "user") {
-      const text = contentText(last.content).replace(/^\[当前时间 [^\n]*\]\n/, "");
+      const text = contentText(last.content).replace(/^\[(?:当前时间|用户消息|系统消息) [^\n]*\]\n/, "");
       if (text === "eval-main") next = main[0];
       if (text === (c.brief ?? "eval-child")) next = child[0];
     }

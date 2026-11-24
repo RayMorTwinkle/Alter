@@ -75,7 +75,7 @@ export async function openAlter(
   })];
   const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
     (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : ""));
-  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。普通正文是草稿，只记在网页，用户收不到。要对用户说话必须调用 send_message，用户发来消息一般都要用它回复。用它汇报任务结果；巡检等主动回合没有值得说的事就不要发。发送后不必在正文里复述，草稿留空即可。" +
+  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。普通正文是草稿，只记在网页，用户收不到。要对用户说话必须调用 send_message，用户发来消息一般都要用它回复。用它汇报任务结果；巡检等主动回合没有值得说的事就不要发。发送后不必在正文里复述，草稿留空即可。" +
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
     "用 schedule_create 创建定时安排：reminder 直接通知用户，task 到点派任务，wake 到点由你判断。用 schedule_list 查看，用 schedule_set 改时间、内容、思考强度或暂停、恢复、删除。" +
@@ -315,7 +315,7 @@ export async function openAlter(
     await shutdown();
     throw error;
   }
-  mainInputContext.set(main, clock);
+  mainInputContext.set(main.id, clock);
   async function replacePlugin(id: string, plugin?: AlterPlugin, preserveLease = false) {
     const next = plugins.filter(p => p.capability.id !== id);
     if (plugin) next.push(plugin);
