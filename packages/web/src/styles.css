@@ -507,6 +507,21 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .ext-caps ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .ext-caps code, .ext-code code { font-size: 12px; }
 .effect { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--fill); color: var(--muted); margin-right: 4px; }
+.adapter { background: var(--paper); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 8px; margin-top: 8px; }
+.adapter header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 14px; }
+.adapter header code { font-size: 12px; color: var(--muted); }
+.adapter-state { margin-left: auto; font-size: 12px; color: var(--muted); }
+.adapter-state.error { color: var(--accent); }
+.adapter-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.adapter-tools li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.adapter-tools select { flex: none; font-size: 12px; }
+.adapter-tools code { flex: none; font-size: 12px; }
+.adapter-tools span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.adapter .form-actions { align-items: center; }
+.toggle-inline { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; margin-right: auto; }
+.adapter-add { margin-top: 10px; }
+.adapter-add > summary { cursor: pointer; font-size: 14px; color: var(--ink-2); }
+.adapter-form { display: grid; gap: 8px; margin-top: 8px; }
 .effect.risky { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .ext-code { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--muted); }
 .ext-code code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

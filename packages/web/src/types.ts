@@ -324,3 +324,6 @@ export type FeedbackStats = FeedbackCounts & {
   impacts: { changeId: string; metric: string; before: number | null; after: number | null; beforeSamples: number; afterSamples: number }[];
   weekly: FeedbackWeek[];
 };
+
+export type { AdapterConfig, AdapterCreate, AdapterEffect, AdapterKind, AdapterPatch, AdapterStatus, AdapterTool, AdapterToolView, AdapterView,
+  CliConfig, HttpConfig, McpConfig } from "../../server/src/adapters/types.ts";

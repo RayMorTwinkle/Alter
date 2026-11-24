@@ -1,4 +1,4 @@
-# Web API 契约（v1.23）
+# Web API 契约（v1.24）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -485,3 +485,41 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 `GET /api/state` 和 `timeline` SSE 共用条目 ID。`thinking.text` 为模型提供的可读思考内容，`assistant.text` 为普通正文草稿，`tool.text` 与 `tool.tool` 均为工具名。收到结果后，服务端用同一 ID 更新工具条目，成功执行的 `send_message` 另产生一条 `message`，其 `text` 为完整消息。巡检时间线仍仅显示「巡检调用 …」提示，发送的内容可在通知记录中查看。
 
 网页、飞书和 CLI 用户触发的回合结算后，缺少 `send_message` 调用会写入一条 `kind: "unreplied"` 的主会话账本记录。其 `refs` 引用原始输入 ID，`GET /api/stats` 的 `unreplied` 返回窗口内的记录数。计数从启用本版本后提交的消息开始。
+
+## v1.24 工具转接器（#122）
+
+网页使用现有会话 Cookie。所有写请求带 `Content-Type: application/json`。
+
+| 方法与路径 | 请求体 | 成功响应 |
+|---|---|---|
+| `GET /api/adapters` | — | `200 AdapterView[]` |
+| `POST /api/adapters` | `{ id, kind, name, config, secrets? }` | `201 AdapterView`，默认启用，已尝试发现工具 |
+| `PATCH /api/adapters/:id` | `{ name?, enabled?, config?, effects?, secrets? }` | `200 AdapterView`，立即更新注册 |
+| `POST /api/adapters/:id/refresh` | `{}` | `200 AdapterView`，启用时重新发现 |
+| `DELETE /api/adapters/:id` | 可省略 | `204`，清理注册、连接、重连定时器和该项的密钥 |
+
+`id` 为 1–48 个小写英文字母、数字或短横线，跨种类唯一。配置字段无效返回 `400`，未登录返回 `401`，未知 ID 返回 `404`，ID 冲突返回 `409`。连接或发现失败时，配置仍保存，响应的 `status.state` 为 `error`，原因见 `status.detail`。失败或停用期间保留最近一次成功发现的快照，停止提供对应工具。
+
+```ts
+type Effect = "read" | "write" | "irreversible";
+type Strings = Record<string, string>;
+type Definition =
+  | { kind: "mcp"; config: { transport: "stdio"; command: string; args?: string[]; env?: Strings }
+                         | { transport: "http"; url: string; headers?: Strings } }
+  | { kind: "cli"; config: { command: string; args?: string[]; env?: Strings; cwd?: string; help?: string; timeoutMs?: number } }
+  | { kind: "http"; config: { spec: string | Record<string, unknown>; baseUrl?: string; headers?: Strings } };
+type AdapterView = Definition & {
+  id: string; name: string; enabled: boolean; capabilityId: string;
+  status: { state: "connecting" | "ok" | "error" | "off"; detail?: string };
+  effects: Record<string, Effect>; secretNames: string[];
+  tools: { name: string; description: string; inputSchema: Record<string, unknown>; defaultEffect: Effect; effect: Effect }[];
+};
+```
+
+`config` 和 `effects` 按字段整体替换。覆写表用 `tools[].name` 作键，省略某个键即可恢复该工具的默认效果。完整调用名为 `${capabilityId}_${name}`，最长 64 个字符。`secrets` 按名字增量更新，空字符串删除，名字支持字母、数字、短横线和下划线。参数、环境变量、标头或 URL 可以包含 `{{secret:NAME}}`。视图只提供配置模板和已设置的密钥名。
+
+- **MCP** 使用 stdio 或 Streamable HTTP。旧服务在 HTTP 协议协商失败时可回退至 SSE。分页发现工具并保留原始输入 schema，显式 `readOnlyHint: true` 默认为 `read`，其余为 `write`。断线自动重连。文本按换行拼接，图片透传，`isError` 进入工具结果。
+- **CLI** 提供 `run({args: string[], stdin?: string})`，默认 `write`。固定参数位于调用参数之前，缺少帮助文本时在固定参数后追加 `--help`。帮助最多 8000 字符。默认超时 120000 毫秒，可设为 1–600000 毫秒。返回 JSON 文本 `{code, signal, output}`，其中 `output` 是 stdout 与 stderr 的合并内容，最多 20000 字符；非零退出码标记为工具错误。
+- **HTTP** 接受 OpenAPI 3 JSON 文档 URL、JSON 对象或内联 JSON 字符串。默认用首个 server URL，远程文档的相对 URL 按文档地址解析。配置的 headers 用于获取文档和执行调用。工具参数平铺 path、query、header 参数，JSON 请求体放在 `body`，同名参数用位置前缀区分。支持文档内引用。GET 和 HEAD 默认 `read`，其余默认 `write`。工具返回 JSON 文本 `{status, body}`，正文保留为字符串，最多 20000 字符；HTTP 错误保留状态码和正文。
+
+通用插件列表 `GET /api/plugins` 同时展示转接器。连接状态和启停变化也更新现有 `plugins` SSE。转接器管理页可通过 `GET /api/adapters` 重新读取快照。
