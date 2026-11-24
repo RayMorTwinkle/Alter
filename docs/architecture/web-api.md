@@ -166,6 +166,7 @@ type TranscriptItem =
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
 | `GET` / `PATCH` | `/api/settings` | `Settings`，可分别修改审批模式、巡检与上下文压缩阈值，见 v1.15 |
+| `GET` / `PUT` | `/api/service` | 读取或修改 macOS 后台服务设置，见下文 |
 | `GET` | `/api/approvals/stats` | `{ modelAllowed, askedUser, userApproved, userDenied }`。依次为模型直接放行、转问用户、用户批准和用户拒绝的次数 |
 | `GET` | `/api/stats?range=7d` | `Stats`（v1.11）。需要登录，默认 `7d`。支持 `day`、`7d`、`30d`、`all`；非法、空值或重复参数返回 `400` |
 | `GET` | `/api/heartbeat` | 返回巡检开关、下次时间、自适应间隔、采纳率、当前需求信号及最近 50 条巡检记录，见下文 |
@@ -201,6 +202,12 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 记忆接口使用登录会话。v1.19 保留旧 PATCH 字段 text、due 和 status。旧列表可以用 `?memory=legacy` 读取。现有浏览器页面发出的 `Sec-Fetch-Dest: empty`、`Accept: */*` 请求也使用旧列表。新客户端可显式请求 `?memory=entries`。读取时已过期的 active 目标转为 pending。条目 ID 为字符串，时间戳为 Unix 毫秒。后台整理允许通过 `ALTER_MEMORY_CONSOLIDATION_TURNS` 选择 200–300 轮，默认 250 轮，用户空闲满 30 分钟触发。
 
 `timeline` 返回最近 200 条；更早的用 `GET /api/state?before=<id>` 分页（v1 可不实现）。
+
+## macOS 后台服务（#110）
+
+- `GET /api/service` 返回 `{ supported, autostart, keepAlive, preventSleep, managed }`，字段均为布尔值。`supported` 表示当前平台为 macOS。`managed` 表示当前进程由 launchd 以 `top.raymor.alter` 标签启动。
+- `PUT /api/service` 接受 `autostart`（用户登录时启动）、`keepAlive`（异常退出后重启）、`preventSleep`（阻止系统因空闲而睡眠）的任意子集。三个开关默认关闭，保存在数据目录的 `service.json` 中。省略的字段保留原值。未知字段、非布尔字段或非对象请求体返回 `400`，在非 macOS 平台提交有效设置返回 `409`。
+- 成功写入返回 `200`，响应结构与 GET 相同。`managed` 描述发出响应的进程。需要切换时，服务在响应发出后重启，客户端重连后可再次 GET 确认。关闭登录启动和异常重启两个开关会移除 LaunchAgent，切回普通进程。单独修改 `preventSleep` 会即时启停 `caffeinate`，无需重连。
 
 ## 定时任务（v1.13）
 

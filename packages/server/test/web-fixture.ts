@@ -10,13 +10,14 @@ import { createCalendarPlugin } from "@alter/plugin-calendar";
 import type { createFeishuConnector, FeishuPairing } from "@alter/plugin-feishu";
 import { fakeGateway, say } from "../../core/test/fixtures/gateway.ts";
 import type { PluginManager } from "../src/plugin-manager.ts";
+import type { ServiceOptions } from "../src/service.ts";
 import { createWebServer } from "../src/server.ts";
 
 export const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
 
 export async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) => say(res, "ok"), withCalendar = false, feishu?: { pairing(): FeishuPairing; connector?: ReturnType<typeof createFeishuConnector> }, now = Date.now,
-  makePlugins?: (app: Awaited<ReturnType<typeof openAlter>>, dir: string) => PluginManager) {
+  makePlugins?: (app: Awaited<ReturnType<typeof openAlter>>, dir: string) => PluginManager, service?: ServiceOptions) {
   const gateway = await fakeGateway(route);
   cleanup.push(gateway.close);
   const dir = await mkdtemp(join(tmpdir(), "alter-web-"));
@@ -34,7 +35,7 @@ export async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) 
     cleanup.push(app.close);
     const manager = makePlugins?.(app, dir);
     if (manager) { cleanup.push(manager.close); await manager.start(); }
-    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, plugins: manager, calendar, feishu, feishuAccount: connector?.account });
+    const web = await createWebServer(app, { password: "offline secret", dist, dataDir: dir, plugins: manager, calendar, feishu, feishuAccount: connector?.account, service });
     cleanup.push(web.close);
     web.server.listen(0, "127.0.0.1");
     await once(web.server, "listening");
@@ -54,7 +55,7 @@ export async function setup(route: Parameters<typeof fakeGateway>[0] = (_, res) 
     }
     const read = (path: string) => fetch(base + path, { headers: { cookie } });
     return {
-      app, post, read, login, base, dist, dir, sessionCookie: () => cookie,
+      app, post, read, login, base, dist, dir, server: web.server, sessionCookie: () => cookie,
       async close() { await web.close(); await manager?.close(); await app.close(); },
       async state(): Promise<SurfaceState> { return (await read("/api/state")).json(); },
     };

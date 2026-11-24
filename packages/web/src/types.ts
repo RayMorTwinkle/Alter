@@ -20,6 +20,8 @@ export type ModelCapabilities = Omit<Required<ModelOverrides>, "thinkingLevelMap
   id: string; thinkingLevelMap: NonNullable<ModelOverrides["thinkingLevelMap"]> | null;
   sources: Record<keyof ModelOverrides, "catalog" | "manual" | "default">;
 };
+export type ServiceState = { supported: boolean; autostart: boolean; keepAlive: boolean; preventSleep: boolean; managed: boolean };
+export type ServiceFlag = "autostart" | "keepAlive" | "preventSleep";
 export type Settings = { compactAtTokens: number; approvalModel: "on" | "off"; heartbeat: HeartbeatSettings };
 export type SettingsPatch = { compactAtTokens?: number; approvalModel?: Settings["approvalModel"]; heartbeat?: Partial<HeartbeatSettings> };
 export type ApprovalStats = { modelAllowed: number; askedUser: number; userApproved: number; userDenied: number };
