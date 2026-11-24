@@ -147,8 +147,10 @@ SMTP 接收、Sent 归档和本地事务无法原子提交。服务器延迟生�
 
 ### ego 浏览器插件（#5）
 
-Web 服务默认注册 `browser`，设置 `ALTER_BROWSER=off` 可关闭。主会话通过派单使用它。每个任务会话使用名为 `Alter <conversationId>` 的 ego TaskSpace 和页面 `p1`。`alter.browser-space` 文档保存空间编号。若空间已被关闭，下次操作会重新创建。
-读取快照、滚动和关闭为 `read`。打开网址、点击、填写和按键为 `write`，由审批模型核对权限说明。
+Web 服务默认注册 `browser`，设置 `ALTER_BROWSER=off` 可关闭。主会话可通过 `enable_tool` 启用它，后台任务也可直接使用。每个会话使用名为 `Alter <conversationId>` 的 ego TaskSpace。`alter.browser-space` 文档保存空间编号和选中的标签页（默认 `p1`）。若空间已被关闭，下次页面操作会重新创建。
+
+- `read` 动作包括 `browser_open`、`browser_snapshot`、`browser_scroll`、`browser_screenshot`、`browser_handoff`、`browser_close` 和 `browser_guide`。
+- `write` 动作包括 `browser_click`、`browser_fill`、`browser_press` 和 `browser_run`。多标签、文件传输或页面内 JS 等操作先读 `browser_guide`，再用 `browser_run` 编写脚本。脚本可直接使用 `task` 和 `page`，默认超时 120 秒，可通过 `timeoutMs` 调整至最多 600 秒。
 
 页面快照和错误消息均经过转义，默认保留前 12,000 个字符，带浏览器来源与不可信标记。`browser_close` 返回关闭前的最后一个视口。后台任务结束或中止时，宿主调用插件可选的 `onTaskEnd` 回收空间。进程正常停止时，插件也会尝试关闭仍在使用的空间。真机冒烟入口为 `pnpm -C packages/plugin-browser live`。
 

@@ -1,19 +1,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import { context, conversationDoc, defineTool, reply, schema, type AlterPlugin, type ToolRegistration } from "@alter/core";
-import { actions, clip, createSpace, describePage, finishSpace, runEgo, view, type EgoRunner } from "./ego.ts";
+import { actions, clip, createSpace, describePage, finishSpace, readGuide, runEgo, view, type EgoRunner } from "./ego.ts";
 
 export type { EgoRunner } from "./ego.ts";
 
-const { arr, int, lit, obj, oneOf, opt, str, union } = schema;
-const nonempty = str({ minLength: 1 });
-const condition = union([
-  obj({ kind: lit("selector"), selector: nonempty }),
-  obj({ kind: lit("function"), expression: nonempty }),
-  obj({ kind: lit("networkidle") }),
-]);
-const option = union([str(), obj({ value: str() }), obj({ label: str() }), obj({ index: int({ minimum: 0 }) })]);
+const { int, obj, oneOf, opt, str } = schema;
 const target = str({ pattern: "^(@[0-9]+|text=[\\s\\S]+)$", description: "A viewport snapshot ref (@21) or text=..." });
 const Space = conversationDoc<{ id: number | null; selected?: string }>("browser-space", () => ({ id: null }));
 type Execute = ToolRegistration["execute"];
@@ -47,7 +40,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
     finally { if (pending.get(name) === work) pending.delete(name); }
   }
 
-  async function operate(api: Api, ctx: Ctx, build?: () => string, handoffTimeoutMs?: number) {
+  async function operate(api: Api, ctx: Ctx, build?: () => string, options: { timeoutMs?: number; handoffTimeoutMs?: number } = {}) {
     const name = `Alter ${api.conversationId}`;
     const save = (id: number | null, selected = "p1") => api.commit(async tx => {
       Object.assign(await tx.doc(Space, api.conversationId), { id, selected });
@@ -61,7 +54,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
         if (id !== null) {
           opened.set(name, id);
           result = await view(runner, name, id, action ?? "", snapshotLimit, {
-            close: action === undefined, label: selected, handoffTimeoutMs, signal: ctx.abortSignal,
+            close: action === undefined, label: selected, ...options, signal: ctx.abortSignal,
           });
         }
         if (action === undefined) {
@@ -75,7 +68,7 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
           await save(id);
           stored = id;
           selected = "p1";
-          result = await view(runner, name, id, action, snapshotLimit, { handoffTimeoutMs, signal: ctx.abortSignal });
+          result = await view(runner, name, id, action, snapshotLimit, { ...options, signal: ctx.abortSignal });
           if (!result) throw new Error("New browser space disappeared");
         }
         if (id !== stored || selected !== result.selected) {
@@ -108,11 +101,8 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
       { name: "open", effect: "read" }, { name: "snapshot", effect: "read" }, { name: "scroll", effect: "read" },
       { name: "click", effect: "write" }, { name: "fill", effect: "write" },
       { name: "press", effect: "write" }, { name: "close", effect: "read" },
-      { name: "eval", effect: "write" }, { name: "fetch", effect: "write" },
-      { name: "screenshot", effect: "read" }, { name: "wait", effect: "read" }, { name: "handoff", effect: "read" },
-      { name: "select", effect: "write" }, { name: "upload", effect: "write" }, { name: "dialog", effect: "write" },
-      { name: "tabs", effect: "read" }, { name: "switch", effect: "read" }, { name: "adopt", effect: "read" },
-      { name: "back", effect: "read" }, { name: "forward", effect: "read" },
+      { name: "screenshot", effect: "read" }, { name: "handoff", effect: "read" },
+      { name: "run", effect: "write" }, { name: "guide", effect: "read" },
     ] },
     async describe({ tool, arguments: args }, state) {
       const name = `Alter ${state.conversationId}`;
@@ -125,56 +115,33 @@ export function createBrowserPlugin({ runner = runEgo, snapshotLimit = 12_000 }:
       });
     },
     tools: [
-      defineTool({ name: "browser_open", description: "Navigate the selected tab to an HTTP(S) URL and read the viewport. Use fetch for an API response without navigation.", parameters: obj({ url: str() }),
+      defineTool({ name: "browser_open", description: "Navigate the selected tab to an HTTP(S) URL and read the viewport.", parameters: obj({ url: str() }),
         execute: ({ url }, api, ctx) => operate(api, ctx, () => actions.open(url)) }),
       defineTool({ name: "browser_snapshot", description: "Read text and element refs in the current viewport before choosing a target. Use screenshot for visual layout.", parameters: obj({}), replay: "safe",
         execute: (_, api, ctx) => operate(api, ctx, () => "") }),
       defineTool({ name: "browser_scroll", description: "Move up or down one viewport and read the newly visible content and refs.", parameters: obj({ direction: oneOf(["up", "down"]) }),
         execute: ({ direction }, api, ctx) => operate(api, ctx, () => actions.scroll(direction)) }),
-      defineTool({ name: "browser_click", description: "Activate a visible link or control using its snapshot ref or text. Use select for a native dropdown.", parameters: obj({ target }),
+      defineTool({ name: "browser_click", description: "Activate a visible link or control using its snapshot ref or text.", parameters: obj({ target }),
         execute: ({ target }, api, ctx) => operate(api, ctx, () => actions.click(target)) }),
       defineTool({ name: "browser_fill", description: "Set a text input by ref or text. Use press to send a key to the focused element.", parameters: obj({ target, text: str() }),
         execute: ({ target, text }, api, ctx) => operate(api, ctx, () => actions.fill(target, text)) }),
       defineTool({ name: "browser_press", description: "Send a key or shortcut to the focused element, for example Enter to submit a form.", parameters: obj({ key: str({ minLength: 1 }) }),
         execute: ({ key }, api, ctx) => operate(api, ctx, () => actions.press(key)) }),
-      defineTool({ name: "browser_close", description: "Finish the task’s browser space and return the last viewport. Use switch to continue in another managed tab.", parameters: obj({}), replay: "safe",
+      defineTool({ name: "browser_close", description: "Finish the task’s browser space and return the last viewport.", parameters: obj({}), replay: "safe",
         execute: (_, api, ctx) => operate(api, ctx) }),
-      defineTool({ name: "browser_eval", description: "Run a JavaScript expression in the selected page and return its JSON value. Use for DOM data a snapshot cannot express.",
-        parameters: obj({ expression: nonempty }), execute: ({ expression }, api, ctx) => operate(api, ctx, () => actions.eval(expression)) }),
-      defineTool({ name: "browser_fetch", description: "Request an API from the selected page, using its session and CORS rules. Returns status, headers and body without navigating.",
-        parameters: obj({ url: nonempty, method: opt(nonempty), headers: opt(schema.map(str())), body: opt(str()),
-          credentials: opt(oneOf(["omit", "same-origin", "include"])) }),
-        execute: ({ url, method, headers, body, credentials }, api, ctx) => operate(api, ctx, () => actions.fetch(url, { method, headers, body, credentials })) }),
       defineTool({ name: "browser_screenshot", description: "Return a viewport PNG to inspect canvas, layout or other visual content. Use snapshot for element refs.",
         parameters: obj({}), replay: "safe", execute: (_, api, ctx) => screenshot(api, ctx) }),
-      defineTool({ name: "browser_wait", description: "Wait for a visible selector, a truthy page JavaScript expression, or network idle, then read the viewport. Use when a change is asynchronous.",
-        parameters: obj({ condition, timeoutMs: opt(int({ minimum: 1, maximum: 60000 })) }),
-        execute: ({ condition, timeoutMs = 10000 }, api, ctx) => operate(api, ctx, () => actions.wait(condition, timeoutMs)) }),
       defineTool({ name: "browser_handoff", description: "Give the user browser control for login, CAPTCHA or another manual step. Wait until the user returns control. Default timeout is five minutes.",
         parameters: obj({ timeoutMs: opt(int({ minimum: 1, maximum: 1800000 })) }),
-        execute: ({ timeoutMs = 300000 }, api, ctx) => operate(api, ctx, () => actions.handoff(timeoutMs), timeoutMs) }),
-      defineTool({ name: "browser_select", description: "Choose options in a native select by value, visible label or zero-based index. An array selects multiple options and [] clears the selection.",
-        parameters: obj({ target: nonempty, options: union([option, arr(option)]) }),
-        execute: ({ target, options }, api, ctx) => operate(api, ctx, () => actions.select(target, options)) }),
-      defineTool({ name: "browser_upload", description: "Attach local files to an existing file input by selector or ref. The page may upload them immediately.",
-        parameters: obj({ target: nonempty, paths: arr(nonempty, { minItems: 1 }) }),
-        execute: ({ target, paths }, api, ctx) => operate(api, ctx, () => {
-          if (!paths.every(path => isAbsolute(path))) throw new Error("Expected absolute file paths");
-          return actions.upload(target, paths);
-        }) }),
-      defineTool({ name: "browser_dialog", description: "Inspect or resolve a pending JavaScript alert, confirm or prompt. Supply promptText when accepting a prompt. Use click for dialogs rendered in the DOM.",
-        parameters: obj({ action: oneOf(["inspect", "accept", "dismiss"]), promptText: opt(str()) }),
-        execute: ({ action, promptText }, api, ctx) => operate(api, ctx, () => actions.dialog(action, promptText)) }),
-      defineTool({ name: "browser_tabs", description: "List managed and unmanaged tabs in this task space with labels, target IDs and the selected page. Use before switching or adopting.",
-        parameters: obj({}), replay: "safe", execute: (_, api, ctx) => operate(api, ctx, () => actions.tabs) }),
-      defineTool({ name: "browser_switch", description: "Select an already managed tab by its browser_tabs label for subsequent tools and read its viewport.",
-        parameters: obj({ label: nonempty }), execute: ({ label }, api, ctx) => operate(api, ctx, () => actions.switch(label)) }),
-      defineTool({ name: "browser_adopt", description: "Take control of an existing unmanaged tab in this task space using its browser_tabs targetId and select it for subsequent tools.",
-        parameters: obj({ targetId: nonempty }), execute: ({ targetId }, api, ctx) => operate(api, ctx, () => actions.adopt(targetId)) }),
-      defineTool({ name: "browser_back", description: "Navigate one entry back in the selected tab's history and read the viewport.",
-        parameters: obj({}), execute: (_, api, ctx) => operate(api, ctx, () => actions.back) }),
-      defineTool({ name: "browser_forward", description: "Navigate one entry forward after going back in the selected tab and read the viewport.",
-        parameters: obj({}), execute: (_, api, ctx) => operate(api, ctx, () => actions.forward) }),
+        execute: ({ timeoutMs = 300000 }, api, ctx) => operate(api, ctx, () => actions.handoff(timeoutMs), { handoffTimeoutMs: timeoutMs }) }),
+      defineTool({ name: "browser_run", description: "Call browser_guide first for the API. Run an async Node.js script with task (current space) and page (selected tab) for multi-tab work, downloads, uploads, iframes, page JS, in-page fetch or condition waits. Return a JSON value or use console.log.",
+        parameters: obj({ script: str(), timeoutMs: opt(int({ minimum: 1, maximum: 600_000 })) }),
+        execute: ({ script, timeoutMs = 120_000 }, api, ctx) => operate(api, ctx, () => actions.run(script), { timeoutMs }) }),
+      defineTool({ name: "browser_guide", description: "Read the installed ego-browser API guide before using browser_run.",
+        parameters: obj({}), replay: "safe", execute: async () => {
+          try { return reply(await readGuide(runner)); }
+          catch (error) { return reply(String(error), true); }
+        } }),
     ],
     async onTaskEnd(conversation) {
       const name = `Alter ${conversation.id}`;
