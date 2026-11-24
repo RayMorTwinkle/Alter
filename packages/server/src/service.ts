@@ -18,6 +18,8 @@ export type ServiceOptions = {
   repoRoot?: string;
   execPath?: string;
   launchctlPath?: string;
+  lsofPath?: string;
+  startSeconds?: number;
   spawn?: (command: string, args: string[], options: SpawnOptions) => ReturnType<typeof spawnChild>;
   shutdown?: () => void;
 };
@@ -83,6 +85,10 @@ node=$3
 main=$4
 log=$5
 launchctl=$6
+port=$7
+failed=$8
+lsof=$9
+seconds=\${10}
 domain=gui/$(/usr/bin/id -u)
 job="$domain/${label}"
 exec >>"$log" 2>&1 || exit 1
@@ -94,6 +100,19 @@ done
 "$launchctl" bootout "$job" 2>/dev/null || :
 if [ -f "$plist" ]; then
   "$launchctl" bootstrap "$domain" "$plist" && "$launchctl" kickstart "$job"
+  # A job launchd cannot run (for example macOS denying it the Documents folder) must not leave Alter down.
+  i=0
+  until "$lsof" -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
+    i=$((i+1))
+    if [ "$i" -ge "$seconds" ]; then
+      "$launchctl" bootout "$job" 2>/dev/null || :
+      /bin/rm -f "$plist"
+      printf '%s\n' "$node" >"$failed"
+      /usr/bin/nohup "$node" "$main" >>"$log" 2>&1 &
+      exit 0
+    fi
+    /bin/sleep 1
+  done
 else
   /usr/bin/nohup "$node" "$main" >>"$log" 2>&1 &
 fi`;
@@ -108,17 +127,27 @@ export function openService(dataDir: string, options: ServiceOptions = {}) {
   const main = join(repo, "packages/server/src/main.ts");
   const log = resolve(dataDir, "logs/server.log");
   const settings = join(dataDir, "service.json");
+  const failedFile = join(dataDir, "service-failed");
+  const port = env.ALTER_WEB_PORT || "4317";
   const spawn = options.spawn ?? spawnChild;
   const shutdown = options.shutdown ?? (() => process.kill(process.pid, "SIGTERM"));
   const saved = optionalFile(settings);
   const initial: unknown = saved === undefined ? {} : JSON.parse(saved);
   if (!validPatch(initial)) throw new Error("Invalid service.json");
   let flags = { ...defaults, ...initial };
+  // The handoff helper fell back to an unmanaged start; reflect that instead of claiming the switches work.
+  const failedNode = !managed ? optionalFile(failedFile)?.trim() : undefined;
+  let failed: string | undefined = failedNode || undefined;
+  if (failedNode !== undefined) {
+    rmSync(failedFile, { force: true });
+    flags = { ...flags, autostart: false, keepAlive: false };
+    replaceFile(settings, JSON.stringify(flags));
+  }
   let caffeinate: ReturnType<typeof spawnChild> | undefined;
   let closed = false;
   let switching = false;
   let reload = false;
-  const state = () => ({ supported, ...flags, managed });
+  const state = () => ({ supported, ...flags, managed, ...(failed && { failedNode: failed }) });
 
   function stopCaffeinate() {
     caffeinate?.kill();
@@ -157,7 +186,8 @@ export function openService(dataDir: string, options: ServiceOptions = {}) {
     switching = true;
     try {
       const helper = spawn("/bin/sh", ["-c", handoff, label, String(process.pid), agentFile, node, main, log,
-        options.launchctlPath ?? "/bin/launchctl"],
+        options.launchctlPath ?? "/bin/launchctl", port, failedFile,
+        options.lsofPath ?? "/usr/sbin/lsof", String(options.startSeconds ?? 30)],
         { detached: true, stdio: "ignore", cwd: repo, env: helperEnv });
       await once(helper, "spawn");
       helper.unref();
@@ -172,6 +202,7 @@ export function openService(dataDir: string, options: ServiceOptions = {}) {
       if (!validPatch(patch)) throw new HttpError(400, "Expected boolean autostart, keepAlive or preventSleep");
       if (!supported) throw new HttpError(409, "Background service settings require macOS");
       const next = { ...flags, ...patch };
+      if ("autostart" in patch || "keepAlive" in patch) failed = undefined;
       replaceFile(settings, JSON.stringify(next));
       flags = next;
       return { state: state(), async apply() {

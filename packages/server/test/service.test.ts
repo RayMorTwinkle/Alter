@@ -11,7 +11,7 @@ import { openService, type ServiceOptions } from "../src/service.ts";
 import { cleanup, setup } from "./web-fixture.ts";
 
 const label = "top.raymor.alter";
-async function fixture(managed = false) {
+async function fixture(managed = false, listening = true) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "alter-service-")));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const repo = join(dir, "repo & 'code'");
@@ -25,6 +25,8 @@ async function fixture(managed = false) {
   // A failing bootout also exercises the first install, when no job was previously loaded.
   const launchctlPath = join(dir, "fake launchctl");
   await writeFile(launchctlPath, '#!/bin/sh\necho "$@"\n[ "$1" != bootout ]\n', { mode: 0o700 });
+  const lsofPath = join(dir, "fake lsof");
+  await writeFile(lsofPath, `#!/bin/sh\nexit ${listening ? 0 : 1}\n`, { mode: 0o700 });
   const children: ChildProcess[] = [];
   const spawn = vi.fn((_cmd: string, _args: string[], _opts: SpawnOptions) => {
     const child = new ChildProcess();
@@ -36,7 +38,7 @@ async function fixture(managed = false) {
   });
   const shutdown = vi.fn();
   const options: ServiceOptions = {
-    platform: "darwin", home: dir, repoRoot: repo, execPath, launchctlPath, spawn, shutdown,
+    platform: "darwin", home: dir, repoRoot: repo, execPath, launchctlPath, lsofPath, startSeconds: 1, spawn, shutdown,
     env: { PATH: "/usr/bin:" + dirname(execPath) + ":/bin", ALTER_WEB_HOST: "a<&>\"'", ALTER_WEB_PORT: "9876",
       ALTER_DATA_DIR: dir, ALTER_WEB_PASSWORD: "secret-marker", ALTER_LLM_API_KEY: "secret-marker",
       XPC_SERVICE_NAME: managed ? label : "some.other.job" },
@@ -101,6 +103,28 @@ it("loads the agent, skips an unchanged job, and restarts unmanaged after removi
   await expect.poll(() => readFile(log, "utf8")).toContain([
     `bootout ${domain}/${label}`, f.repo, join(f.repo, "packages/server/src/main.ts"), `/usr/bin:${dirname(f.node)}:/bin`, "9876",
   ].join("\n"));
+});
+
+it("falls back to an unmanaged start and reports it when launchd cannot keep Alter listening", async () => {
+  const f = await fixture(false, false);
+  const log = join(f.dir, "logs/server.log");
+  await openService(f.dir, f.options).update({ autostart: true, keepAlive: true }).apply();
+  const [sh, args, opts] = f.spawn.mock.calls.at(-1)!;
+  const helperArgs = [...args];
+  helperArgs[3] = "2147483647";
+  execFileSync(sh, helperArgs, { cwd: opts.cwd, env: opts.env, timeout: 5000 });
+  const domain = "gui/" + process.getuid!();
+  await expect.poll(() => readFile(log, "utf8")).toContain([
+    `bootout ${domain}/${label}`, `bootstrap ${domain} ${f.plist}`, `kickstart ${domain}/${label}`, `bootout ${domain}/${label}`, f.repo,
+  ].join("\n"));
+  expect(existsSync(f.plist)).toBe(false);
+  const reopened = openService(f.dir, f.options);
+  expect(reopened.state()).toMatchObject({ autostart: false, keepAlive: false, managed: false, failedNode: f.node });
+  expect(JSON.parse(await readFile(join(f.dir, "service.json"), "utf8"))).toMatchObject({ autostart: false, keepAlive: false });
+  await reopened.update({ preventSleep: true }).apply();
+  expect(reopened.state()).toHaveProperty("failedNode", f.node);
+  await reopened.update({ autostart: false }).apply();
+  expect(reopened.state()).not.toHaveProperty("failedNode");
 });
 
 async function api(options: ServiceOptions) {
