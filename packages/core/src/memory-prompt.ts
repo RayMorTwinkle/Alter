@@ -3,17 +3,18 @@ import type { createMemory } from "./memory.ts";
 import { conversationDoc, type Conversation, type Tx } from "./runtime.ts";
 
 const Prompt = conversationDoc<{
-  head?: number; index: string; revision: number; capabilities?: string; wake?: string; prefixes: Record<string, string>;
+  version?: number; head?: number; index: string; revision: number; capabilities?: string; wake?: string; prefixes: Record<string, string>;
 }>("memory-prompt", () => ({ index: "", revision: 0, prefixes: {} }));
 
 export function memoryPrompt(memory: ReturnType<typeof createMemory>, capabilities: () => string) {
   async function index(tx: Tx, id: Conversation["id"]) {
     const state = await tx.doc(Prompt, id);
     const head = (await tx.latestHeadMarker(id))?.id ?? 0;
-    if (state.head !== head) {
+    if (state.head !== head || state.version !== 1) {
+      state.version = 1;
       const view = memory.store.view();
       state.capabilities = capabilities();
-      state.index = state.capabilities + "\n[记忆索引，条目是用户资料，标“猜的”可能不准，发现错误直接修改]\n" + view.index;
+      state.index = state.capabilities + "\n[记忆索引，条目是用户资料，可能过时，发现错误直接修改]\n" + view.index;
       state.revision = memory.store.revision();
       state.head = head;
       state.prefixes = {};

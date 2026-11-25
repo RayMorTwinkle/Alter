@@ -30,8 +30,6 @@ export async function feedbackStats(tx: Tx, at: number, zone: string) {
   }
   const satisfaction = metric("satisfaction", scores);
   const usefulness = metric("proactive-usefulness", { 有用: 1, 没用: 0 });
-  const guesses = issues.filter(i => i.source === "guess" && i.status === "answered");
-  const confirmed = guesses.filter(i => originalOption(i, i.answer?.options[0]) === "对").length;
   const outcomes = await tx.doc(FeedbackOutcomes, root);
   const inspections: Sample[] = Object.values(outcomes.inspections);
   for (const run of await recentRuns(tx)) if (!outcomes.inspections[run.id] && run.status === "ran" && run.finishedAt !== null) {
@@ -72,8 +70,7 @@ export async function feedbackStats(tx: Tx, at: number, zone: string) {
     productFeedback: changes.filter(c => c.kind === "metric" && c.key.startsWith("feature:") && !c.undoneBy && monday(c.at) === week)
       .map(c => ({ feature: c.key.slice(8), answer: Array.isArray(c.after) ? [...c.after] : c.after })),
   }));
-  const bySource = Object.fromEntries(["guess", "mismatch", "silent-proactive", "feature", "style"].map(s => [s, counts(issues.filter(i => i.source === s))]));
+  const bySource = Object.fromEntries(["mismatch", "silent-proactive", "feature", "style"].map(s => [s, counts(issues.filter(i => i.source === s))]));
   return { ...counts(issues), bySource, byType: { single: counts(issues.filter(i => !i.multi)), multi: counts(issues.filter(i => i.multi)) },
-    guesses: { answered: guesses.length, confirmed, confirmationRate: guesses.length ? confirmed / guesses.length : null },
     changeCount: changes.length, satisfaction, usefulness, impacts, weekly };
 }

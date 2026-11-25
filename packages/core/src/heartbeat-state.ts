@@ -1,9 +1,12 @@
 import { FeedbackOutcomes } from "./feedback-settings.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { defineDocFamily } from "@earendil-works/pi-durable";
-import { conversationDoc, LiveDoc, ROOT_CONVERSATION_ID, type Cursor, type Tx } from "./runtime.ts";
+import { conversationDoc, ROOT_CONVERSATION_ID, type Cursor, type Tx } from "./runtime.ts";
 
 export const hour = 3_600_000;
+export const proactivePrinciple = "优先通过查找资料、调研、整理或起草，做出用户可以自行取用的新成果。" +
+  "让每一步都可撤销。已有成果保持原样，值得改进的内容只在独立分支、副本或草稿中准备，交由用户决定是否采纳，不合并、不覆盖、不删除原件。" +
+  "需要以用户名义对外发言、发送或提交的内容，只准备草稿，交给用户发出。";
 export const heartbeatKind = "alter.heartbeat";
 const alpha = 0.3;
 type State = {
@@ -89,15 +92,6 @@ export async function userActivity(tx: Tx, state: State, at: number) {
   const last = state.lastInspection;
   if (last !== undefined && at >= last && at <= last + 2 * hour) await recordAdoption(tx, state.lastRunId ?? last);
 }
-export async function activeHeartbeat(tx: Tx) {
-  const first = (await tx.doc(LiveDoc, ROOT_CONVERSATION_ID)).run?.first;
-  const entry = first === undefined ? undefined : await tx.entry(first);
-  const data = entry?.data;
-  if (entry?.kind === heartbeatKind && data && typeof data === "object" && !Array.isArray(data) && typeof data.at === "number") {
-    return { heartbeatAt: data.at, ...(typeof data.id === "string" && { heartbeatId: data.id }) };
-  }
-}
-
 export async function heartbeatResponse(tx: Tx, id: string) {
   const sample = await tx.doc(Samples, id, null);
   return !!sample.implicit || Object.keys(sample.votes).length > 0;

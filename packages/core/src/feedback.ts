@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Audit, Reviews } from "./broker.ts";
 import { feedbackPaused, Preferences, Interaction, triageScope, type PreferenceKey, type PreferenceValue } from "./feedback-settings.ts";
 import { heartbeatResponse } from "./heartbeat-state.ts";
@@ -12,16 +12,16 @@ import { conversationDoc, ROOT_CONVERSATION_ID as root, type Tx } from "./runtim
 
 export const day = 86_400_000;
 export type FeedbackQuestion = { id: string; prompt: string; options: string[]; allowOther: boolean; multi: boolean; why: string };
-export type Source = "guess" | "mismatch" | "silent-proactive" | "feature" | "style";
+export type Source = "mismatch" | "silent-proactive" | "feature" | "style";
 export type Outlet = "report" | "checkin";
 export type Effect = { kind: "memory"; entryId: string } |
   { kind: "param"; key: PreferenceKey; mapping: Record<string, PreferenceValue>; scope?: string } |
   { kind: "metric"; name: string };
 export type Candidate = FeedbackQuestion & { source: Source; effect: Effect; uncertainty: number; retired?: true;
-  feature?: { key: string; name: string; installedAt: number; resultAt?: number }; memoryVersion?: string; lastAnsweredAt?: number; createdAt: number; cooldownUntil: number; asked: number; answered: number; skipped: number };
+  feature?: { key: string; name: string; installedAt: number; resultAt?: number }; lastAnsweredAt?: number; createdAt: number; cooldownUntil: number; asked: number; answered: number; skipped: number };
 export type Answer = { options: string[]; other?: string };
 export type Issued = FeedbackQuestion & { candidateId: string; source: Source; effect: Effect; outlet: Outlet; batch: string;
-  optionMap?: Record<string, string>; memoryVersion?: string; askedAt: number; status: "pending" | "applying" | "answered" | "skipped" | "expired"; at?: number; answer?: Answer; moreUsed?: true; changeIds: string[] };
+  optionMap?: Record<string, string>; askedAt: number; status: "pending" | "applying" | "answered" | "skipped" | "expired"; at?: number; answer?: Answer; moreUsed?: true; changeIds: string[] };
 export type Change = { id: string; issueId: string; at: number; kind: Effect["kind"] | "undo"; key: string;
   before: PreferenceValue | string[] | null; after: PreferenceValue | string[] | null;
   memoryChangeId?: string; memoryAction?: "confirm" | "correct" | "delete" | "add" | "modify" | "restore"; undoneBy?: string; undoOf?: string };
@@ -37,7 +37,6 @@ type Seed = Omit<Candidate, "createdAt" | "asked" | "answered" | "skipped" | "co
 const nonempty = (v: unknown): v is string => typeof v === "string" && !!v.trim();
 function validEffect(e: Effect, q: Seed) {
   if (!e || typeof e !== "object") return false;
-  if (e.kind === "memory") return nonempty(e.entryId) && !q.multi && q.options.join("/") === "对/不对/部分对";
   if (e.kind === "metric") return nonempty(e.name);
   if (e.kind !== "param" || q.multi || !e.mapping || typeof e.mapping !== "object") return false;
   if (e.scope && ["__proto__", "prototype", "constructor"].includes(e.scope)) return false;
@@ -55,7 +54,7 @@ function validEffect(e: Effect, q: Seed) {
   });
 }
 export function putQuestion(bank: Bank, q: Seed, at: number, uncertainty = 1) {
-  if (["__proto__", "prototype", "constructor"].includes(q.id) || !Object.hasOwn(sourceWeight, q.source) ||
+  if (["__proto__", "prototype", "constructor"].includes(q.id) || !isFeedbackSource(q.source) ||
       typeof q.allowOther !== "boolean" || typeof q.multi !== "boolean" || !Number.isFinite(uncertainty) || uncertainty <= 0 ||
       !nonempty(q.why) || !nonempty(q.prompt) || !nonempty(q.id) || !q.options.length || !q.options.every(nonempty) ||
       new Set(q.options).size !== q.options.length || !validEffect(q.effect, q)) throw new FeedbackError(400, "Invalid feedback question or effect");
@@ -90,15 +89,8 @@ export function seedQuestions(bank: Bank, at: number) {
     options: ["有用", "没用", "还没看"], allowOther: true, multi: false, effect: { kind: "metric", name: "proactive-usefulness" } }, at);
 }
 export function knownReplyLength(entries: MemoryEntry[]) {
-  return entries.some(e => !e.guess &&
+  return entries.some(e =>
     /(?:回复|回答|答复|回话).{0,18}(?:简短|简洁|精简|简练|简明|精炼|详细|篇幅|长短|字数|少说)|(?:简短|简洁|详细).{0,10}(?:回复|回答|答复)/u.test(e.title + " " + e.body));
-}
-export function guessPrompt(e: MemoryEntry) {
-  const topic = e.title.replace(/^(?:用户)?(?:可能是|可能|也许是|似乎是)/u, "").trim() || e.title;
-  return `「${[...topic].slice(0, 28).join("")}」符合你的情况吗？`;
-}
-export function memoryVersion(e: MemoryEntry) {
-  return createHash("sha256").update(JSON.stringify([e.type, e.title, e.body, e.dueAt, e.status])).digest("hex");
 }
 export function fixedMetric(q: Candidate | Issued) {
   return q.effect.kind === "metric" && ["satisfaction", "proactive-usefulness"].includes(q.effect.name);
@@ -107,22 +99,6 @@ export function originalOption(i: Issued, option?: string) { return option && (i
 type Editor = { call: FeedbackCall; now: () => number; memory: () => { index: string; entries: MemoryEntry[] } };
 // The report API receives only a Tx. Resolve the owning app's model, clock and memory independently per bank.
 export const feedbackEditors = new Map<string, Editor>();
-export function syncGuesses(bank: Bank, entries: MemoryEntry[], at: number) {
-  const ids = new Set<string>();
-  for (const e of entries) {
-    const id = "guess:" + e.id;
-    ids.add(id);
-    const prompt = guessPrompt(e);
-    const q = putQuestion(bank, { id, source: "guess", prompt, options: ["对", "不对", "部分对"], multi: false, allowOther: true,
-      why: "这是从互动中推断的记忆。你的回答会确认、修正或删除这条记忆。", effect: { kind: "memory", entryId: e.id } }, at, 2);
-    q.prompt = prompt;
-    q.memoryVersion = memoryVersion(e);
-  }
-  for (const q of Object.values(bank.candidates)) if (q.source === "guess" && !ids.has(q.id)) q.retired = true;
-  for (const i of Object.values(bank.issues)) if (i.source === "guess" && i.status === "pending" &&
-    (!ids.has(i.candidateId) || i.memoryVersion !== bank.candidates[i.candidateId]?.memoryVersion)) i.status = "expired";
-}
-
 async function ruleQuestions(tx: Tx, bank: Bank, at: number) {
   const active = new Set<string>();
   const reviews = Object.values((await tx.doc(Reviews, root)).byId);
@@ -168,7 +144,8 @@ async function ruleQuestions(tx: Tx, bank: Bank, at: number) {
 export async function lastInteraction(tx: Tx) {
   return Math.max((await tx.doc(Interaction, root)).at ?? -Infinity, (await tx.doc(MemoryInbox, root)).lastUserAt ?? -Infinity);
 }
-const sourceWeight = { guess: 3, mismatch: 3, "silent-proactive": 2, feature: 1.5, style: 1 };
+const sourceWeight = { mismatch: 3, "silent-proactive": 2, feature: 1.5, style: 1 };
+export function isFeedbackSource(source: string): source is Source { return Object.hasOwn(sourceWeight, source); }
 export async function pickQuestions(tx: Tx, options: { outlet: Outlet; limit: number }): Promise<FeedbackQuestion[]> {
   const bank = await tx.doc(Feedback, root);
   return issueQuestions(tx, options, feedbackEditors.get(bank.runtimeId ?? "")?.now() ?? Date.now());
@@ -180,7 +157,6 @@ export async function issueQuestions(tx: Tx, { outlet, limit, minimum = 1, batch
   await ruleQuestions(tx, bank, at);
   const editor = feedbackEditors.get(bank.runtimeId ?? "");
   const memory = editor?.memory();
-  if (memory) syncGuesses(bank, memory.entries.filter(e => e.guess), at);
   const counts = new Map<string, { asked: number; skipped: number }>();
   const type = (q: Candidate) => q.source + "/" + (q.multi ? "multi" : "single");
   for (const q of Object.values(bank.candidates)) {
@@ -261,7 +237,7 @@ export async function issueQuestions(tx: Tx, { outlet, limit, minimum = 1, batch
     const effect = original.kind === "param" && wording ? { ...original,
       mapping: Object.fromEntries(question.options.map(o => [o, original.mapping[wording.mapping[o]!]!])) } : q.effect;
     bank.issues[question.id] = { ...question, candidateId: q.id, effect, source: q.source, outlet, batch, askedAt: at,
-      ...(wording && { optionMap: wording.mapping }), ...(q.memoryVersion && { memoryVersion: q.memoryVersion }), status: "pending", changeIds: [] };
+      ...(wording && { optionMap: wording.mapping }), status: "pending", changeIds: [] };
     return question;
   });
 }

@@ -96,7 +96,7 @@ it("migrates legacy rows and FTS atomically, keeping history IDs, local dates, d
   const stop = await memory.start();
   const view = memory.store.view();
   expect(view.entries.map(e => [e.id, e.type, e.title])).toEqual([["8", "goal", "期末考试。"], ["6", "reference", "🐦".repeat(30)], ["4", "user", "你好。"]]);
-  expect(view.entries[0]).toMatchObject({ dueAt: 1000, status: "done", createdAt: 0, updatedAt: 1, guess: false, source: "整理于 1969-12-31" });
+  expect(view.entries[0]).toMatchObject({ dueAt: 1000, status: "done", createdAt: 0, updatedAt: 1, source: "整理于 1969-12-31" });
   expect(view.index.split("\n")).toEqual([
     "[目标] 期末考试。（#8，已完成，期限 1970-01-01T00:00:01.000Z）", `[参考] ${"🐦".repeat(30)}（#6）`, "[用户] 你好。（#4）",
   ]);
@@ -110,6 +110,33 @@ it("migrates legacy rows and FTS atomically, keeping history IDs, local dates, d
   } finally { await close(); }
 });
 
+it("reads, edits and undoes legacy entries without exposing their retired flag or rewriting existing rows", async ({ onTestFinished }) => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-memory-legacy-"));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  const db = new DatabaseSync(join(dir, "memory.sqlite"));
+  onTestFinished(() => db.close());
+  db.exec(`CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, type TEXT NOT NULL, body TEXT NOT NULL,
+    source TEXT NOT NULL, guess INTEGER NOT NULL, dueAt INTEGER, status TEXT NOT NULL, createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL, supersededBy INTEGER);`);
+  const memory = createMemory(dir, () => 2);
+  const stop = await memory.start();
+  onTestFinished(stop);
+  db.exec("INSERT INTO entries VALUES(1,'作息','user','六点起床','m1',1,NULL,'active',0,1,NULL)");
+  const after = { title: "作息", type: "user", body: "六点起床", source: "m1", status: "active", createdAt: 0, updatedAt: 1, id: "1", guess: true };
+  const before = { ...after, body: "七点起床", updatedAt: 0 };
+  db.prepare("INSERT INTO changes(at,kind,operations,snapshots) VALUES(1,'write',?,?)")
+    .run(JSON.stringify([{ op: "modify", ids: ["1"] }]), JSON.stringify([{ id: "1", before, after }]));
+  expect(memory.store.read("1")).not.toHaveProperty("guess");
+  expect(memory.store.view().index).not.toContain("猜的");
+  expect(JSON.stringify(memory.store.changes())).not.toContain('"guess"');
+  expect(memory.save({ kind: "fact", text: "新资料" })).toBe("2");
+  expect(memory.update("1", { body: "六点起床" })).toBe(true);
+  expect(db.prepare("SELECT guess FROM entries WHERE id=1").get()?.guess).toBe(1);
+  memory.store.undo(memory.store.changes()[0]!.id);
+  expect(memory.store.undo("1")).toBe(true);
+  expect(memory.store.read("1")?.body).toBe("七点起床");
+});
+
 it("undo restores an entire supersession, preserves intervening unrelated edits and rejects conflicting edits", async () => {
   const memory = createMemory(undefined, () => 10);
   const stop = await memory.start();
@@ -120,11 +147,11 @@ it("undo restores an entire supersession, preserves intervening unrelated edits 
       return result.output[0].text;
     };
     const entry = { type: "preference", title: "回答方式", body: "回答时给出细节。" };
-    const id = await call("memory_write", { op: "add", ...entry, guess: true });
+    const id = await call("memory_write", { op: "add", ...entry });
     const original = memory.store.read(id);
-    const next = await call("memory_write", { op: "supersede", id, ...entry, body: "请简洁。", guess: false });
+    const next = await call("memory_write", { op: "supersede", id, ...entry, body: "请简洁。" });
     const change = memory.store.changes()[0]!;
-    expect(JSON.parse(await call("memory_read", { ids: [id, next] }))).toMatchObject([{ supersededBy: next, guess: true }, { id: next, guess: false }]);
+    expect(JSON.parse(await call("memory_read", { ids: [id, next] }))).toMatchObject([{ supersededBy: next }, { id: next }]);
     expect(memory.store.search("回答方式").map(e => e.id)).toEqual([next]);
     expect(memory.store.search("给出细节")).toEqual([]);
     await call("memory_write", { op: "modify", id: next, title: "作答风格" });

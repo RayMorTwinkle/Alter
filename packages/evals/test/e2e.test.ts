@@ -72,7 +72,11 @@ it.each([false, true])("answers a parked user request once and waits for the chi
   worker.setResponses([call("outbox_send", { message: "测试" }), say('{"inScope":false,"reason":"请确认"}'), call("finish", { summary: "已处理", refs: [] })]);
   const approvalTask: Task = { id: "offline-approval", category: "日历", turns: ["发消息"],
     approvals: allow ? () => true : undefined,
-    check: c => c.app.demo.outbox.length === Number(allow) ? undefined : "发送次数不符" };
+    async check(c) {
+      const state = await c.app.harness.snapshot(Tasks, c.app.main.id, context);
+      expect(Object.values(state!.byId).map(t => t.brief)).toEqual(["send"]);
+      if (c.app.demo.outbox.length !== Number(allow)) return "发送次数不符";
+    } };
   const row = await runTask(approvalTask, { ...setup(main, worker), demos: true });
   expect(row).toMatchObject({ status: "pass", reply: "正在处理\n已收到任务报告", tools: { dispatch_task: 1 },
     approvals: [{ tool: "outbox_send", audience: "user", decision: allow ? "allow" : "deny" }] });

@@ -20,7 +20,7 @@ it("searches before each decision, sees staged edits, commits one reversible bat
     const source = [{ id: "m1", text: "咖啡不加奶；问题请用中文回答。", at: 90 }];
     const actions = ["add", "modify", "supersede", "keep"];
     const candidates = ["回答方式", "咖啡习惯", "更正咖啡习惯", "咖啡确认"].map(title =>
-      ({ type: "preference", title, body: "咖啡不加奶", source: "m1", guess: true }));
+      ({ type: "preference", title, body: "咖啡不加奶", source: "m1" }));
     const plan = async () => {
       let step = 0;
       return planConsolidation(memory, source, async (_, input) => {
@@ -41,7 +41,7 @@ it("searches before each decision, sees staged edits, commits one reversible bat
     const { operations, revision } = await plan();
     memory.store.apply(operations, "consolidate", "batch", revision);
     expect(memory.store.changes()[0]!.operations.map(o => o.op)).toEqual(actions);
-    expect(memory.store.view().entries.every(e => e.guess && e.source === "m1")).toBe(true);
+    expect(memory.store.view().entries.every(e => e.source === "m1")).toBe(true);
     const change = memory.store.changes()[0]!;
     expect(memory.store.apply(operations, "consolidate", "batch", revision)).toEqual([]);
     expect(memory.store.changes()[0]!.id).toBe(change.id);
