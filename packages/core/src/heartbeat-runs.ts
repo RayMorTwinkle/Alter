@@ -9,15 +9,16 @@ import { Schedules } from "./scheduler.ts";
 export type HeartbeatReason = "inactive" | "disabled" | "outside-hours" | "busy" | "busy-timeout" | "recent-activity" | "unchanged" | "budget";
 export type HeartbeatRun = {
   id: string; at: number; finishedAt: number | null; status: "ran" | "skipped" | "deferred"; skipReason: HeartbeatReason | null;
+  explorationTaskId?: string; conclusion?: string; fallbackReason?: string;
   counts: { goals: number; memories: number; chat: number; agenda: number; tasks: number; digests: number };
   actions: { tool: string; id?: string; level?: "now" | "digest" }[];
   notified: boolean; finalReply: string; tokens: number; feedback: "useful" | "useless" | null;
 };
 type RunEvent = { type: "start" | "end"; id: string } | { type: "feedback"; id: string; feedback: "useful" | "useless" };
 export type HeartbeatEvent = RunEvent | { type: "schedule"; nextAt: number | null } | { type: "report"; report: ReportView };
-const Runs = defineDocFamily<{ run?: HeartbeatRun }, null>({ kind: "alter.heartbeat-run", version: 1,
+export const Runs = defineDocFamily<{ run?: HeartbeatRun }, null>({ kind: "alter.heartbeat-run", version: 1,
   family: true, scope: "session", initial: () => ({}), checkpointWhen: () => false });
-const Index = conversationDoc<{ recent: string[]; pending: string[]; event?: RunEvent }>("heartbeat-runs",
+const Index = conversationDoc<{ recent: string[]; pending: string[]; conclusions?: string[]; event?: RunEvent }>("heartbeat-runs",
   () => ({ recent: [], pending: [] }));
 
 export async function recordRun(tx: Tx, run: HeartbeatRun) {
@@ -36,6 +37,15 @@ export async function recentRuns(tx: Tx) {
     runs.push({ ...run, counts: { ...run.counts }, actions: run.actions.map(action => ({ ...action })) });
   }
   return runs;
+}
+
+export async function recentConclusions(tx: Tx) {
+  const index = await tx.doc(Index, ROOT_CONVERSATION_ID);
+  if (!index.conclusions) {
+    index.conclusions = (await recentRuns(tx)).filter(run => run.finishedAt !== null && run.finalReply)
+      .slice(0, 3).map(run => run.finalReply.slice(0, 1000));
+  }
+  return [...index.conclusions];
 }
 
 export async function rateRun(tx: Tx, id: string, feedback: NonNullable<HeartbeatRun["feedback"]>) {
@@ -104,8 +114,11 @@ async function finish(tx: Tx, id: string, at: number, activeFirst?: EntryId) {
       cursor = page.next;
     } while (cursor);
   }
+  const previous = await recentConclusions(tx);
+  run.conclusion ||= run.finalReply.trim() || "本次巡检没有留下结论。";
   run.finishedAt = at;
   const index = await tx.doc(Index, ROOT_CONVERSATION_ID);
+  index.conclusions = [run.conclusion.slice(0, 1000), ...previous.slice(0, 2)];
   index.pending = index.pending.filter(pending => pending !== id);
   index.event = { type: "end", id };
 }

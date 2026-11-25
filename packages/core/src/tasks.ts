@@ -1,4 +1,4 @@
-import { arr, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
+import { arr, bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
 import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
 import { recentUserText, submitWake } from "./timeline.ts";
@@ -6,7 +6,7 @@ import { LeaseHistory, Leases } from "./leases.ts";
 import { Audit, Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
 import {
-  configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
+  configure, defineExtension, defineSignal, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
   ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationHandle, type ConversationId, type Cursor, type Harness, type Extension, type ModelRef, type ModelThinkingLevel, type TaskId, type Tx, type ToolExecutionApi, type Context, type YieldDecision,
 } from "./runtime.ts";
 import { activeWake, Wakes } from "./wake.ts";
@@ -36,7 +36,13 @@ const ReviewAnswer = defineTask<null, { phase: "review" }, YieldDecision>({
 // Some models double-escape newlines inside tool arguments. Only unescape text that has no real newline.
 export const unescapeNewlines = (text: string) => text.includes("\n") || !text.includes("\\n") ? text : text.replaceAll("\\n", "\n");
 
+export const ExplorationEnded = defineSignal({ name: "alter.exploration-ended", version: 1, schema: bool() });
+
 async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId: string, at: number, summary: string) {
+  if (task.heartbeatReview !== undefined) {
+    await tx.signal(task.heartbeatReview, ExplorationEnded, taskId, true);
+    return;
+  }
   const failed = task.status === "failed";
   if (!failed && task.heartbeatAt !== undefined) {
     const refused = (await tx.doc(Audit, main.id)).refused ?? {};
@@ -98,7 +104,7 @@ async function failTask(tx: Tx, main: ConversationHandle, taskId: string, failur
   task.endedAt = at;
   task.failure = failure;
   await clearRequests(tx, main.id, taskId, !aborted);
-  if (!aborted) await report(tx, main, task, taskId, at, failure);
+  if (!aborted || task.heartbeatReview !== undefined) await report(tx, main, task, taskId, at, failure);
 }
 
 // The background task owns the conversation and sleeps until its brief settles. Main stays available.
@@ -151,7 +157,7 @@ export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }
   },
 });
 
-type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom" | "triggerSource"> & { thinking?: ModelThinkingLevel };
+type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom" | "triggerSource" | "heartbeatId"> & { thinking?: ModelThinkingLevel };
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
   resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
   return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs,
@@ -162,7 +168,8 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const inputs = await recentUserText(tx, mainId, stamp.at);
     const wake = !args.triggerSource ? await activeWake(tx, mainId, stamp.at) : undefined;
     const originSilent = wake && (await tx.doc(Wakes, mainId)).silent?.[wake.wakeId];
-    const inspection = args.triggerSource ? undefined : await activeHeartbeat(tx);
+    const inspection = args.heartbeatId ? { heartbeatId: args.heartbeatId, heartbeatAt: stamp.at } :
+      args.triggerSource ? undefined : await activeHeartbeat(tx);
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const goal = previous?.goal; // Preserve read-only scope when resuming historical research.
     const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
@@ -346,6 +353,7 @@ export function createTaskCancellation(host: () => Harness) {
     const task = lookup((await tx.doc(Tasks, ROOT_CONVERSATION_ID)).byId, taskId);
     if (!task || (watchOnly && !task.watch)) return reply("Unknown task", true);
     if (task.status === "running") {
+      if (task.heartbeatReview !== undefined) await tx.signal(task.heartbeatReview, ExplorationEnded, taskId, true);
       task.status = "cancelled";
       task.endedAt = at;
       await clearRequests(tx, ROOT_CONVERSATION_ID, taskId);

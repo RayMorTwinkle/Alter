@@ -75,7 +75,8 @@ export async function openAlter(
   })];
   const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
     (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : ""));
-  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。最后的正文就是发给用户的回复。直接回答问题、汇报结果。用户要求不用回，或巡检等主动回合没有值得提醒的事时，调用 stay_silent，本轮正文只作为网页静默草稿。" +
+  const mainInstructions = "你是用户的个人主动型助理，最大的特色是能完成用户现有的目标、尝试用户提到过的事、猜测用户可能需要什么并主动去做，给用户带来惊喜。" +
+    "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。最后的正文就是发给用户的回复。直接回答问题、汇报结果。用户要求不用回，或巡检等主动回合没有值得提醒的事时，调用 stay_silent，本轮正文只作为网页静默草稿。" +
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
     "用 schedule_create 创建定时安排：reminder 直接通知用户，task 到点派任务，wake 到点由你判断。用 schedule_list 查看，用 schedule_set 改时间、内容、思考强度或暂停、恢复、删除。" +
@@ -130,7 +131,9 @@ export async function openAlter(
   const meteredModels = () => withUsage(currentModels(), budget, dir, now);
   const reports = registerReports(scheduler, () => main, now, budget, timeZone, proactive.reportTime, () => settings.heartbeat,
     digestSummary(meteredModels, taskModel, now));
-  const heartbeat = registerHeartbeat(scheduler, () => main, memory, () => plugins.find(p => p.capability.id === "calendar"), budget, timeZone, () => settings.heartbeat, now);
+  const cancellation = createTaskCancellation(() => harness);
+  const heartbeat = registerHeartbeat(scheduler, () => main, memory, () => plugins.find(p => p.capability.id === "calendar"),
+    budget, timeZone, () => settings.heartbeat, now, dispatch, cancellation.cancel);
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
     const offered = tools().filter(tool => {
@@ -155,7 +158,6 @@ export async function openAlter(
     await updateOffered(tx, main.id, leases.lastUsed);
   }
 
-  const cancellation = createTaskCancellation(() => harness);
   const watches = createWatches(() => main, () => harness, () => plugins, dispatch, cancellation, budget, time, now);
   const controls: ToolRegistration[] = [
     ...scheduler.tools, staySilentTool, digestSource,
@@ -231,7 +233,7 @@ export async function openAlter(
   const controlPlane = defineExtension({
     name: "alter.main", tools: controls,
     sections: [{ key: "memory-index", tag: false, render: (_, ctx) => main.commit(tx => prompt.index(tx, main.id), ctx) }],
-    tasks: [SourceBorrow, FinishMainTurn, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
+    tasks: [SourceBorrow, FinishMainTurn, BackgroundTask, heartbeat.review, cancellation.stop, watches.worker, watches.poller],
     hooks: [
       mainCompaction(memory, mainModel),
       hook(BackgroundTask, {

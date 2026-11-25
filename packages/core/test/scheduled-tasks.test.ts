@@ -196,14 +196,15 @@ it("keeps an independent dispatch out of the active heartbeat's task and adoptio
   const f = await setup();
   let finishHeartbeat!: () => void;
   const waiting = new Promise<void>(resolve => { finishHeartbeat = resolve; });
-  f.faux.setResponses([async () => { await waiting; return say("巡检完成"); },
+  f.faux.setResponses([say(fauxToolCall("finish", { summary: "探索完毕", refs: [] }), { stopReason: "toolUse" }),
+    async () => { await waiting; return say("巡检完成"); },
     say(fauxToolCall("finish", { summary: "定时工作完成", refs: [] }), { stopReason: "toolUse" }), say("已记录")]);
   const id = await f.app.schedules.create({ brief: "独立定时工作", type: "task",
     trigger: { kind: "at", at: new Date(initial + minute).toISOString() } });
   f.app.harness.resume();
   try {
     expect(await f.app.heartbeat.run()).toMatchObject({ status: "ran" });
-    await expect.poll(() => f.faux.state.callCount).toBe(1);
+    await expect.poll(() => f.faux.state.callCount).toBe(2);
     f.advance(initial + minute);
     const taskId = async () => (await f.app.schedules.list()).find(item => item.id === id)?.lastRun?.taskId;
     await expect.poll(taskId).toBeDefined();
@@ -212,7 +213,7 @@ it("keeps an independent dispatch out of the active heartbeat's task and adoptio
     expect(task.wakeId).toBeUndefined();
     expect(task.heartbeatAt).toBeUndefined();
   } finally { finishHeartbeat(); }
-  await expect.poll(async () => (await readUsage(f.dir)).map(row => row.role)).toEqual(["heartbeat", "schedule", "main"]);
+  await expect.poll(async () => (await readUsage(f.dir)).map(row => row.role)).toEqual(["heartbeat", "heartbeat", "schedule", "main"]);
   expect((await f.app.heartbeat.view()).adoption).toBeCloseTo(0.35);
 });
 

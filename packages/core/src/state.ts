@@ -8,6 +8,7 @@ export type TaskRecord = {
   conversationId: ConversationId;
   brief: string;
   worker: TaskId;
+  heartbeatReview?: TaskId;
   lastEntry?: EntryId;
   continuedFrom?: string;
   thinking: ModelThinkingLevel;

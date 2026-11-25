@@ -422,8 +422,9 @@ it("updates an already queued report when its dispatching turn chooses silence",
 });
 
 it("forwards an actionable heartbeat reply after a Feishu turn and records its gateway usage once", async () => {
-  const f = await setup(({ messages }, res) =>
-    say(res, messages.at(-1)?.content.includes("定时巡检") ? "有一场会议需要准备" : "收到"));
+  const f = await setup(({ messages, model }, res) => model === "offline/task"
+    ? toolCall(res, "finish", { summary: "会议需要准备", refs: [] })
+    : say(res, messages.at(-1)?.content.includes("定时巡检") ? "有一场会议需要准备" : "收到"));
   await f.pair();
   await f.send("hello", "hello");
   await f.app.main.waitForIdle(context);
@@ -434,7 +435,8 @@ it("forwards an actionable heartbeat reply after a Feishu turn and records its g
   expect(f.feed.snapshot().timeline.some(i => i.kind === "message" && i.text === "有一场会议需要准备")).toBe(true);
   await f.app.main.waitForIdle(context);
   expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到", "有一场会议需要准备"]);
-  expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
+  expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "task", role: "heartbeat", proactive: true },
+    { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
 });
 
 it("accepts existing owner feedback forms and syncs Web skips while issuance is paused", async () => {
