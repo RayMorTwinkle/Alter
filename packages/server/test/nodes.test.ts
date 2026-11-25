@@ -9,7 +9,9 @@ import { cleanup, setup } from "./web-fixture.ts";
 
 type Web = Awaited<ReturnType<typeof setup>>;
 const device: Hello = { type: "hello", protocol: protocolVersion, nodeId: randomUUID(), name: "laptop",
-  platform: "linux", nodeVersion: "24", roots: ["/work"], harnesses: [{ id: "codex", available: true }], tasks: [] };
+  platform: "linux", nodeVersion: "24", roots: ["/work"], harnesses: [
+    { id: "codex", available: true }, { id: "dsh", available: true, sessions: true, model: "test-model" },
+  ], tasks: [] };
 
 async function socket(web: Pick<Web, "base">, token: string) {
   const ws = new WebSocket(web.base.replace("http:", "ws:") + connectPath, { headers: { Authorization: "Bearer " + token } });
@@ -286,6 +288,98 @@ it("pings after 20 seconds, renews on pong, and disconnects a silent peer after 
   await vi.advanceTimersByTimeAsync(15_000);
   await node.closed;
   expect((await web.app.nodes.all())[0]?.online).toBe(false);
+});
+
+it("matches concurrent HTTP and tool session lists to their replies without task acknowledgments", async () => {
+  const web = await fixture();
+  const node = await socket(web, web.created.token);
+  await node.hello();
+  const path = `/api/nodes/${web.created.id}/sessions?harness=dsh`;
+  const cwd = "/work/目录 & 项目";
+  const http = web.read(path + "&cwd=" + encodeURIComponent(cwd));
+  const first = await node.take("sessions.list");
+  expect(first).toMatchObject({ harness: "dsh", cwd });
+  const tool = web.call("node_sessions", { node: device.name, harness: "dsh" });
+  const second = await node.take("sessions.list");
+  expect(second.requestId).not.toBe(first.requestId);
+  expect(second).not.toHaveProperty("cwd");
+  const sessions = [{ title: "迁移工作", sessionId: "native-1", cwd, updatedAt: 12345 }];
+  node.send({ type: "sessions.result", requestId: second.requestId, harness: "dsh", sessions });
+  await tool;
+  const toolOutputs = web.modelInputs.flatMap(input => JSON.parse(input)).filter(m => m.role === "tool").map(m => m.content);
+  expect(toolOutputs).toContain(JSON.stringify(sessions));
+  node.send({ type: "sessions.result", requestId: first.requestId, harness: "dsh", sessions: [] });
+  const response = await http;
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([]);
+  const listed = web.read(path);
+  const { requestId } = await node.take("sessions.list");
+  node.send({ type: "sessions.result", requestId, harness: "dsh", sessions });
+  expect(await (await listed).json()).toEqual(sessions);
+  expect(node.frames.filter(m => m.type === "ack")).toEqual([]);
+  expect((await web.state()).pending).toEqual([]);
+});
+
+it("reports invalid, offline and unsupported session queries directly, and propagates node failures", async () => {
+  const web = await fixture();
+  const path = `/api/nodes/${web.created.id}/sessions`;
+  expect((await fetch(web.base + path + "?harness=dsh")).status).toBe(401);
+  for (const query of ["", "?harness=typo"]) expect((await web.read(path + query)).status).toBe(400);
+  expect((await web.read("/api/nodes/missing/sessions?harness=dsh")).status).toBe(404);
+  const offline = await web.read(path + "?harness=dsh");
+  expect(offline.status).toBe(503);
+  expect(await offline.json()).toEqual({ error: "电脑不在线" });
+  const node = await socket(web, web.created.token);
+  await node.hello();
+  await web.call("node_sessions", { node: web.created.id, harness: "codex" });
+  expect(web.modelInputs.some(m => m.includes("codex 不支持列出已有会话"))).toBe(true);
+  expect((await web.read(path + "?harness=codex")).status).toBe(409);
+  expect(node.frames).toEqual([]);
+  const failed = web.read(path + "?harness=dsh");
+  const { requestId } = await node.take("sessions.list");
+  node.send({ type: "sessions.result", requestId, harness: "dsh", sessions: [], error: "代理查询失败" });
+  const response = await failed;
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({ error: "代理查询失败" });
+});
+
+it("times out a session query after 25 seconds and ignores its late reply", async () => {
+  const web = await fixture();
+  const node = await socket(web, web.created.token);
+  await node.hello();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const pending = web.app.nodes.sessions(web.created.id, "dsh");
+    const expired = expect(pending).rejects.toMatchObject({ status: 504, message: "查询已有会话超时" });
+    const { requestId } = await node.take("sessions.list");
+    await vi.advanceTimersByTimeAsync(25_000);
+    await expired;
+    node.send({ type: "sessions.result", requestId, harness: "dsh", sessions: [] });
+  } finally { vi.useRealTimers(); }
+  const retry = web.app.nodes.sessions(web.created.id, "dsh");
+  const { requestId } = await node.take("sessions.list");
+  node.send({ type: "sessions.result", requestId, harness: "dsh", sessions: [] });
+  expect(await retry).toEqual([]);
+  expect(node.frames).toEqual([]);
+});
+
+it("queues an explicit native session without cwd and continues with the ID reported at task end", async () => {
+  const web = await fixture();
+  await web.call("dispatch_task", { brief: "接着做", permission: "restricted", runner: { node: device.name, harness: "dsh", session: "from-tui" } });
+  expect((await web.state()).tasks[0]).toMatchObject({ status: "queued", runner: { node: web.created.id, harness: "dsh", session: "from-tui" } });
+  const node = await socket(web, web.created.token);
+  await node.hello();
+  const start = await node.take("task.start");
+  expect(start).toMatchObject({ harness: "dsh", resume: "from-tui" });
+  expect(start).not.toHaveProperty("cwd");
+  node.send({ type: "task.end", taskId: start.taskId, seq: 1, at: Date.now(), status: "completed",
+    reportSource: "finish", report: { summary: "完成", refs: [] }, nativeSessionId: "after-task" });
+  await node.take("ack");
+  await web.app.main.waitForIdle(context);
+  await web.call("dispatch_task", { brief: "再检查", continue_from: start.taskId });
+  expect(await node.take("task.start")).toMatchObject({ harness: "dsh", resume: "after-task" });
+  await web.call("dispatch_task", { brief: "新任务", permission: "restricted", runner: { node: device.name, harness: "dsh" } });
+  expect(await node.take("task.start")).not.toHaveProperty("resume");
 });
 
 it("retains the originating silent turn when a queued task eventually reports a failure", async () => {

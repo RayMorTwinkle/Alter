@@ -2,7 +2,7 @@ import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import { connectPath, protocolVersion, type HubMessage, type NodeMessage } from "@alter/node-protocol";
-import { PairingError, type AlterApp } from "@alter/core";
+import { PairingError, validHarness, type AlterApp } from "@alter/core";
 
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const string = (v: unknown): v is string => typeof v === "string";
@@ -15,9 +15,14 @@ function valid(m: unknown): m is NodeMessage {
   if (m.type === "hello") return m.protocol === protocolVersion && id(m.nodeId) && id(m.name) &&
     oneOf(m.platform, "darwin", "linux", "win32") && string(m.nodeVersion) &&
     Array.isArray(m.roots) && m.roots.every(string) && Array.isArray(m.harnesses) && m.harnesses.every(h =>
-      record(h) && oneOf(h.id, "claude-code", "codex", "opencode") && typeof h.available === "boolean" &&
-      (h.version === undefined || string(h.version)) && (h.detail === undefined || string(h.detail))) &&
+      record(h) && validHarness.check(h.id) && typeof h.available === "boolean" &&
+      (h.version === undefined || string(h.version)) && (h.detail === undefined || string(h.detail)) &&
+      (h.sessions === undefined || typeof h.sessions === "boolean") && (h.model === undefined || string(h.model))) &&
     Array.isArray(m.tasks) && m.tasks.every(t => record(t) && id(t.taskId) && integer(t.lastSeq) && oneOf(t.state, "running", "ended"));
+  if (m.type === "sessions.result") return id(m.requestId) && validHarness.check(m.harness) &&
+    (m.error === undefined || string(m.error)) && Array.isArray(m.sessions) && m.sessions.every(s =>
+      record(s) && id(s.sessionId) && string(s.cwd) && (s.title === undefined || string(s.title)) &&
+      (s.updatedAt === undefined || integer(s.updatedAt)));
   if (!integer(m.at)) return false;
   if (m.type === "pong") return true;
   if (!id(m.taskId) || !integer(m.seq) || m.seq < 1) return false;

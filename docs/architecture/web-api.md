@@ -1,4 +1,4 @@
-# Web API 契约（v1.29）
+# Web API 契约（v1.30）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。HTTP 服务使用 `node:http`，网页推送用 SSE，节点连接使用 WebSocket（`ws`）。
 
@@ -597,3 +597,11 @@ type AdapterView = Definition & {
 离线派单在 `/api/state`、SSE tasks 和 `task_status` 中显示为 `queued`。节点任务的 transcript 包含正文、思考、工具调用、工具结果及状态。报告沿用 Ledger 和主会话的报告唤醒；`interrupted` 表示中断。节点审批能力名为 `node:<harness>`。断线期间仍可处理审批，节点重连后收到已有决定。
 
 WebSocket 消息结构以 `packages/node-protocol/src/index.ts` 为准。任务开始消息只携带 brief 和执行参数，需要节点读取的背景须写入 brief；接续任务使用上次的原生会话 ID。
+
+## v1.30 节点代理已有会话
+
+`GET /api/nodes/:id/sessions?harness=dsh` 查询在线节点的已有会话。必填的 `harness` 接受 `claude-code`、`codex`、`opencode`、`dsh`（DeepSeek Harness）。可选查询参数 `cwd` 按节点上的目录筛选。节点资料中代理的 `available` 和 `sessions` 均为 true 时可查询。
+
+成功返回 200 和按更新时间从新到旧排列的数组，每项含 `sessionId`、`cwd`，以及可选的 `title`、`updatedAt`（Unix 毫秒）。空列表为 `[]`。harness 缺失或无效返回 400，节点未知返回 404，代理不支持查询返回 409，节点报告查询失败返回 502，电脑离线返回 503，等待节点回复超过 25 秒返回 504。
+
+主会话用 `node_sessions` 查到的 `sessionId` 可作为 `dispatch_task` 的 `runner.session`。任务记录保留此次指定的会话，后续 `continue_from` 使用任务结束时返回的 `nativeSessionId`。

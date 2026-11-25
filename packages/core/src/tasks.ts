@@ -1,5 +1,5 @@
 import type { TaskEnd } from "@alter/node-protocol";
-import { NodeRuns, type NodeRunner } from "./node-state.ts";
+import { harnessSchema, NodeRuns, type NodeRunner } from "./node-state.ts";
 import type { NodeHub } from "./nodes.ts";
 import { arr, bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
@@ -188,7 +188,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const brief = inspection && !args.heartbeatId ? args.brief + "\n" + proactivePrinciple : args.brief;
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const goal = previous?.goal; // Preserve read-only scope when resuming historical research.
-    const runner = previous?.runner ?? args.runner;
+    const runner = previous?.runner ? { node: previous.runner.node, harness: previous.runner.harness } : args.runner;
     const at = !runner && !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
     if (previous) {
       const identity = await tx.doc(TaskIdentity, previous.conversationId);
@@ -237,9 +237,10 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const permission = inspection && args.permission === "full" ? "restricted" : args.permission;
     if (runner) {
       const runs = await tx.doc(NodeRuns, childId);
+      const resume = previous ? previous.nativeSessionId : args.runner?.session;
       runs.byId[taskId] = { ackSeq: 0, messages: [], approvals: {}, start: {
         type: "task.start", taskId, harness: runner.harness, brief, permission,
-        ...(cwd && { cwd }), ...(previous?.nativeSessionId && { resume: previous.nativeSessionId }),
+        ...(cwd && { cwd }), ...(resume && { resume }),
         ...(thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "max" ? { thinking } : {}),
       } };
       await tx.appendEntry(childId, { kind: "alter.node-event", data: { kind: "user", at: stamp.at, text: args.brief } });
@@ -260,10 +261,10 @@ function lookup<T>(byId: Record<string, T>, id: string) {
 
 export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, nodes: NodeHub) {
   return defineTool({
-    name: "dispatch_task", description: "Start a task with context and permission. For a node runner, include the necessary context in brief and optionally specify cwd on that node. To continue an ended task, supply continue_from instead; it keeps its conversation.",
+    name: "dispatch_task", description: "Start a task with context and permission. For a node runner, include the necessary context in brief and optionally specify cwd. Set runner.session to a sessionId from node_sessions to resume the user's conversation. Use continue_from to continue an ended Alter task.",
     parameters: obj({
       brief: nonempty, context: opt(oneOf(["fork", "fresh"])), permission: opt(oneOf(["restricted", "auto", "full"])),
-      runner: opt(obj({ node: nonempty, harness: oneOf(["claude-code", "codex", "opencode"]) })), cwd: opt(nonempty),
+      runner: opt(obj({ node: nonempty, harness: harnessSchema, session: opt(nonempty) })), cwd: opt(nonempty),
       continue_from: opt(nonempty), thinking: opt(oneOf(["low", "medium", "high", "max"])),
     }),
     replay: "safe",
@@ -295,7 +296,7 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, node
           const name = (runner ?? target)!.node;
           const node = (await nodes.list(tx)).find(n => n.id === name || n.name === name);
           if (!node) return reply("Unknown node: " + name, true);
-          target = { node: node.id, harness: (runner ?? target)!.harness };
+          target = { ...(runner ?? target)!, node: node.id };
         }
         const args = { brief, thinking, context: context!, permission: permission!, continuedFrom: continue_from, runner: target, cwd };
         await dispatch(tx, api.conversationId, taskId, args);

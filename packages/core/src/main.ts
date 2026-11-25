@@ -1,4 +1,4 @@
-import { NodeHub } from "./nodes.ts";
+import { NodeHub, nodeSessionsTool } from "./nodes.ts";
 import { createFeedback } from "./feedback-service.ts";
 import { FeedbackError } from "./feedback.ts";
 import { feedbackCall } from "./feedback-model.ts";
@@ -195,7 +195,7 @@ export async function openAlter(
       },
     }),
     ...watches.tools,
-    dispatchTool(dispatch, nodes), taskStatus, taskMessage(nodes), cancellation.tool,
+    dispatchTool(dispatch, nodes), nodeSessionsTool(nodes), taskStatus, taskMessage(nodes), cancellation.tool,
   ];
   if (leasing) controls.push(
     defineTool({

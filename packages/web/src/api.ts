@@ -1,5 +1,5 @@
 import type { GatewayAdminUser, GatewayInvite, GatewayUser, GatewayUserPatch } from "./types.ts";
-import type { Node, CreatedNode, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
+import type { Node, CreatedNode, HarnessId, NativeSession, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
 import type { Action } from "./store.ts";
 import type { AdapterCreate, AdapterPatch, AdapterPreset, AdapterPresetCreate, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
@@ -36,6 +36,8 @@ export const gatewayApi = {
 
 export const api = {
   nodes: () => request<Node[]>("/api/nodes"),
+  nodeSessions: (id: string, harness: HarnessId, cwd?: string) =>
+    request<NativeSession[]>(`/api/nodes/${encodeURIComponent(id)}/sessions?${new URLSearchParams({ harness, ...(cwd && { cwd }) })}`),
   createNode: (name: string) => request<CreatedNode>("/api/nodes", { body: { name } }),
   deleteNode: (id: string) => request<void>(`/api/nodes/${encodeURIComponent(id)}`, { method: "DELETE", body: {} }),
   debugTraces: (query: DebugTraceQuery = {}) => {

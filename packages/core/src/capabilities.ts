@@ -69,7 +69,7 @@ export function createCapabilityRegistry(plugins: readonly AlterPlugin[] = [], d
   const manifests = [...activeDemos, ...plugins.map(plugin => plugin.capability)];
   const toolActions = new Map<string, ToolAction>();
   const ids = new Set<string>();
-  const reserved = new Set(["dispatch_task", "task_status", "task_message", "task_stop", "enable_tool", "feedback_answer", "digest_source", "finish", "sleep", "watch", "watch_list", "watch_cancel"]);
+  const reserved = new Set(["dispatch_task", "node_sessions", "task_status", "task_message", "task_stop", "enable_tool", "feedback_answer", "digest_source", "finish", "sleep", "watch", "watch_list", "watch_cancel"]);
   for (const capability of manifests) {
     if (ids.has(capability.id)) throw new Error(`Duplicate capability: ${capability.id}`);
     ids.add(capability.id);
