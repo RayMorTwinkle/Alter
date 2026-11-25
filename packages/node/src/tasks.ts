@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ApprovalAnswer, ApprovalRequest, Effect, Report, TaskEnd, TaskStart } from "@alter/node-protocol";
 import { loadConfig, taskDirectory } from "./config.ts";
 import { listSessions } from "./sessions.ts";
-import { finishScript, reportSchema } from "./finish.ts";
+import { cliScript, reportSchema } from "./finish.ts";
 import { Outbox, type Entry } from "./outbox.ts";
 import type { Detected } from "./spawn.ts";
 import { acp } from "./adapters/acp.ts";
@@ -133,7 +133,7 @@ export class Tasks {
       folder = mkdtempSync(path.join(tmpdir(), "alter-finish-")); reportFile = path.join(folder, "report.json");
       const adapter = { codex, "claude-code": claude, dsh: acp, opencode: acp }[task.harness];
       const model = task.resume ? undefined : config.models?.[task.harness];
-      handle = adapter.start({ ...task, cwd, executable, model, finish: { command: process.execPath, args: [finishScript, reportFile] } }, sink);
+      handle = adapter.start({ ...task, cwd, executable, model, finish: { command: process.execPath, args: [cliScript, "finish-mcp", reportFile] } }, sink);
     } catch (err) { void stop({ status: "failed", reason: String(err) }); } })();
   }
 

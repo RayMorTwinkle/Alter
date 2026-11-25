@@ -69,6 +69,10 @@ async function main([cmd, ...args]: string[]) {
     } finally { release(); }
     return;
   }
+  if (cmd === "finish-mcp") {
+    const { serveFinish } = await import("./finish.ts");
+    await serveFinish(args[0]); return;
+  }
   if (args.length) throw new Error(help);
   if (cmd === "install-service" || cmd === "uninstall-service") {
     const { configureService } = await import("./service.ts");

@@ -5,10 +5,11 @@ import { z } from "zod";
 import { atomicWrite } from "./config.ts";
 
 export const reportSchema = z.object({ summary: z.string().trim().min(1), refs: z.array(z.object({ kind: z.string(), ref: z.string() })) });
-export const finishScript = fileURLToPath(import.meta.url);
+declare const __ALTER_BUNDLE__: boolean | undefined;
+// The downloadable build is one file, so every entry point (run, finish, login item) is that file.
+export const cliScript = fileURLToPath(typeof __ALTER_BUNDLE__ === "undefined" ? new URL("./cli.ts", import.meta.url) : import.meta.url);
 
-if (process.argv[1] === finishScript) {
-  const file = process.argv[2];
+export async function serveFinish(file: string | undefined) {
   if (!file) throw new Error("缺少报告路径");
   const server = new McpServer({ name: "alter", version: "1" });
   server.registerTool("finish", { description: "提交本轮任务报告和引用。", inputSchema: reportSchema }, async report => {

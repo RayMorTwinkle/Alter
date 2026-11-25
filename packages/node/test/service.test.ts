@@ -27,7 +27,8 @@ test.skipIf(process.platform !== "win32")("creates and deletes the same per-user
     ["/Delete", "/TN", "Alter Node " + sid, "/F"]]);
   expect(xml).toContain("<LogonTrigger><UserId>" + sid + "</UserId>");
   expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
-  expect(xml).toContain('cli.ts" run</Arguments>');
+  expect(xml).toContain("-WindowStyle Hidden");
+  expect(xml).toContain("cli.ts' run\"</Arguments>");
 });
 
 test("login definitions preserve paths with spaces and platform-specific quoting", () => {

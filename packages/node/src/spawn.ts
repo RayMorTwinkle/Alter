@@ -1,12 +1,11 @@
 import { constants, accessSync, statSync } from "node:fs";
-import { execFile, type ChildProcessWithoutNullStreams, type spawn } from "node:child_process";
-import { createRequire } from "node:module";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import type { Harness, HarnessId } from "@alter/node-protocol";
+import crossSpawn from "cross-spawn";
 
-const crossSpawn: typeof spawn = createRequire(import.meta.url)("cross-spawn");
 export function* commandCandidates(name: string, env = process.env, platform = process.platform) {
   const win = platform === "win32", api = win ? path.win32 : path.posix;
   const extensions = win && !api.extname(name) ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";")

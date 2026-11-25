@@ -53,7 +53,7 @@ async function fixture() {
   };
   const response = await web.post("/api/nodes", { name: device.name });
   expect(response.status).toBe(201);
-  const created: { id: string; token: string; pairCommand: string; runCommand: string; installCommand: string } = await response.json();
+  const created: { id: string; token: string; installCommandPowerShell: string; installCommandUnix: string } = await response.json();
   const dispatch = (brief: string, node = device.name) => call("dispatch_task", {
     brief, permission: "restricted", context: "fresh", runner: { node, harness: "codex" }, cwd: "/work", thinking: "low",
   });
@@ -64,9 +64,11 @@ it("authenticates the instance token separately from browser login, binds the de
   vi.stubEnv("ALTER_USER_ID", "roommate");
   cleanup.push(() => { vi.unstubAllEnvs(); });
   const web = await fixture();
-  const { token, id, pairCommand } = web.created;
+  const { token, id, installCommandPowerShell, installCommandUnix } = web.created;
   expect(token).toMatch(/^roommate\.[\w-]+$/);
-  expect(pairCommand).toContain(token);
+  expect(installCommandPowerShell).toContain(`$env:ALTER_TOKEN='${token}'; `);
+  expect(installCommandPowerShell).toMatch(/irm '.+\/node\/install\.ps1' \| iex$/);
+  expect(installCommandUnix).toMatch(new RegExp(`^curl -fsSL '.+/node/install\\.sh' \\| .*ALTER_TOKEN='${token}' .*sh$`));
   expect((await fetch(web.base + "/api/nodes")).status).toBe(401);
   expect(await (await web.read("/api/nodes")).json()).toEqual([{ id, name: device.name, online: false, platform: null,
     lastSeen: null, createdAt: expect.any(Number), roots: [], harnesses: [] }]);
