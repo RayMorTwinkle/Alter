@@ -15,7 +15,7 @@ export type User = {
 };
 type Invite = {
   code: string; createdBy: string; createdAt: number; expiresAt: number;
-  usedBy: string | null; usedAt: number | null; revoked: boolean;
+  usedBy: string | null; usedAt: number | null; revoked: boolean; uses: number; maxUses: number;
 };
 export const identity = ({ id, username, role }: User) => ({ id, username, role });
 
@@ -51,6 +51,12 @@ export async function openAccounts(path: string, basePort: number, adminName: st
         tokenHash TEXT PRIMARY KEY, userId TEXT NOT NULL REFERENCES users(id), expiresAt INTEGER NOT NULL
       );
     `);
+    // usedBy keeps the latest registrant; uses/maxUses let one code admit several roommates.
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('invites') WHERE name='maxUses'").get()) db.exec(`
+      ALTER TABLE invites ADD COLUMN uses INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE invites ADD COLUMN maxUses INTEGER NOT NULL DEFAULT 1;
+      UPDATE invites SET uses=1 WHERE usedBy IS NOT NULL;
+    `);
     if (!db.prepare("SELECT 1 FROM users WHERE role='admin'").get()) {
       validName(adminName);
       if (!adminPassword) throw new Error("Missing ALTER_WEB_PASSWORD for initial administrator");
@@ -68,7 +74,7 @@ export async function openAccounts(path: string, basePort: number, adminName: st
     const row = db.prepare("SELECT " + fields + " FROM users WHERE id=?").get(id);
     return row && user(row);
   }
-  const inviteValid = "code=? AND usedBy IS NULL AND revoked=0 AND expiresAt>?";
+  const inviteValid = "code=? AND uses<maxUses AND revoked=0 AND expiresAt>?";
   function checkInvite(code: unknown): asserts code is string {
     if (typeof code !== "string" || !db.prepare("SELECT 1 FROM invites WHERE " + inviteValid).get(code, Date.now())) throw new HttpError(400, "Invalid or expired invite");
   }
@@ -99,7 +105,7 @@ export async function openAccounts(path: string, basePort: number, adminName: st
         while (reservedPorts.includes(port)) port++;
         if (port > 65535) throw new HttpError(409, "No instance ports left");
         db.prepare("INSERT INTO users(id,username,passwordHash,role,createdAt,port) VALUES(?,?,?,'user',?,?)").run(id, username, passwordHash, now, port);
-        db.prepare("UPDATE invites SET usedBy=?,usedAt=? WHERE code=?").run(id, now, invite);
+        db.prepare("UPDATE invites SET usedBy=?,usedAt=?,uses=uses+1 WHERE code=?").run(id, now, invite);
         return find(id)!;
       });
     },
@@ -135,11 +141,14 @@ export async function openAccounts(path: string, basePort: number, adminName: st
       });
     },
     invites: () => db.prepare("SELECT * FROM invites ORDER BY createdAt DESC").all().map(inviteView),
-    invite(createdBy: string, days: unknown = 7) {
+    invite(createdBy: string, days: unknown = 7, code: unknown = random(18), maxUses: unknown = 1) {
       if (typeof days !== "number" || !Number.isSafeInteger(days) || days <= 0 || !Number.isSafeInteger(Date.now() + days * day)) throw new HttpError(400, "Invalid validity in days");
-      const code = random(18), now = Date.now();
-      return inviteView(db.prepare("INSERT INTO invites(code,createdBy,createdAt,expiresAt) VALUES(?,?,?,?) RETURNING *")
-        .get(code, createdBy, now, now + days * day)!);
+      if (typeof code !== "string" || !/^[A-Za-z0-9_-]{4,64}$/.test(code)) throw new HttpError(400, "Invalid invite code");
+      if (typeof maxUses !== "number" || !Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 100) throw new HttpError(400, "Invalid invite uses");
+      if (db.prepare("SELECT 1 FROM invites WHERE code=?").get(code)) throw new HttpError(409, "Invite code already exists");
+      const now = Date.now();
+      return inviteView(db.prepare("INSERT INTO invites(code,createdBy,createdAt,expiresAt,maxUses) VALUES(?,?,?,?,?) RETURNING *")
+        .get(code, createdBy, now, now + days * day, maxUses)!);
     },
     revoke(code: string) {
       if (!db.prepare("UPDATE invites SET revoked=1 WHERE code=?").run(code).changes) throw new HttpError(404, "Unknown invite");

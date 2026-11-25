@@ -41,6 +41,32 @@ test("one-use invites, expiry, revocation and durable sessions and ports", async
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test("named invites admit up to their slot count, and old databases migrate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-accounts-"));
+  const path = join(dir, "accounts.sqlite");
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, passwordHash TEXT NOT NULL,
+      role TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, createdAt INTEGER NOT NULL, lastLoginAt INTEGER, port INTEGER UNIQUE);
+    CREATE TABLE invites (code TEXT PRIMARY KEY, createdBy TEXT NOT NULL, createdAt INTEGER NOT NULL,
+      expiresAt INTEGER NOT NULL, usedBy TEXT, usedAt INTEGER, revoked INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO users VALUES ('a','admin','x','admin',0,0,NULL,NULL), ('u','old','x','user',0,0,NULL,10000);
+    INSERT INTO invites VALUES ('spent','a',0,9999999999999,'u',0,0), ('fresh','a',0,9999999999999,NULL,NULL,0);`);
+  old.close();
+  const db = await openAccounts(path, 10000, "admin");
+  try {
+    const inputs = { password: "abcdefgh" };
+    await expect(db.register({ ...inputs, username: "late", invite: "spent" })).rejects.toThrow(/invite/);
+    expect(db.invites().find(i => i.code === "fresh")).toMatchObject({ uses: 0, maxUses: 1 });
+    expect(() => db.invite("a", 7, "no way")).toThrow(/code/);
+    expect(() => db.invite("a", 7, "fresh")).toThrow(/exists/);
+    expect(() => db.invite("a", 7, "cybhandsome", 0)).toThrow(/uses/);
+    db.invite("a", 7, "cybhandsome", 3);
+    const uses = await Promise.allSettled(["room1", "room2", "room3", "room4"].map(username => db.register({ ...inputs, username, invite: "cybhandsome" })));
+    expect(uses.filter(r => r.status === "fulfilled")).toHaveLength(3);
+    expect(db.invites().find(i => i.code === "cybhandsome")).toMatchObject({ uses: 3, maxUses: 3 });
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test("rate limits by username and IP independently over a rolling minute", () => {
   let now = 0;
   const attempt = loginLimiter(() => now);

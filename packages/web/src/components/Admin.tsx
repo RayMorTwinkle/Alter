@@ -52,10 +52,11 @@ function UserCard({ user, self, onChange }: { user: GatewayAdminUser; self: bool
 }
 
 function inviteState(invite: GatewayInvite, t: ReturnType<typeof useT>["gw"], users: GatewayAdminUser[]) {
-  if (invite.usedBy) return t.used(users.find(user => user.id === invite.usedBy)?.username ?? invite.usedBy);
-  if (invite.revoked) return t.revoked;
-  if (invite.expiresAt < Date.now()) return t.expired;
-  return `${t.expires} ${clock(invite.expiresAt)}`;
+  if (invite.maxUses === 1 && invite.usedBy) return t.used(users.find(user => user.id === invite.usedBy)?.username ?? invite.usedBy);
+  const usage = invite.maxUses > 1 ? t.usage(invite.uses, invite.maxUses) + " · " : "";
+  if (invite.revoked) return usage + t.revoked;
+  if (invite.expiresAt < Date.now()) return usage + t.expired;
+  return usage + (invite.uses < invite.maxUses ? `${t.expires} ${clock(invite.expiresAt)}` : "");
 }
 
 export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () => void }) {
@@ -63,6 +64,8 @@ export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () =>
   const [users, setUsers] = useState<GatewayAdminUser[] | null>(null);
   const [invites, setInvites] = useState<GatewayInvite[]>([]);
   const [days, setDays] = useState(7);
+  const [slots, setSlots] = useState(1);
+  const [code, setCode] = useState("");
   const [copied, setCopied] = useState("");
   const [error, setError] = useState("");
   const load = () => {
@@ -77,7 +80,10 @@ export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () =>
   }, []);
 
   async function create() {
-    try { const invite = await gatewayApi.createInvite(days); setInvites(list => [invite, ...list]); await copy(invite.code); }
+    try {
+      const invite = await gatewayApi.createInvite(days, code.trim() || undefined, slots);
+      setInvites(list => [invite, ...list]); setCode(""); await copy(invite.code);
+    }
     catch (err) { setError((err as Error).message); }
   }
   async function copy(code: string) {
@@ -88,7 +94,7 @@ export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () =>
     try { await gatewayApi.revokeInvite(code); setInvites(list => list.map(item => item.code === code ? { ...item, revoked: true } : item)); }
     catch (err) { setError((err as Error).message); }
   }
-  const open = (invite: GatewayInvite) => !invite.usedBy && !invite.revoked && invite.expiresAt > Date.now();
+  const open = (invite: GatewayInvite) => invite.uses < invite.maxUses && !invite.revoked && invite.expiresAt > Date.now();
   const sorted = [...invites].sort((a, b) => Number(open(b)) - Number(open(a)) || b.createdAt - a.createdAt);
 
   return (
@@ -108,9 +114,16 @@ export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () =>
         <div className="preset-options">
           <label className="toggle-inline">{t.days}
             <select value={days} onChange={event => setDays(Number(event.target.value))}>
-              {[1, 7, 30].map(n => <option key={n} value={n}>{n}</option>)}
+              {[1, 7, 30, 365].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
+          <label className="toggle-inline">{t.slots}
+            <select value={slots} onChange={event => setSlots(Number(event.target.value))}>
+              {[1, 3, 5, 10].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <input value={code} placeholder={t.customCode} aria-label={t.invite}
+            onChange={event => setCode(event.target.value)} />
           <button className="btn primary" onClick={() => void create()}>{t.newInvite}</button>
         </div>
         {sorted.length === 0 && <p className="settings-hint">{t.noInvites}</p>}

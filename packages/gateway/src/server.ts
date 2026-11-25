@@ -118,8 +118,8 @@ export function gatewayServer(accounts: Accounts, instances: Instances, dist = j
     if (path === "/gateway/admin/invites") {
       if (method === "GET") return json(res, 200, accounts.invites());
       if (method === "POST") {
-        const { days } = await body(req, true);
-        return json(res, 201, accounts.invite(accounts.checkAdmin(token).id, days));
+        const { days, code, maxUses } = await body(req, true);
+        return json(res, 201, accounts.invite(accounts.checkAdmin(token).id, days, code || undefined, maxUses));
       }
     }
     if (/^\/gateway\/admin\/invites\/[^/]+$/.test(path) && method === "DELETE") {
