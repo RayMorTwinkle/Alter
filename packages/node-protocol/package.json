@@ -1,0 +1,13 @@
+{
+  "name": "@alter/node-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"no tests\""
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
