@@ -1,4 +1,4 @@
-# Web API 契约（v1.28）
+# Web API 契约（v1.29）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。HTTP 服务使用 `node:http`，网页推送用 SSE，节点连接使用 WebSocket（`ws`）。
 
@@ -51,6 +51,14 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 - `POST /api/logout` → `204`
 - 飞书 OAuth 的 `GET /api/feishu/oauth/callback` 通过 10 分钟内单次有效的 state 验证跨站回调。其余受保护的 API 未登录返回 `401`
 - 所有写请求要求 `Content-Type: application/json`（挡掉跨站表单提交）
+
+## 多用户网关（v1.29）
+
+- 注册调用 `POST /gateway/register { username, password, invite }`，成功返回 `201`。随后调用 `POST /gateway/login { username, password }` 获得网关 Cookie。`GET /gateway/me`、登录与注册均返回 `{ id, username, role }`。`POST /gateway/logout` 返回 `204`。
+- 管理员通过 `GET /gateway/admin/users` 查看账号与实例状态、实际端口、RSS 和上次登录时间。`PATCH /gateway/admin/users/:id` 接受 `disabled?`、`role?`、`password?`。`POST /gateway/admin/users/:id/restart` 重启受管实例。
+- `GET /gateway/admin/invites` 列出邀请码，`POST /gateway/admin/invites { days? }` 创建单次使用的邀请码，`DELETE /gateway/admin/invites/:code` 撤销邀请码。
+- 受管实例的 `GET /api/service` 额外返回 `restrictedCapabilities`。前端可据此隐藏 `browser`、`adapters`、`ext-plugins`、`cli`、`feishu` 和 `service` 的专属设置。受限接口返回 `403`。
+- 网页端请求函数见 `packages/web/src/api.ts` 导出的 `gatewayApi`。完整返回类型、状态码、节点升级路由和部署示例见[网关契约](gateway.md)。
 
 ## 数据类型
 
@@ -218,7 +226,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 
 ## macOS 后台服务（#110）
 
-- `GET /api/service` 返回 `{ supported, autostart, keepAlive, preventSleep, managed }`，字段均为布尔值。`supported` 表示当前平台为 macOS。`managed` 表示当前进程由 launchd 以 `top.raymor.alter` 标签启动。
+- `GET /api/service` 返回 `{ supported, autostart, keepAlive, preventSleep, managed }`，字段均为布尔值。`supported` 表示当前实例可管理 macOS 后台服务。`managed` 表示当前进程由 launchd 以 `top.raymor.alter` 标签启动。
 - `PUT /api/service` 接受 `autostart`（用户登录时启动）、`keepAlive`（异常退出后重启）、`preventSleep`（阻止系统因空闲而睡眠）的任意子集。三个开关默认关闭，保存在数据目录的 `service.json` 中。省略的字段保留原值。未知字段、非布尔字段或非对象请求体返回 `400`，在非 macOS 平台提交有效设置返回 `409`。
 - 成功写入返回 `200`，响应结构与 GET 相同。`managed` 描述发出响应的进程。需要切换时，服务在响应发出后重启，客户端重连后可再次 GET 确认。关闭登录启动和异常重启两个开关会移除 LaunchAgent，切回普通进程。单独修改 `preventSleep` 会即时启停 `caffeinate`，无需重连。
 

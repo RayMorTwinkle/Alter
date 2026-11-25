@@ -1,3 +1,4 @@
+import type { GatewayAdminUser, GatewayInvite, GatewayUser, GatewayUserPatch } from "./types.ts";
 import type { Node, CreatedNode, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
 import type { Action } from "./store.ts";
 import type { AdapterCreate, AdapterPatch, AdapterPreset, AdapterPresetCreate, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
@@ -19,6 +20,19 @@ async function request<T>(path: string, init?: { method?: string; body?: unknown
   const text = await response.text();
   return (text ? JSON.parse(text) : undefined) as T;
 }
+
+export const gatewayApi = {
+  login: (username: string, password: string) => request<GatewayUser>("/gateway/login", { body: { username, password } }),
+  logout: () => request<void>("/gateway/logout", { body: {} }),
+  register: (username: string, password: string, invite: string) => request<GatewayUser>("/gateway/register", { body: { username, password, invite } }),
+  me: () => request<GatewayUser>("/gateway/me"),
+  users: () => request<GatewayAdminUser[]>("/gateway/admin/users"),
+  updateUser: (id: string, patch: GatewayUserPatch) => request<GatewayAdminUser>(`/gateway/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
+  restartUser: (id: string) => request<void>(`/gateway/admin/users/${encodeURIComponent(id)}/restart`, { body: {} }),
+  invites: () => request<GatewayInvite[]>("/gateway/admin/invites"),
+  createInvite: (days?: number) => request<GatewayInvite>("/gateway/admin/invites", { body: { days } }),
+  revokeInvite: (code: string) => request<void>(`/gateway/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE", body: {} }),
+};
 
 export const api = {
   nodes: () => request<Node[]>("/api/nodes"),

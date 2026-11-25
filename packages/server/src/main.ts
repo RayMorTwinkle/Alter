@@ -22,9 +22,10 @@ export async function listen(server: Server, port: number, host: string) {
 }
 
 async function start() {
-  loadRepoEnv();
-  const password = process.env.ALTER_WEB_PASSWORD;
-  if (!password) throw new Error("Missing ALTER_WEB_PASSWORD");
+  const managed = process.env.ALTER_AUTH === "gateway" && !!process.send;
+  if (!managed) loadRepoEnv();
+  const password = process.env.ALTER_WEB_PASSWORD ?? "";
+  if (process.env.ALTER_AUTH !== "gateway" && !password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const host = process.env.ALTER_WEB_HOST || "127.0.0.1";
   const port = Number(process.env.ALTER_WEB_PORT || 4317);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid ALTER_WEB_PORT");
@@ -42,18 +43,25 @@ async function start() {
     const stopped = new Promise<void>(resolve => { shutdown = resolve; });
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    if (managed) {
+      process.once("disconnect", shutdown);
+      if (!process.connected) shutdown();
+    }
     try {
       await listen(web.server, port, host);
       await plugins.start();
       app.harness.resume();
       console.log("Alter web listening on", web.server.address());
+      if (managed && process.connected) process.send?.("ready");
       await stopped;
     } finally {
       process.off("SIGINT", shutdown);
       process.off("SIGTERM", shutdown);
       try { await web.close(); } finally { await plugins.close(); }
     }
-  } finally { await app.close(); }
+  } finally {
+    try { await app.close(); } finally { if (managed && process.connected) process.disconnect?.(); }
+  }
 }
 
 if (import.meta.main) await start();

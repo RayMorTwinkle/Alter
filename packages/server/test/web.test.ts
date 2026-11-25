@@ -36,6 +36,23 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   expect((await web.read("/api/state")).status).toBe(401);
 });
 
+it("also accepts the gateway secret on the password-authenticated administrator instance", async () => {
+  const web = await setup();
+  vi.stubEnv("ALTER_GATEWAY_DATA", web.dir);
+  vi.stubEnv("ALTER_GATEWAY_SECRET", "");
+  try {
+    const state = (secret: string) => fetch(web.base + "/api/state", { headers: { "X-Alter-Gateway-Secret": secret } });
+    expect((await state("wrong")).status).toBe(401);
+    await writeFile(join(web.dir, "secret"), "fixture-secret", { mode: 0o600 });
+    const trusted = await state("fixture-secret");
+    expect(trusted.status).toBe(200);
+    expect(trusted.headers.get("set-cookie")).toBeNull();
+    expect((await web.read("/api/state")).status).toBe(401);
+    await web.login();
+    expect((await web.read("/api/state")).status).toBe(200);
+  } finally { vi.unstubAllEnvs(); }
+});
+
 it("delivers live cumulative text, replays it on reconnect, and queues messages with stable echo IDs", async () => {
   let release!: ServerResponse;
   const web = await setup(({ messages }, res) => {
