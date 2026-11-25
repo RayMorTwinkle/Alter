@@ -27,10 +27,10 @@ function end() {
     usage: { input_tokens: 7, output_tokens: 2 }, total_cost_usd: 0, uuid: crypto.randomUUID() });
   else send({ method: "turn/completed", params: { threadId: thread, turn: { id: String(turn), status: "completed" } } });
 }
-async function report() {
+async function report(server = finish) {
   const client = new Client({ name: "fake-agent", version: "1" });
   try {
-    await client.connect(new StdioClientTransport(finish));
+    await client.connect(new StdioClientTransport(server));
     const reply = await client.callTool({ name: "finish", arguments: { summary: "结构化报告", refs: [{ kind: "file", ref: "a.txt" }] } });
     if (reply.isError) throw Error("finish failed");
   } finally { await client.close(); }
@@ -61,10 +61,15 @@ async function execute() {
   end();
 }
 
+if (provider === "opencode" || provider === "dsh") {
+  const { runAcp } = await import("./acp.mjs");
+  await runAcp({ provider, args, trace, report });
+  process.exit(0);
+}
 if (provider === "claude") {
   thread = args.find(arg => arg.startsWith("--resume="))?.slice(9) || thread;
   finish = JSON.parse(args[args.indexOf("--mcp-config") + 1]).mcpServers.alter;
-} else {
+} else if (args.includes("-c")) {
   const value = key => JSON.parse(args.find(arg => arg.startsWith("mcp_servers.alter." + key + "=")).split("=").slice(1).join("="));
   finish = { command: value("command"), args: value("args") };
 }
@@ -77,6 +82,7 @@ for await (const line of createInterface({ input: process.stdin, crlfDelay: Infi
   } else {
     const reply = result => send({ id: m.id, result });
     if (["initialize", "turn/steer", "turn/interrupt"].includes(m.method)) reply({});
+    if (m.method === "thread/list") reply({ data: [{ cwd: process.cwd(), id: "codex-1", name: "保存的线程", updatedAt: 1790000000 }], nextCursor: null });
     if (m.method === "thread/start" || m.method === "thread/resume") { thread = m.params.threadId || thread; reply({ thread: { id: thread } }); }
     if (m.method === "turn/start") {
       turn++; brief = m.params.input[0].text; reply({ turn: { id: String(turn) } });

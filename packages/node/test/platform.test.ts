@@ -23,7 +23,12 @@ test("pair/status/roots through CLI, durable identity, mode and token secrecy", 
   expect(exec(...pairArgs, "--name", "猫", "--root", f.root, f.bin)).not.toContain("fake-token");
   const c = loadConfig(dir);
   expect(c).toMatchObject({ name: "猫", server: "https://example.test", roots: [directory(f.root), directory(f.bin)] });
+  const model = '["zen","deepseek-v4-flash"]';
+  exec("harness", "model", "dsh", model);
   expect(exec(...pairArgs)).toContain(c.nodeId);
+  expect(exec("harness", "model", "dsh").trim()).toBe(model);
+  exec("harness", "model", "dsh", "--clear");
+  expect(loadConfig(dir).models?.dsh).toBeUndefined();
   expect(exec("status")).not.toContain("fake-token");
   if (process.platform !== "win32") expect(statSync(path.join(dir, "config.json")).mode & 0o777).toBe(0o600);
   else {
@@ -75,7 +80,8 @@ test("probes only the supplied executables, including .cmd shims on Windows", as
   if (process.platform === "win32") writeFileSync(path.join(f.bin, "claude.ps1"), "exit 1");
   const detected = await detectHarnesses({ PATH: f.bin, PATHEXT: ".PS1;.CMD;.EXE" });
   expect(detected).toMatchObject([{ id: "claude-code", available: true, version: "1.2.3" },
-    { id: "codex", available: true, version: "1.2.3" }, { id: "opencode", available: false, version: "1.2.3" }]);
+    { id: "codex", available: true, version: "1.2.3" }, { id: "opencode", available: true, sessions: true, version: "1.2.3" },
+    { id: "dsh", available: true, sessions: true, version: "1.2.3" }]);
   expect((await detectHarnesses({ PATH: "" })).every(h => !h.available && h.detail)).toBe(true);
 });
 
