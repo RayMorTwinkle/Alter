@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { defineTool, reply, type AlterApp, type AlterPlugin, type PluginView } from "@alter/core";
 import { discoverCli } from "./adapters/cli.ts";
 import { changes, check, definition, fields } from "./adapters/config.ts";
@@ -10,20 +12,31 @@ import { record, type AdapterDefinition, type AdapterEntry, type AdapterStatus, 
 import type { openSecrets } from "./secrets.ts";
 import { HttpError } from "./static.ts";
 
+const exec = promisify(execFile);
+async function ghAuthToken(signal: AbortSignal) {
+  try {
+    const { stdout } = await exec("gh", ["auth", "token"], { signal, timeout: 10_000 });
+    if (stdout.trim()) return stdout.trim();
+  } catch { /* gh stderr may contain credentials. */ }
+  throw new Error("本机 gh 未登录或不可用，请运行 gh auth login");
+}
+
 type Snapshot = AdapterTool & { sourceName?: string };
 type Entry = Omit<AdapterEntry, "tools" | "kind" | "config"> & AdapterDefinition & { tools: Snapshot[] };
 const capability = (e: Entry) => (e.kind === "http" ? "api" : e.kind) + "-" + e.id;
 const prefix = (id: string) => "adapter:" + id + ":";
 const effect = (e: Entry, t: Pick<AdapterTool, "name" | "defaultEffect">) => Object.hasOwn(e.effects, t.name) ? e.effects[t.name]! : t.defaultEffect;
 
-function containsSecret(value: unknown, credentials: string[]): boolean {
+function containsSecret(value: unknown, credentials: string[], checkKeys = false): boolean {
   if (!credentials.length) return false;
   if (typeof value === "string") {
     const literal = value.replace(/\{\{secret:[A-Za-z0-9_-]+\}\}/g, "");
     // Short values can occur incidentally inside executable paths or schema keywords.
     return credentials.some(v => literal === v || v.length >= 8 && literal.includes(v));
   }
-  return (Array.isArray(value) || record(value)) && Object.values(value).some(child => containsSecret(child, credentials));
+  if (Array.isArray(value)) return value.some(item => containsSecret(item, credentials, checkKeys));
+  return record(value) && Object.entries(value).some(([key, child]) =>
+    checkKeys && containsSecret(key, credentials) || containsSecret(child, credentials, checkKeys));
 }
 
 function snapshots(entry: Entry, connection: Connection): Snapshot[] {
@@ -54,7 +67,7 @@ function snapshots(entry: Entry, connection: Connection): Snapshot[] {
 
 type Session = {
   controller: AbortController; status: AdapterStatus; connection?: Connection; retry?: NodeJS.Timeout;
-  calls: Set<Promise<unknown>>;
+  calls: Set<Promise<unknown>>; credentials: string[]; githubTokens: string[];
 };
 
 export function openAdapters(app: AlterApp, dir: string, secrets: ReturnType<typeof openSecrets>) {
@@ -129,7 +142,7 @@ export function openAdapters(app: AlterApp, dir: string, secrets: ReturnType<typ
     }
   }
   async function register(e: Entry, s: Session, connection: Connection) {
-    const id = capability(e), credentials = secretValues(e.id);
+    const id = capability(e), { credentials, githubTokens } = s;
     const plugin: AlterPlugin = { capability: { id, mainLeasable: true, actions: e.tools.map(t => ({ name: t.name, effect: effect(e, t) })) },
       tools: e.tools.map((t, i) => defineTool({ name: id + "_" + t.name, description: t.description, parameters: t.inputSchema,
         async execute(args, _api, ctx) {
@@ -138,8 +151,13 @@ export function openAdapters(app: AlterApp, dir: string, secrets: ReturnType<typ
             const signal = ctx.abortSignal ? AbortSignal.any([s.controller.signal, ctx.abortSignal]) : s.controller.signal;
             const call = connection.tools[i]!.call(record(args) ? args : {}, signal);
             s.calls.add(call);
-            try { return { ...await call, details: { untrusted: true } }; }
-            finally { s.calls.delete(call); }
+            try {
+              const result = await call;
+              if (githubTokens.length) for (const part of result.output) {
+                if (part.type === "text") part.text = redact(part.text, githubTokens);
+              }
+              return { ...result, details: { untrusted: true } };
+            } finally { s.calls.delete(call); }
           } catch (error) {
             return { ...reply(redact(error instanceof Error ? error.message : "Adapter tool failed", credentials), true), details: { untrusted: true } };
           }
@@ -150,15 +168,30 @@ export function openAdapters(app: AlterApp, dir: string, secrets: ReturnType<typ
   async function reload(e: Entry, delay = 1000) {
     await stop(e, e.enabled);
     if (!e.enabled || closed) { notify(); return; }
-    const s: Session = { controller: new AbortController(), status: { state: "connecting" }, calls: new Set() };
+    const credentials = secretValues(e.id);
+    const storedToken = secrets.get(prefix(e.id) + "GITHUB_TOKEN");
+    const s: Session = { controller: new AbortController(), status: { state: "connecting" }, calls: new Set(),
+      credentials, githubTokens: typeof storedToken === "string" ? [storedToken] : [] };
     sessions.set(e.id, s);
     notify();
-    const credentials = secretValues(e.id);
-    const expand = (text: string) => text.replace(/\{\{secret:([A-Za-z0-9_-]+)\}\}/g, (_, key: string) => {
-      const v = secrets.get(prefix(e.id) + key);
-      if (typeof v !== "string") throw new Error("Missing secret: " + key);
-      return v;
-    });
+    let ghToken: Promise<string> | undefined;
+    const expand = async (text: string) => {
+      let localToken: string | undefined;
+      if (text.includes("{{gh-token}}")) {
+        ghToken ??= ghAuthToken(s.controller.signal).then(token => {
+          s.githubTokens.unshift(token);
+          credentials.unshift(token);
+          return token;
+        });
+        localToken = await ghToken;
+      }
+      return text.replace(/\{\{(?:secret:([A-Za-z0-9_-]+)|gh-token)\}\}/g, (_, key?: string) => {
+        if (key === undefined) return localToken!;
+        const v = secrets.get(prefix(e.id) + key);
+        if (typeof v !== "string") throw new Error("Missing secret: " + key);
+        return v;
+      });
+    };
     function failed(reason: string) {
       if (sessions.get(e.id) !== s || closed || s.controller.signal.aborted) return;
       s.status = { state: "error", detail: redact(reason, credentials).slice(0, 500) };
@@ -186,7 +219,7 @@ export function openAdapters(app: AlterApp, dir: string, secrets: ReturnType<typ
       const tools = snapshots(e, connection);
       for (const t of tools) {
         t.description = redact(t.description, credentials);
-        if (containsSecret([t.sourceName ?? t.name, t.inputSchema], credentials)) {
+        if (containsSecret([t.sourceName ?? t.name, t.inputSchema], credentials, true)) {
           throw new Error("Discovered tool metadata contains a configured secret");
         }
       }

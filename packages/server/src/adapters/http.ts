@@ -148,10 +148,10 @@ function operation(doc: Obj, path: string, item: Obj, method: string, op: Obj, b
 }
 
 export async function discoverHttp(config: HttpConfig, expand: Expand, signal: AbortSignal): Promise<Connection> {
-  const headers = expandMap(config.headers, expand);
+  const headers = await expandMap(config.headers, expand);
   let doc: Obj, specUrl: string | undefined;
-  if (typeof config.spec === "string" && (!config.spec.trimStart().startsWith("{") || config.spec.trimStart().startsWith("{{secret:"))) {
-    specUrl = httpUrl(expand(config.spec)).href;
+  if (typeof config.spec === "string" && (!config.spec.trimStart().startsWith("{") || config.spec.trimStart().startsWith("{{"))) {
+    specUrl = httpUrl(await expand(config.spec)).href;
     const res = await fetch(specUrl, { headers, signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) });
     if (!res.ok) { await res.body?.cancel(); throw new Error("OpenAPI document returned HTTP " + res.status); }
     specUrl = res.url;
@@ -165,7 +165,8 @@ export async function discoverHttp(config: HttpConfig, expand: Expand, signal: A
     const variable = variables[key];
     return record(variable) && typeof variable.default === "string" ? variable.default : match;
   });
-  const base = httpUrl(expand(address), specUrl);
+  if (specUrl && config.baseUrl === undefined && address.includes("{{gh-token}}")) throw new Error("Remote OpenAPI servers cannot request a gh token");
+  const base = httpUrl(await expand(address), specUrl);
   const tools: DiscoveredTool[] = [];
   for (const [path, value] of Object.entries(object(doc.paths))) {
     const item = resolve(doc, value);

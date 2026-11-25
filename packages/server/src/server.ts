@@ -11,6 +11,7 @@ import {
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
 import { templates, SourceError } from "@alter/plugin-sources";
 import { PluginError } from "@alter/plugin-runtime";
+import { adapterPresets, presetConfig } from "./adapters/presets.ts";
 import type { PluginManager } from "./plugin-manager.ts";
 import { redirectUri, settingsWriter } from "./settings-api.ts";
 import { openService, type ServiceOptions } from "./service.ts";
@@ -368,10 +369,14 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       await sources.remove(id);
     } else if (method === "GET" && path === "/api/adapters") {
       return json(res, 200, adapters?.list() ?? []);
+    } else if (method === "GET" && path === "/api/adapters/presets") {
+      return json(res, 200, adapterPresets);
     } else if (adapters && method === "POST" && path === "/api/adapters") {
       return mutation(201, await adapters.create(await body(req)));
     } else if (adapters && method === "POST" && /^\/api\/adapters\/[^/]+\/refresh$/.test(path)) {
       return mutation(200, await adapters.refresh(path.split("/")[3]!));
+    } else if (adapters && method === "POST" && /^\/api\/adapters\/presets\/[^/]+$/.test(path)) {
+      return mutation(201, await adapters.create(presetConfig(path.split("/")[4]!, await body(req))));
     } else if (adapters && (method === "PATCH" || method === "DELETE") && /^\/api\/adapters\/[^/]+$/.test(path)) {
       const id = path.split("/")[3]!;
       if (method === "PATCH") return mutation(200, await adapters.patch(id, await body(req)));

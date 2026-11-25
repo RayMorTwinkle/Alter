@@ -3,8 +3,8 @@ import { reply } from "@alter/core";
 import { expandMap, type CliConfig, type Connection, type Expand } from "./types.ts";
 
 export async function discoverCli(config: CliConfig, name: string, expand: Expand, lifetime: AbortSignal): Promise<Connection> {
-  const prefix = config.args?.map(expand) ?? [];
-  const env = { ...process.env, ...expandMap(config.env, expand) };
+  const prefix = await Promise.all((config.args ?? []).map(expand));
+  const env = { ...process.env, ...await expandMap(config.env, expand) };
   function run(args: string[], input: string | undefined, signal: AbortSignal, limit: number) {
     const timeout = AbortSignal.timeout(config.timeoutMs ?? 120_000);
     const stop = AbortSignal.any([timeout, signal]);

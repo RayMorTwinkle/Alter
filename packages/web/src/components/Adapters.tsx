@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
-import type { AdapterConfig, AdapterCreate, AdapterEffect, AdapterKind, AdapterView } from "../types.ts";
+import type { AdapterConfig, AdapterCreate, AdapterEffect, AdapterKind, AdapterPreset, AdapterPresetAuth, AdapterPresetVariant, AdapterView } from "../types.ts";
 
 const effects: AdapterEffect[] = ["read", "write", "irreversible"];
 const lines = (text: string) => text.split("\n").map(line => line.trim()).filter(Boolean);
@@ -68,6 +68,48 @@ function AdapterCard({ adapter, onChange }: { adapter: AdapterView; onChange: (n
         <button className="btn quiet" disabled={busy} onClick={() => {
           if (confirm(t.confirmDelete(adapter.name))) void run(() => api.deleteAdapter(adapter.id));
         }}>{t.remove}</button>
+      </div>
+    </article>
+  );
+}
+
+function PresetCard({ preset, onAdded }: { preset: AdapterPreset; onAdded: (adapter: AdapterView) => void }) {
+  const t = useT().adapters;
+  const [auth, setAuth] = useState<AdapterPresetAuth>(preset.authMethods[0] ?? "gh");
+  const [variant, setVariant] = useState<AdapterPresetVariant>(preset.variants[0] ?? "readonly");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function add() {
+    setBusy(true);
+    setError("");
+    try { onAdded(await api.createAdapterFromPreset(preset.id, { auth, variant, ...(auth === "token" && { token: token.trim() }) })); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  }
+  return (
+    <article className="adapter preset">
+      <header><b>{preset.name}</b></header>
+      <p className="settings-hint">{preset.description}</p>
+      <div className="preset-options">
+        {preset.authMethods.length > 1 && (
+          <div className="seg" role="radiogroup" aria-label={t.auth}>
+            {preset.authMethods.map(m => (
+              <button key={m} role="radio" aria-checked={auth === m} className={auth === m ? "active" : ""} onClick={() => setAuth(m)}>{t.auths[m]}</button>
+            ))}
+          </div>
+        )}
+        {preset.variants.length > 1 && (
+          <select value={variant} onChange={event => setVariant(event.target.value as AdapterPresetVariant)} aria-label={t.variant}>
+            {preset.variants.map(v => <option key={v} value={v}>{t.variants[v]}</option>)}
+          </select>
+        )}
+      </div>
+      {auth === "token" && <input type="password" value={token} onChange={event => setToken(event.target.value)} placeholder={t.tokenPlaceholder} autoComplete="off" />}
+      {auth === "gh" && <small className="settings-hint">{t.ghHint}</small>}
+      {error && <p className="form-error">{error}</p>}
+      <div className="form-actions">
+        <button className="btn primary" disabled={busy || (auth === "token" && !token.trim())} onClick={() => void add()}>{busy ? t.connecting : t.create}</button>
       </div>
     </article>
   );
@@ -150,7 +192,11 @@ function AddAdapter({ onAdded }: { onAdded: (adapter: AdapterView) => void }) {
 export function Adapters() {
   const t = useT().adapters;
   const [adapters, setAdapters] = useState<AdapterView[] | null>(null);
-  useEffect(() => { api.adapters().then(setAdapters, () => setAdapters([])); }, []);
+  const [presets, setPresets] = useState<AdapterPreset[]>([]);
+  useEffect(() => {
+    api.adapters().then(setAdapters, () => setAdapters([]));
+    api.adapterPresets().then(setPresets, () => {});
+  }, []);
   if (!adapters) return null;
   const replace = (id: string) => (next?: AdapterView) =>
     setAdapters(list => (list ?? []).flatMap(item => item.id !== id ? [item] : next ? [next] : []));
@@ -160,6 +206,9 @@ export function Adapters() {
       <p className="settings-hint">{t.hint}</p>
       {adapters.length === 0 && <p className="settings-hint">{t.empty}</p>}
       {adapters.map(adapter => <AdapterCard key={adapter.id} adapter={adapter} onChange={replace(adapter.id)} />)}
+      {presets.filter(preset => !adapters.some(adapter => adapter.id === preset.id)).map(preset => (
+        <PresetCard key={preset.id} preset={preset} onAdded={adapter => setAdapters(list => [...(list ?? []), adapter])} />
+      ))}
       <AddAdapter onAdded={adapter => setAdapters(list => [...(list ?? []), adapter])} />
     </section>
   );

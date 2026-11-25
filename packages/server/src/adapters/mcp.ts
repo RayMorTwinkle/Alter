@@ -16,20 +16,20 @@ function objectSchema(schema: unknown): Record<string, unknown> {
 
 export async function discoverMcp(config: McpConfig, expand: Expand, signal: AbortSignal, disconnected: (reason: string) => void): Promise<Connection> {
   if (config.transport === "stdio") {
-    const transport = new StdioClientTransport({ command: config.command, args: config.args?.map(expand), env: expandMap(config.env, expand), stderr: "ignore" });
-    return discover(transport, signal, disconnected);
+    const transport = new StdioClientTransport({ command: config.command, args: await Promise.all((config.args ?? []).map(expand)), env: await expandMap(config.env, expand), stderr: "ignore" });
+    return discover(transport, signal, disconnected, config.readOnly);
   }
-  const url = new URL(expand(config.url));
-  const options = { requestInit: { headers: expandMap(config.headers, expand) } };
-  try { return await discover(new StreamableHTTPClientTransport(url, options), signal, disconnected); }
+  const url = new URL(await expand(config.url));
+  const options = { requestInit: { headers: await expandMap(config.headers, expand) } };
+  try { return await discover(new StreamableHTTPClientTransport(url, options), signal, disconnected, config.readOnly); }
   catch (error) {
     if (!(error instanceof StreamableHTTPError) || ![400, 404, 405].includes(error.code ?? 0)) throw error;
     signal.throwIfAborted();
-    return discover(new SSEClientTransport(url, options), signal, disconnected);
+    return discover(new SSEClientTransport(url, options), signal, disconnected, config.readOnly);
   }
 }
 
-async function discover(transport: Transport, signal: AbortSignal, disconnected: (reason: string) => void): Promise<Connection> {
+async function discover(transport: Transport, signal: AbortSignal, disconnected: (reason: string) => void, readOnly = false): Promise<Connection> {
   const client = new Client({ name: "alter", version: "1" });
   let ready = false;
   client.onclose = () => { if (ready) disconnected("MCP connection closed"); };
@@ -57,7 +57,7 @@ async function discover(transport: Transport, signal: AbortSignal, disconnected:
       if (!Array.isArray(page?.tools)) throw new Error("MCP tools/list returned no tools array");
       for (const tool of page.tools.filter(tool => typeof tool?.name === "string")) tools.push({
         name: tool.name, description: tool.description ?? tool.name, inputSchema: objectSchema(tool.inputSchema),
-        defaultEffect: tool.annotations?.readOnlyHint === true ? "read" : "write",
+        defaultEffect: readOnly || tool.annotations?.readOnlyHint === true ? "read" : "write",
         async call(args, signal) {
           const result = await client.callTool({ name: tool.name, arguments: args }, CallToolResultSchema, { signal });
           const content = CallToolResultSchema.parse(result).content;
