@@ -3,12 +3,14 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { configDir, directory, inside, loadConfig, lock, pair, saveConfig } from "./config.ts";
-import { detectHarnesses } from "./spawn.ts";
+import type { HarnessId } from "@alter/node-protocol";
+import { detectHarnesses, harnessCommands } from "./spawn.ts";
 
 const help = `alter-node pair --server <url> --token <token> [--name <名称>] [--root <目录> ...]
 alter-node run
 alter-node status
 alter-node roots list | add <目录> | remove <目录>
+alter-node harness model <claude-code|codex|opencode|dsh> [<值>|--clear]
 alter-node install-service | uninstall-service`;
 
 async function main([cmd, ...args]: string[]) {
@@ -31,6 +33,21 @@ async function main([cmd, ...args]: string[]) {
     if (!v.server || !v.token) throw new Error("需要 --server 和 --token");
     const c = pair(dir, v.server, v.token, v.name, v.root);
     console.log("已保存配对配置", c.name, c.nodeId); return;
+  }
+  if (cmd === "harness") {
+    const [op, id, value] = args;
+    if (op !== "model" || !id || !Object.hasOwn(harnessCommands, id) || args.length > 3 || value?.trim() === "") throw new Error(help);
+    const harness = id as HarnessId;
+    const release = lock(dir, "config");
+    try {
+      const c = loadConfig(dir);
+      if (value === undefined) { console.log(c.models?.[harness] ?? "使用代理默认模型"); return; }
+      c.models ??= {};
+      if (value === "--clear") delete c.models[harness];
+      else c.models[harness] = value;
+      saveConfig(dir, c);
+    } finally { release(); }
+    return;
   }
   if (cmd === "roots") {
     const [op, arg] = args;

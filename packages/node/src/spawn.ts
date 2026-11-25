@@ -71,15 +71,15 @@ function version(file: string, signal?: AbortSignal) {
 }
 
 export type Detected = Harness & { executable?: string };
+export const harnessCommands = { "claude-code": "claude", codex: "codex", opencode: "opencode", dsh: "dsh" } satisfies Record<HarnessId, string>;
 export async function detectHarnesses(env = process.env, signal?: AbortSignal): Promise<Detected[]> {
-  const commands: [HarnessId, string][] = [["claude-code", "claude"], ["codex", "codex"], ["opencode", "opencode"]];
+  const commands = Object.entries(harnessCommands) as [HarnessId, string][];
   return Promise.all(commands.map(async ([id, command]) => {
     const executable = resolveCommand(command, env);
     if (!executable) return { id, available: false, detail: "未安装 " + command };
     try {
       const v = await version(executable, signal);
-      if (id === "opencode") return { id, version: v, available: false, detail: "尚未验证 opencode 2.x HTTP/SSE 协议" };
-      return { id, version: v, executable, available: true };
+      return { id, version: v, executable, available: true, sessions: true };
     } catch { return { id, available: false, detail: command + " 版本探测失败" }; }
   }));
 }

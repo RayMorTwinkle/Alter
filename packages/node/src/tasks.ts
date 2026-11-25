@@ -7,6 +7,7 @@ import { loadConfig, taskDirectory } from "./config.ts";
 import { finishScript, reportSchema } from "./finish.ts";
 import { Outbox, type Entry } from "./outbox.ts";
 import type { Detected } from "./spawn.ts";
+import { acp } from "./adapters/acp.ts";
 import { claude } from "./adapters/claude.ts";
 import { codex } from "./adapters/codex.ts";
 import type { Outcome, RunningTask, Sink } from "./adapters/types.ts";
@@ -16,6 +17,7 @@ function effect(tool: string): Effect {
   if (/^(edit|write|multiedit|notebookedit|apply_patch)$/i.test(tool)) return "write";
   return "irreversible";
 }
+const occupiedSession = /(?:session|thread)[^\n]*(?:already (?:owned|active|open|in use)|(?:is|currently) (?:in use|locked|busy))|session[._ -](?:busy|lock(?:ed)?)\b|会话.*(?:占用|锁定)/i;
 type Settlement = Pick<TaskEnd, "status" | "report" | "reportSource">;
 
 function settle(outcome: Outcome, file: string, last: string, output: string): Settlement {
@@ -72,6 +74,9 @@ export class Tasks {
         clearTimeout(timer);
         for (const pending of this.approvals.values()) if (pending.request.taskId === id)
           pending.answer({ decision: "deny", note: "任务已结束" });
+        if (task.resume && outcome.status === "failed" && outcome.reason && occupiedSession.test(outcome.reason)) {
+          outcome = { ...outcome, reason: "该会话正在原界面打开，关掉后再试\n" + outcome.reason };
+        }
         let result: Settlement;
         try {
           await handle?.stop(outcome.status !== "completed");
@@ -91,7 +96,7 @@ export class Tasks {
       session(value) { if (!closing) session = value; },
       event(e) { if (!closing) { if (e.text?.trim()) output = e.text; publish({ type: "task.event", ...e }); } },
       assistant(text) { if (!closing && text.trim()) last = text; },
-      approve: async (tool, args, signal) => {
+      approve: async (tool, args, signal, nativeEffect) => {
         if (closing || signal?.aborted) return { decision: "deny", note: "请求已取消" };
         const requestId = randomUUID();
         return new Promise(resolve => {
@@ -100,7 +105,7 @@ export class Tasks {
             signal?.removeEventListener("abort", abort); this.approvals.delete(requestId); resolve(reply);
           };
           const command = typeof args === "object" && args !== null && "command" in args && typeof args.command === "string" ? args.command : "";
-          const request = this.box.append(id, { type: "approval.request", tool, args, requestId, effect: effect(tool),
+          const request = this.box.append(id, { type: "approval.request", tool, args, requestId, effect: nativeEffect ?? effect(tool),
             summary: command ? "请求执行命令 " + command : "请求使用 " + tool }) as ApprovalRequest;
           this.approvals.set(requestId, { request, answer });
           signal?.addEventListener("abort", abort, { once: true });
@@ -119,12 +124,14 @@ export class Tasks {
     };
     try {
       if (!["restricted", "auto", "full"].includes(task.permission) || typeof task.brief !== "string") throw new Error("任务参数无效");
-      const cwd = taskDirectory(loadConfig(this.dir).roots, task.cwd);
+      const config = loadConfig(this.dir);
+      const cwd = taskDirectory(config.roots, task.cwd);
       const executable = this.harnesses.find(h => h.available && h.id === task.harness)?.executable;
-      if (!executable || (task.harness !== "claude-code" && task.harness !== "codex")) throw new Error("代理不可用");
+      if (!executable) throw new Error("代理不可用");
       folder = mkdtempSync(path.join(tmpdir(), "alter-finish-")); reportFile = path.join(folder, "report.json");
-      const adapter = task.harness === "codex" ? codex : claude;
-      handle = adapter.start({ ...task, cwd, executable, finish: { command: process.execPath, args: [finishScript, reportFile] } }, sink);
+      const adapter = { codex, "claude-code": claude, dsh: acp, opencode: acp }[task.harness];
+      const model = task.resume ? undefined : config.models?.[task.harness];
+      handle = adapter.start({ ...task, cwd, executable, model, finish: { command: process.execPath, args: [finishScript, reportFile] } }, sink);
     } catch (err) { void stop({ status: "failed", reason: String(err) }); }
   }
 

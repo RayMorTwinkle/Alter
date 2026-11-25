@@ -3,9 +3,10 @@ import WebSocket from "ws";
 import { connectPath, parseNodeToken, protocolVersion, type HubMessage, type NodeMessage } from "@alter/node-protocol";
 import { atomicWrite, loadConfig, lock, type Platform } from "./config.ts";
 import type { Detected } from "./spawn.ts";
+import { listSessions } from "./sessions.ts";
 import { Tasks } from "./tasks.ts";
 
-export function runNode(dir: string, harnesses: Detected[], options: { retryMs?: number; idleMs?: number; timeoutMs?: number } = {}) {
+export function runNode(dir: string, harnesses: Detected[], options: { retryMs?: number; idleMs?: number; timeoutMs?: number; listTimeoutMs?: number } = {}) {
   const release = lock(dir, "run");
   let socket: WebSocket | undefined, online = false, closing = false, retry: NodeJS.Timeout | undefined, idle: NodeJS.Timeout | undefined;
   const initial = options.retryMs ?? 1000;
@@ -13,13 +14,16 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
   const done = Promise.withResolvers<void>();
   const status = (state: string) => atomicWrite(path.join(dir, "status.json"), JSON.stringify({ state, pid: process.pid, at: Date.now() }));
   const send = (m: NodeMessage) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(m)); };
+  const listings = new Set<Promise<void>>();
+  const shutdown = new AbortController();
   let tasks: Tasks;
   async function stop(error?: Error) {
     if (closing) return done.promise;
     closing = true;
     clearTimeout(retry); clearTimeout(idle);
     try {
-      await tasks.shutdown();
+      shutdown.abort();
+      await Promise.all([tasks.shutdown(), ...listings]);
       status(error ? "配对被拒绝" : "已停止");
     } catch (err) {
       done.reject(err);
@@ -36,6 +40,7 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
     status("正在连接");
     const ws = new WebSocket(url, { headers: { Authorization: "Bearer " + config.token }, handshakeTimeout: 15000 });
     socket = ws;
+    const disconnected = new AbortController();
     function heartbeat() {
       clearTimeout(idle);
       idle = setTimeout(() => ws.terminate(), options.idleMs ?? 60000);
@@ -43,7 +48,8 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
     ws.on("open", () => {
       heartbeat();
       send({ type: "hello", protocol: protocolVersion, nodeId: config.nodeId, name: config.name, platform: process.platform as Platform,
-        nodeVersion: process.version, harnesses: harnesses.map(({ executable: _, ...h }) => h), roots: config.roots, tasks: tasks.box.tasks() });
+        nodeVersion: process.version, roots: config.roots, tasks: tasks.box.tasks(),
+        harnesses: harnesses.map(({ executable: _, ...h }) => ({ ...h, model: config.models?.[h.id] })) });
     });
     ws.on("message", raw => {
       if (closing) return;
@@ -62,6 +68,15 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
       }
       if (!online) { ws.close(1002); return; }
       switch (m.type) {
+        case "sessions.list": {
+          const signal = AbortSignal.any([shutdown.signal, disconnected.signal, AbortSignal.timeout(options.listTimeoutMs ?? 20000)]);
+          const query = listSessions(dir, harnesses, m, signal).then(result => {
+            if (!closing && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(result));
+          });
+          listings.add(query);
+          void query.finally(() => listings.delete(query)).catch(() => {});
+          break;
+        }
         case "task.start": tasks.start(m); break;
         case "task.stop": void tasks.active.get(m.taskId)?.stop({ status: "interrupted", reason: m.reason || "用户停止任务" }); break;
         case "task.message": if (typeof m.text === "string") tasks.active.get(m.taskId)?.queue.push(m.text); break;
@@ -75,7 +90,7 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
       if (res.statusCode === 401 || res.statusCode === 403) void stop(new Error("节点身份验证失败")).catch(() => {});
     });
     ws.on("close", () => {
-      online = false; clearTimeout(idle);
+      disconnected.abort(); online = false; clearTimeout(idle);
       if (closing) return;
       status("等待重连");
       retry = setTimeout(() => {

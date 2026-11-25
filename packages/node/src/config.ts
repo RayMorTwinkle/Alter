@@ -4,10 +4,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import { homedir, hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { parseNodeToken, type Hello } from "@alter/node-protocol";
+import { parseNodeToken, type HarnessId, type Hello } from "@alter/node-protocol";
 
 export type Platform = Hello["platform"];
-export type Config = { nodeId: string; name: string; server: string; token: string; roots: string[] };
+export type Config = { nodeId: string; name: string; server: string; token: string; roots: string[]; models?: Partial<Record<HarnessId, string>> };
 
 export function configDir(platform = process.platform, home = homedir(), appData = process.env.APPDATA) {
   // Lets one computer run a second node (or a smoke test) without touching the real pairing.
@@ -58,6 +58,8 @@ export function loadConfig(dir: string): Config {
     const c = JSON.parse(text);
     if (typeof c?.nodeId === "string" && typeof c.name === "string" && typeof c.server === "string" &&
       typeof c.token === "string" && parseNodeToken(c.token) && Array.isArray(c.roots) &&
+      (c.models === undefined || (c.models !== null && typeof c.models === "object" && !Array.isArray(c.models) &&
+        Object.values(c.models).every(value => typeof value === "string" && value.trim()))) &&
       c.roots.every((r: unknown) => typeof r === "string" && path.isAbsolute(r))) return c;
   } catch { /* JSON parser errors can quote a fragment of the token. */ }
   throw new Error("config.json 格式无效");
@@ -106,7 +108,7 @@ export function pair(dir: string, server: string, token: string, name?: string, 
     const old = existsSync(path.join(dir, "config.json")) ? loadConfig(dir) : undefined;
     if (old && (old.server !== url.origin || parseNodeToken(old.token)?.userId !== parseNodeToken(token)?.userId))
       throw new Error("此目录已与其他网关或用户配对");
-    const config = { server: url.origin, token, nodeId: old?.nodeId ?? randomUUID(), name: name || old?.name || hostname(),
+    const config = { models: old?.models, server: url.origin, token, nodeId: old?.nodeId ?? randomUUID(), name: name || old?.name || hostname(),
       roots: roots ? [...new Set(roots.map(directory))] : old?.roots ?? [] };
     saveConfig(dir, config);
     return config;

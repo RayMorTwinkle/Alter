@@ -15,7 +15,7 @@ export const claude: HarnessAdapter = {
     const options = {
       cwd: task.cwd, pathToClaudeCodeExecutable: task.executable, resume: task.resume,
       permissionMode: ({ restricted: "default", auto: "acceptEdits", full: "bypassPermissions" } as const)[task.permission],
-      allowDangerouslySkipPermissions: task.permission === "full", effort: task.thinking,
+      allowDangerouslySkipPermissions: task.permission === "full", effort: task.thinking, model: task.model,
       mcpServers: { alter: task.finish }, strictMcpConfig: true,
     };
     let lastText = "", assistantError = "", stderr = "", stopped = false;
