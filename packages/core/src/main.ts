@@ -1,3 +1,4 @@
+import { NodeHub } from "./nodes.ts";
 import { createFeedback } from "./feedback-service.ts";
 import { FeedbackError } from "./feedback.ts";
 import { feedbackCall } from "./feedback-model.ts";
@@ -59,7 +60,7 @@ export async function openAlter(
   const memory = createMemory(options.dataDir ?? storageDirectories.get(storage), options.now, options.timeZone);
   let plugins: AlterPlugin[] = [memory, ...(options.plugins ?? [])];
   const schedules = createScheduledTasks(() => main, registry, timeZone, now, () => plugins.find(p => p.calendarEvents)?.calendarEvents,
-    () => ({ dispatch, budget, harness }));
+    () => ({ dispatch, budget, harness, nodes }));
   const scheduler = createScheduler(() => main, registry, timeZone, now, schedules);
   const currentModels = () => typeof models === "function" ? models() : models;
   const dir = gatewayCapabilities.get(currentModels())?.dataDir ?? options.dataDir ?? storageDirectories.get(storage);
@@ -83,8 +84,8 @@ export async function openAlter(
     const description = tool.description.trim().split(/\n|(?<=[。！？])|(?<=[.!?])\s/, 1)[0] || tool.name;
     return capability.id + " — " + description.slice(0, 120);
   });
-  const prompt = memoryPrompt(memory, () => "可用能力有 " + available(leaseDescription).join("、") + "。" +
-    (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : ""));
+  const prompt = memoryPrompt(memory, async tx => "可用能力有 " + available(leaseDescription).join("、") + "。" +
+    (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : "") + await nodes.prompt(tx));
   const mainInstructions = "你是用户的个人主动型助理，最大的特色是能完成用户现有的目标、尝试用户提到过的事、猜测用户可能需要什么并主动去做，给用户带来惊喜。" +
     "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。最后的正文就是发给用户的回复。直接回答问题、汇报结果。用户要求不用回，或巡检等主动回合没有值得提醒的事时，调用 stay_silent，本轮正文只作为网页静默草稿。" +
     "你认为以后可能用得上的信息（用户是谁、偏好、正在推进的目标、兴趣、账号与资源等）都直接用 memory_write 记下，不必先核实；发现记错了就修改或取代。用户说“记住”或纠正你时更要立即记。" + memoryWriteGuidance +
@@ -130,24 +131,25 @@ export async function openAlter(
   const timeout = validateApprovalTimeout(options.approvalTimeoutMs ?? defaultApprovalTimeoutMs);
   const settings = openSettings(options.dataDir ?? storageDirectories.get(storage) ?? dir, proactive.heartbeat, feedback.settings);
   const defaultMs = validateApprovalTimeout(options.approvalDefaultMs ?? Number(process.env.ALTER_APPROVAL_DEFAULT_MS ?? 60_000), "ALTER_APPROVAL_DEFAULT_MS");
-  const broker = createBroker(() => main, capabilities, timeout, defaultMs,
+  const { extension: broker, request } = createBroker(() => main, capabilities, timeout, defaultMs,
     name => controls.some(tool => tool.name === name && !scheduler.tools.includes(tool)), () => settings.approvalModel,
     async (statement, call, owner, metadata) => {
       const preferences = await harness.snapshot(Preferences, main.id, context);
       return judge(auxiliaryModels(currentModels(), dir, now, "judge", owner), taskModel, statement, call, metadata, preferences?.permissionNotes[call.tool]);
-    });
+    }, (id, answer) => nodes.send(id, answer));
+  const nodes: NodeHub = new NodeHub(() => main, now, request);
   const taskExtensions = [extension, TaskTools, broker];
   const dispatch = createDispatcher(taskExtensions, taskModel, clock, (requested = thinking.task ?? "high") => {
     const model = currentModels().getModel(taskModel.provider, taskModel.modelId);
     return model ? clampThinkingLevel(model, requested) : requested;
-  });
+  }, nodes);
   const time = calendarTime(timeZone);
   const budget = createProactiveBudget(time, proactive.budget, now, dir);
   let traces: DebugTraces;
   const meteredModels = () => withUsage(currentModels(), budget, dir, now, () => traces);
   const reports = registerReports(scheduler, () => main, now, budget, timeZone, proactive.reportTime, () => settings.heartbeat,
     digestSummary(meteredModels, taskModel, now));
-  const cancellation = createTaskCancellation(() => harness);
+  const cancellation = createTaskCancellation(() => harness, nodes);
   const heartbeat = registerHeartbeat(scheduler, () => main, memory, () => plugins.find(p => p.capability.id === "calendar"),
     explorationSources, budget, timeZone, () => settings.heartbeat, now, dispatch, cancellation.cancel);
 
@@ -193,7 +195,7 @@ export async function openAlter(
       },
     }),
     ...watches.tools,
-    dispatchTool(dispatch), taskStatus, taskMessage, cancellation.tool,
+    dispatchTool(dispatch, nodes), taskStatus, taskMessage(nodes), cancellation.tool,
   ];
   if (leasing) controls.push(
     defineTool({
@@ -249,7 +251,7 @@ export async function openAlter(
   const controlPlane = defineExtension({
     name: "alter.main", tools: controls,
     sections: [{ key: "memory-index", tag: false, render: (_, ctx) => main.commit(tx => prompt.index(tx, main.id), ctx) }],
-    tasks: [SourceBorrow, FinishMainTurn, BackgroundTask, heartbeat.review, cancellation.stop, watches.worker, watches.poller],
+    tasks: [nodes.worker, SourceBorrow, FinishMainTurn, BackgroundTask, heartbeat.review, cancellation.stop, watches.worker, watches.poller],
     hooks: [
       mainCompaction(memory, mainModel),
       hook(BackgroundTask, {
@@ -295,7 +297,7 @@ export async function openAlter(
       }
       if (!task.worker) task.worker = (await tx.conversation(task.conversationId))!.owner!.taskId;
       task.thinking ??= (await tx.doc(AgentDoc, task.conversationId)).thinkingLevel ?? "off";
-      if (task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: task.thinking,
+      if (!task.runner && task.status === "running") await configure(tx, task.conversationId, { model: taskModel, thinkingLevel: task.thinking,
         ...(!task.proactive && { instructions: task.watch ? watchInstructions : workerInstructions }) });
     }
   }, context);
@@ -367,7 +369,7 @@ export async function openAlter(
       feedback: { paused: !checkin, nextAt: checkin?.at ?? null, reason: feedbackPaused ? "每周回访功能已暂停。"
         : "通常每七天回访，连续两批全部跳过后延长到十四天。" } };
   }
-  return { harness, main, settings, traces, debugSchedule,
+  return { harness, main, settings, traces, debugSchedule, nodes,
     get modelCapabilities() { return gatewayCapabilities.get(currentModels()); },
     feedback, replacePlugin, finishPluginRegistration, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
     notifications: {

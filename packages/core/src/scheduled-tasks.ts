@@ -1,3 +1,4 @@
+import type { NodeHub } from "./nodes.ts";
 import { randomUUID } from "node:crypto";
 import { arr, bool, compile, int, lit, num, obj, oneOf, opt, str, union, type Static } from "@earendil-works/pi-schema";
 import { calendarTime } from "./calendar-time.ts";
@@ -38,7 +39,7 @@ export const ScheduledTasks = conversationDoc<{ byId: Record<string, Row>; remov
 );
 const Changed = defineSignal({ name: "alter.scheduled-task-changed", version: 1, schema: bool() });
 const complete = { status: "terminal", outcome: { status: "completed", result: null } } as const;
-type Services = { harness: Harness; dispatch: ReturnType<typeof createDispatcher>; budget: ProactiveBudget };
+type Services = { nodes: NodeHub; harness: Harness; dispatch: ReturnType<typeof createDispatcher>; budget: ProactiveBudget };
 
 function timestamp(ms: number) {
   if (!Number.isSafeInteger(ms) || !Number.isFinite(new Date(ms).getTime())) throw new Error("Trigger time is out of range");
@@ -97,7 +98,9 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       if (previous) {
         const identity = await tx.doc(TaskIdentity, previous.conversationId);
         const latest = tasks[identity.taskId]!;
-        if (latest.status === "running") run.skipped = "接续任务仍在运行";
+        if (previous.runner && !(await services().nodes.list(tx)).some(n => n.id === previous.runner!.node)) run.skipped = "节点已吊销";
+        else if (previous.runner && !previous.nativeSessionId) run.skipped = "节点任务没有可接续的原生会话";
+        else if (latest.status === "running" || latest.status === "queued") run.skipped = "接续任务仍在运行";
         else if ((await tx.task(latest.worker))?.state.status !== "terminal") return latest.worker;
       }
       if (!run.skipped) {

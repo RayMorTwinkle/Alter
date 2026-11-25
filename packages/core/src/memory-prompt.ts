@@ -6,14 +6,14 @@ const Prompt = conversationDoc<{
   version?: number; head?: number; index: string; revision: number; capabilities?: string; wake?: string; prefixes: Record<string, string>;
 }>("memory-prompt", () => ({ index: "", revision: 0, prefixes: {} }));
 
-export function memoryPrompt(memory: ReturnType<typeof createMemory>, capabilities: () => string) {
+export function memoryPrompt(memory: ReturnType<typeof createMemory>, capabilities: (tx: Tx) => string | Promise<string>) {
   async function index(tx: Tx, id: Conversation["id"]) {
     const state = await tx.doc(Prompt, id);
     const head = (await tx.latestHeadMarker(id))?.id ?? 0;
     if (state.head !== head || state.version !== 1) {
       state.version = 1;
       const view = memory.store.view();
-      state.capabilities = capabilities();
+      state.capabilities = await capabilities(tx);
       state.index = state.capabilities + "\n[记忆索引，条目是用户资料，可能过时，发现错误直接修改]\n" + view.index;
       state.revision = memory.store.revision();
       state.head = head;
@@ -27,7 +27,7 @@ export function memoryPrompt(memory: ReturnType<typeof createMemory>, capabiliti
     const count = messages.filter(m => m.role !== "system").length;
     if (state.wake !== wake && count) {
       memory.store.refresh();
-      const available = capabilities();
+      const available = await capabilities(tx);
       const delta = [memory.store.delta(state.revision), available !== state.capabilities ? available : ""].filter(Boolean).join("\n");
       if (delta) state.prefixes[count] = delta;
       state.capabilities = available;

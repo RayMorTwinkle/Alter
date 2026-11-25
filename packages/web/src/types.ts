@@ -1,4 +1,14 @@
-// Mirrors docs/architecture/web-api.md (v1.26).
+// Mirrors docs/architecture/web-api.md (v1.28).
+
+import type { Hello, HarnessId, TaskEnd } from "../../node-protocol/src/index.ts";
+
+export type NodeRunner = { node: string; harness: HarnessId };
+export type Node = Pick<Hello, "name" | "roots" | "harnesses"> & {
+  id: string; platform: Hello["platform"] | null; online: boolean; createdAt: number; lastSeen: number | null;
+};
+export type CreatedNode = {
+  id: string; token: string; installCommand: string; pairCommand: string; pairCommandPowerShell: string; rootCommand: string; runCommand: string;
+};
 
 export type TimelineItem = {
   id: string;
@@ -11,6 +21,8 @@ export type TimelineItem = {
   silent?: true;
   reason?: string;
   taskId?: string;
+  runner?: NodeRunner;
+  status?: "queued";
   model?: string;
   source?: string;
 };
@@ -58,7 +70,11 @@ export type Task = {
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
   allow: string[]; // v1.10 compatibility field. The server sends [].
-  status: "running" | "completed" | "failed";
+  runner?: NodeRunner;
+  cwd?: string;
+  nativeSessionId?: string;
+  reportSource?: TaskEnd["reportSource"];
+  status: "queued" | "running" | "completed" | "failed" | "interrupted";
   failure?: string;
   conversationId: string;
   createdAt: number;
@@ -122,7 +138,7 @@ export type LedgerEntry = { taskId: string; summary: string; refs: { kind: strin
 export type Lease = { capability: string; idleTurns: number; window: number };
 
 export type TranscriptItem =
-  | { kind: "user" | "assistant"; text: string; at: number }
+  | { kind: "user" | "assistant" | "thinking" | "status"; text: string; at: number }
   | { kind: "tool_call"; tool: string; arguments: unknown; at: number }
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 

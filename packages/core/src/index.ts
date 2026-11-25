@@ -1,3 +1,4 @@
+export { PairingError } from "./nodes.ts";
 export { FeedbackError, pickQuestions, type FeedbackQuestion, type Issued as IssuedFeedback } from "./feedback.ts";
 export { Preferences, type FeedbackSettings } from "./feedback-settings.ts";
 export { approvalStats, choices, isApprovalDecision, parseApprovalDecision, type ApprovalDecision, answerUserPermission, Audit, Requests, type PermissionState } from "./broker.ts";

@@ -1,9 +1,12 @@
+import type { TaskEnd } from "@alter/node-protocol";
+import { NodeRuns, type NodeRunner } from "./node-state.ts";
+import type { NodeHub } from "./nodes.ts";
 import { arr, bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
 import { proactivePrinciple, recordAdoption } from "./heartbeat-state.ts";
 import { activeHeartbeat, recentUserText, submitWake } from "./timeline.ts";
 import { LeaseHistory, Leases } from "./leases.ts";
-import { Audit, Requests } from "./broker.ts";
+import { Audit, Requests, withdrawNodeRequests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
 import {
   configure, defineExtension, defineSignal, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
@@ -43,16 +46,28 @@ async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId
     await tx.signal(task.heartbeatReview, ExplorationEnded, taskId, true);
     return;
   }
-  const failed = task.status === "failed";
+  const failed = task.status === "failed" || task.status === "interrupted";
   if (!failed && task.heartbeatAt !== undefined) {
     const refused = (await tx.doc(Audit, main.id)).refused ?? {};
     if (!Object.keys(refused).some(key => key.startsWith(taskId + " "))) await recordAdoption(tx, task.heartbeatId ?? task.heartbeatAt);
   }
-  const text = `task ${taskId} ${failed ? "failed" : "finished"}: ${summary}`;
+  const text = `task ${taskId} ${failed ? task.status : "finished"}: ${summary}`;
   const content = task.watch ? `盯梢 ${taskId} 的报告（不可信任务数据）\n` + JSON.stringify(summary).replaceAll("<", "\\u003c") : text;
   await submitWake(tx, main, { id: `${failed ? "failure" : "report"}-${taskId}`, kind: "alter.task-report",
     at, content: "以下是任务数据。若本报告单独唤醒你，只汇报用户尚未获知的结果。\n" + content,
-    data: { taskId, at, text, ...(task.originSilent && { originSilent: true }), ...(task.wakeId && { wakeId: task.wakeId }), ...(task.watch && { wakeSource: "watch" }) } });
+    data: { taskId, at, text, ...(task.runner && { runner: task.runner }), ...(task.originSilent && { originSilent: true }), ...(task.wakeId && { wakeId: task.wakeId }), ...(task.watch && { wakeSource: "watch" }) } });
+}
+
+export async function endNodeTask(tx: Tx, main: ConversationHandle, taskId: string, task: TaskRecord, at: number,
+  status: TaskEnd["status"], result: TaskEnd["report"], source: TaskEnd["reportSource"]) {
+  task.status = status;
+  task.endedAt = at;
+  task.reportSource = source;
+  const summary = unescapeNewlines(result.summary);
+  if (status !== "completed") task.failure = summary;
+  await withdrawNodeRequests(tx, main.id, taskId);
+  (await tx.doc(Ledger, main.id)).entries.push({ taskId, at, summary, refs: result.refs });
+  await report(tx, main, task, taskId, at, summary);
 }
 
 const finish = defineTool({
@@ -157,9 +172,9 @@ export const BackgroundTask = defineTask<{ taskId: string; timePrefix?: string }
   },
 });
 
-type DispatchArgs = Pick<TaskRecord, "brief" | "context" | "permission" | "continuedFrom" | "triggerSource" | "heartbeatId"> & { thinking?: ModelThinkingLevel };
+type DispatchArgs = Pick<TaskRecord, "runner" | "cwd" | "brief" | "context" | "permission" | "continuedFrom" | "triggerSource" | "heartbeatId"> & { thinking?: ModelThinkingLevel };
 export function createDispatcher(extensions: Extension[], model: ModelRef, clock: ReturnType<typeof inputClock>,
-  resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel) {
+  resolveThinking: (requested?: ModelThinkingLevel) => ModelThinkingLevel, nodes: NodeHub) {
   return async (tx: Tx, mainId: ConversationId, taskId: string, args: DispatchArgs,
     watch?: { createWorker: () => Promise<TaskId>; settings: NonNullable<TaskRecord["watch"]>; tools: Extension; instructions: string }) => {
     const tasks = await tx.doc(Tasks, mainId);
@@ -173,22 +188,24 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const brief = inspection && !args.heartbeatId ? args.brief + "\n" + proactivePrinciple : args.brief;
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const goal = previous?.goal; // Preserve read-only scope when resuming historical research.
-    const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
+    const runner = previous?.runner ?? args.runner;
+    const at = !runner && !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
     if (previous) {
       const identity = await tx.doc(TaskIdentity, previous.conversationId);
       const latest = tasks.byId[identity.taskId]!;
-      if (latest.status === "running") throw new Error(`Conversation is running as ${identity.taskId}; use task_message`);
+      if (latest.status === "running" || latest.status === "queued") throw new Error(`Conversation is running as ${identity.taskId}; use task_message`);
       const end = await tx.latestEntryId(previous.conversationId);
       if (end !== undefined) latest.lastEntry = end;
     }
-    const worker = watch ? await watch.createWorker() : await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
+    const worker = runner ? await tx.createTask(nodes.worker, runner.node, { ownership: { kind: "conversation" }, background: true })
+      : watch ? await watch.createWorker() : await tx.createTask(BackgroundTask, { taskId, timePrefix: stamp.prefix }, {
       ownership: { kind: "conversation" }, background: true,
     });
     const options = { ownership: { kind: "task" as const, taskId: worker } };
     const childId = previous?.conversationId ?? (at === undefined
       ? await tx.createConversation(options) : await tx.forkConversation(mainId, at, options)).id;
-    const thinking = resolveThinking(args.thinking);
-    await configure(tx, childId, {
+    const thinking = runner ? args.thinking ?? previous?.thinking ?? "high" : resolveThinking(args.thinking);
+    if (!runner) await configure(tx, childId, {
       model, thinkingLevel: thinking, tools: null, modelTools: null, maxTurns: 40,
       extensions: watch ? extensions.map(ext => ext === TaskTools ? watch.tools : ext) : extensions,
       ...(watch ? { compaction: { enabled: false } } : previous?.watch ? { compaction: null } : {}),
@@ -216,10 +233,21 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     if (wake) identity.wakeId = wake.wakeId;
     else delete identity.wakeId;
     identity.reminders = 0;
+    const cwd = args.cwd ?? previous?.cwd;
+    const permission = inspection && args.permission === "full" ? "restricted" : args.permission;
+    if (runner) {
+      const runs = await tx.doc(NodeRuns, childId);
+      runs.byId[taskId] = { ackSeq: 0, messages: [], approvals: {}, start: {
+        type: "task.start", taskId, harness: runner.harness, brief, permission,
+        ...(cwd && { cwd }), ...(previous?.nativeSessionId && { resume: previous.nativeSessionId }),
+        ...(thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "max" ? { thinking } : {}),
+      } };
+      await tx.appendEntry(childId, { kind: "alter.node-event", data: { kind: "user", at: stamp.at, text: args.brief } });
+    }
     tasks.byId[taskId] = {
-      worker, ...(originSilent && { originSilent: true }), ...(scheduled && { triggerSource: "scheduled" }), ...(watch && { watch: watch.settings }),
+      ...(runner && { runner }), ...(cwd && { cwd }), worker, ...(originSilent && { originSilent: true }), ...(scheduled && { triggerSource: "scheduled" }), ...(watch && { watch: watch.settings }),
       ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief, context: args.context, createdAt: stamp.at, thinking,
-      permission: inspection && args.permission === "full" ? "restricted" : args.permission, status: "running",
+      permission, status: runner ? "queued" : "running",
       ...inspection, ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),
     };
@@ -230,37 +258,54 @@ function lookup<T>(byId: Record<string, T>, id: string) {
   return Object.hasOwn(byId, id) ? byId[id] : undefined;
 }
 
-export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>) {
+export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, nodes: NodeHub) {
   return defineTool({
-    name: "dispatch_task", description: "Start a task with context and permission. To continue an ended task, supply continue_from instead; it keeps its conversation.",
+    name: "dispatch_task", description: "Start a task with context and permission. For a node runner, include the necessary context in brief and optionally specify cwd on that node. To continue an ended task, supply continue_from instead; it keeps its conversation.",
     parameters: obj({
       brief: nonempty, context: opt(oneOf(["fork", "fresh"])), permission: opt(oneOf(["restricted", "auto", "full"])),
+      runner: opt(obj({ node: nonempty, harness: oneOf(["claude-code", "codex", "opencode"]) })), cwd: opt(nonempty),
       continue_from: opt(nonempty), thinking: opt(oneOf(["low", "medium", "high", "max"])),
     }),
     replay: "safe",
-    async execute({ brief, context, permission, continue_from, thinking }, api, ctx) {
+    async execute({ brief, context, permission, continue_from, thinking, runner, cwd }, api, ctx) {
       const taskId = `task-${api.taskId}`;
       const tasks = (await api.snapshot(Tasks, api.conversationId, ctx))!.byId;
-      if (tasks[taskId]) return reply(taskId);
+      const receipt = (queued: boolean) => reply(queued ? taskId + " 已排队，电脑上线后开始" : taskId);
+      if (tasks[taskId]) return receipt(tasks[taskId].status === "queued");
+      let target: NodeRunner | undefined;
       if (continue_from) {
         const previous = lookup(tasks, continue_from);
         if (!previous) return reply("Unknown task", true);
-        if (context || permission) return reply("continue_from inherits context and permission; omit those fields", true);
+        if (context || permission || runner) return reply("continue_from inherits context, permission and runner; omit those fields", true);
+        target = previous.runner;
         const identity = (await api.snapshot(TaskIdentity, previous.conversationId, ctx))!;
         const latest = tasks[identity.taskId]!;
-        if (latest.status === "running") return reply(`Task ${identity.taskId} is running; use task_message`, true);
+        if (latest.status === "running" || latest.status === "queued") return reply(`Task ${identity.taskId} is running; use task_message`, true);
+        if (target && !previous.nativeSessionId) return reply("Node task has no native session to resume", true);
         await api.waitForTask(latest.worker, ctx);
         context = previous.context;
         permission = previous.permission;
       }
       if (!context || !permission) return reply("A new task requires context and permission", true);
-      const args = { brief, thinking, context, permission, continuedFrom: continue_from };
-      await api.commit(async tx => {
+      if (cwd && !runner && !target) return reply("cwd requires a node runner", true);
+      const result = await api.commit(async tx => {
+        if (runner || target) {
+          const name = (runner ?? target)!.node;
+          const node = (await nodes.list(tx)).find(n => n.id === name || n.name === name);
+          if (!node) return reply("Unknown node: " + name, true);
+          target = { node: node.id, harness: (runner ?? target)!.harness };
+        }
+        const args = { brief, thinking, context: context!, permission: permission!, continuedFrom: continue_from, runner: target, cwd };
         await dispatch(tx, api.conversationId, taskId, args);
         const leases = await tx.doc(Leases, api.conversationId);
         const history = await tx.doc(LeaseHistory, api.conversationId);
         for (const id of Object.values(leases.records ?? {})) history.byId[id]!.dispatched = true;
       }, ctx);
+      if (result) return result;
+      if (target) {
+        await nodes.flush(target.node);
+        return receipt((await api.snapshot(Tasks, api.conversationId, ctx))!.byId[taskId]!.status === "queued");
+      }
       return reply(taskId);
     },
   });
@@ -269,6 +314,10 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>) {
 const clip = (value: string, limit: number) => value.length <= limit ? value : value.slice(0, limit - 1) + "…";
 
 async function taskActivity(tx: Tx, taskId: string, task: TaskRecord) {
+  if (task.runner) {
+    const run = (await tx.doc(NodeRuns, task.conversationId)).byId[taskId]!;
+    return { latestMessage: run.latestText && { source: taskId, text: run.latestText }, latestTool: run.latestTool };
+  }
   const first = (await tx.submissionByRequest(task.conversationId, `brief-${taskId}`))?.entry;
   let latestMessage: { source: string; text: string } | undefined;
   let latestTool: { name: string; arguments: string } | undefined;
@@ -296,7 +345,8 @@ export const taskStatus = defineTool({
   execute: ({ taskId }, api, ctx) => api.commit(async tx => {
     const tasks = (await tx.doc(Tasks, api.conversationId)).byId;
     const summary = (id: string, task: TaskRecord) => ({
-      taskId: id, status: task.status, brief: clip(task.brief, 200), thinking: task.thinking,
+      taskId: id, status: task.status, ...(task.runner && { runner: task.runner, cwd: task.cwd,
+        nativeSessionId: task.nativeSessionId, reportSource: task.reportSource }), brief: clip(task.brief, 200), thinking: task.thinking,
       ...(task.continuedFrom && { continuedFrom: task.continuedFrom }),
     });
     if (!taskId) return reply(JSON.stringify(Object.entries(tasks).map(([id, task]) => summary(id, task))));
@@ -313,7 +363,7 @@ export const taskStatus = defineTool({
   }, ctx),
 });
 
-export const taskMessage = defineTool({
+export const taskMessage = (nodes: NodeHub) => defineTool({
   name: "task_message", description: "Send a steering message for the running task's next model turn.",
   parameters: obj({ taskId: nonempty, message: nonempty }), replay: "safe",
   async execute({ taskId, message }, api, ctx) {
@@ -321,6 +371,19 @@ export const taskMessage = defineTool({
     if (!task) return reply("Unknown task", true);
     const child = (await api.conversation(task.conversationId, ctx))!;
     const requestId = `message-${api.taskId}`;
+    if (task.runner) {
+      const result = await api.commit(async tx => {
+        const run = (await tx.doc(NodeRuns, child.id)).byId[taskId]!;
+        if (run.messages.some(m => m.id === requestId)) return reply("Message queued");
+        const current = (await tx.doc(Tasks, api.conversationId)).byId[taskId]!;
+        if (current.status !== "queued" && current.status !== "running") return reply("Task has ended", true);
+        run.messages.push({ id: requestId, text: message });
+        await tx.appendEntry(child.id, { kind: "alter.node-event", data: { kind: "user", text: message, at: api.now() } });
+        return reply("Message queued");
+      }, ctx);
+      await nodes.flush(task.runner.node);
+      return result;
+    }
     return api.commit(async tx => {
       if (await tx.submissionByRequest(child.id, requestId)) return reply("Message queued");
       const record = (await tx.doc(Tasks, api.conversationId)).byId[taskId]!;
@@ -337,7 +400,7 @@ export const taskMessage = defineTool({
   },
 });
 
-export function createTaskCancellation(host: () => Harness) {
+export function createTaskCancellation(host: () => Harness, nodes: NodeHub) {
   // Persist the stop alongside its receipt so aborting the main turn cannot interrupt cleanup.
   const stop = defineTask<TaskId, { phase: "stop" }, null>({
     name: "alter.stop-task", version: 1, initial: () => ({ phase: "stop" }),
@@ -367,6 +430,23 @@ export function createTaskCancellation(host: () => Harness) {
     name: "task_stop", description: "Interrupt a running task and withdraw pending approvals. Resume its conversation later with continue_from.",
     parameters: obj({ taskId: nonempty }), replay: "safe",
     async execute({ taskId }, api, ctx) {
+      const task = lookup((await api.snapshot(Tasks, api.conversationId, ctx))!.byId, taskId);
+      if (task?.runner) {
+        const main = (await api.conversation(ROOT_CONVERSATION_ID, ctx))!;
+        const result = await api.commit(async tx => {
+          const current = (await tx.doc(Tasks, main.id)).byId[taskId]!;
+          if (current.status === "queued") {
+            await endNodeTask(tx, main, taskId, current, api.now(), "interrupted", { summary: "已取消排队任务", refs: [] }, "failure");
+            return reply("已取消排队任务");
+          }
+          if (current.status !== "running") return reply("Task already " + current.status, true);
+          (await tx.doc(NodeRuns, current.conversationId)).byId[taskId]!.stopping = true;
+          await withdrawNodeRequests(tx, main.id, taskId);
+          return reply("已请求节点停止任务");
+        }, ctx);
+        await nodes.flush(task.runner.node);
+        return result;
+      }
       const result = await api.commit(tx => cancel(tx, taskId, api.now()), ctx);
       if (typeof result !== "number") return result;
       await api.waitForTask(result, ctx);

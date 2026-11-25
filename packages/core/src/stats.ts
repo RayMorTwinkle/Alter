@@ -145,7 +145,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
     if (task.wakeId) dispatched.set(task.wakeId, (dispatched.get(task.wakeId) ?? 0) + 1);
     if (!includes(task.createdAt)) continue;
     taskDetails.set(id, taskStats(id, task));
-    if (task.status !== "running") terminal++;
+    if (task.status !== "running" && task.status !== "queued") terminal++;
     if (task.status === "completed") completed++;
     if (task.createdAt) {
       const cohort = day(task.createdAt);
