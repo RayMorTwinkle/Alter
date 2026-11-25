@@ -18,7 +18,8 @@ type Signals = { adoptionRate: number; dueGoals: number; digestCount: number; us
 const base = 5 * hour;
 const explorationTimeout = 10 * 60_000;
 const decision = "发给用户的内容必须包含用户原本不知道的信息，或一件已经做完的事。转述用户已知的内容等于没做。" +
-  "先做后说：能直接做的就派任务去做，做完再告诉用户。什么都不做也是正当结果。";
+  "先做后说：能直接做的就派任务去做，做完再告诉用户。什么都不做也是正当结果。" +
+  "探索报告里新发现的用户目标、兴趣或画像，值得记的直接用 memory_write 记下，推测的标 guess。";
 export function intervalDecision({ adoptionRate, dueGoals, digestCount, userMessages }: Signals, bias = 1) {
   const demand = 0.2 * Math.min(4, dueGoals) + 0.04 * Math.min(20, digestCount) + 0.06 * Math.min(12, userMessages);
   const factor = 2 ** (6.6 * (0.5 - adoptionRate) - demand);

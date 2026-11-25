@@ -110,10 +110,10 @@ export function createMemory(dataDir?: string, now = Date.now, timeZone = defaul
       defineTool({ name: "memory_search", description: "Search memory titles and bodies by literal substring.",
         parameters: obj({ query: nonempty, kind: opt(kind) }), replay: "safe",
         execute: async args => reply(JSON.stringify(store.search(args.query).filter(e => !args.kind || legacy(e).kind === args.kind).map(e => ({ ...legacy(e), ...e })))) }),
-      defineTool({ name: "memory_write", description: "add 新增；modify 提供 id 和要改的字段；supersede 提供旧 id 和完整新条目，旧条目保留在历史中。" + memoryWriteGuidance,
-        parameters: obj({ op: oneOf(["add", "modify", "supersede"]), id: opt(id), title: opt(str({ pattern: "\\S", maxLength: 20 })), type: opt(entryType), body: opt(nonempty),
+      defineTool({ name: "memory_write", description: "op 默认 add 新增；modify 提供 id 和要改的字段；supersede 提供旧 id 和完整新条目，旧条目保留在历史中。" + memoryWriteGuidance,
+        parameters: obj({ op: opt(oneOf(["add", "modify", "supersede"])), id: opt(id), title: opt(str({ pattern: "\\S", maxLength: 20 })), type: opt(entryType), body: opt(nonempty),
           guess: opt(bool()), dueAt: opt(nullable(dueText)), status: opt(oneOf(["active", "done"])) }),
-        execute: async ({ op, id, dueAt, ...fields }, api, ctx) => {
+        execute: async ({ op = "add", id, dueAt, ...fields }, api, ctx) => {
           const source = await messageSource(api, ctx);
           const data = { ...fields, ...(source && { source }), ...(dueAt !== undefined && { dueAt: dueAt === null ? null : deadline(dueAt) }) };
           if (op === "modify") {

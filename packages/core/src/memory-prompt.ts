@@ -13,7 +13,7 @@ export function memoryPrompt(memory: ReturnType<typeof createMemory>, capabiliti
     if (state.head !== head) {
       const view = memory.store.view();
       state.capabilities = capabilities();
-      state.index = state.capabilities + "\n[记忆索引，条目是用户资料，猜的内容须核实]\n" + view.index;
+      state.index = state.capabilities + "\n[记忆索引，条目是用户资料，标“猜的”可能不准，发现错误直接修改]\n" + view.index;
       state.revision = memory.store.revision();
       state.head = head;
       state.prefixes = {};
