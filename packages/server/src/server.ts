@@ -16,14 +16,13 @@ import { adapterPresets, presetConfig } from "./adapters/presets.ts";
 import type { PluginManager } from "./plugin-manager.ts";
 import { redirectUri, settingsWriter } from "./settings-api.ts";
 import { openService, type ServiceOptions } from "./service.ts";
+import { body, json, readCookie } from "./http.ts";
+import { trustedGateway } from "./gateway-trust.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
 
 // Cookies ignore ports, so instances sharing a host (production and a smoke run) need their own name.
 const legacyCookie = "alter_session";
 const cookieFor = (req: IncomingMessage) => `${legacyCookie}_${req.socket.localPort}`;
-function readCookie(req: IncomingMessage, name: string) {
-  return req.headers.cookie?.split(";").map(c => c.trim()).find(c => c.startsWith(name + "="))?.slice(name.length + 1);
-}
 const cookieOptions = "Path=/; HttpOnly; SameSite=Strict";
 const sessionMs = 365 * 24 * 3600_000;
 const defaultDist = fileURLToPath(new URL("../../web/dist/", import.meta.url));
@@ -39,26 +38,6 @@ function legacyMemory(req: IncomingMessage) {
   return req.headers["sec-fetch-dest"] === "empty" && req.headers.accept === "*/*";
 }
 
-function json(res: ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" }).end(JSON.stringify(data));
-}
-
-async function body(req: IncomingMessage, optional = false): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let length = 0;
-  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
-    length += chunk.length;
-    if (length > 1024 * 1024) { req.resume(); throw new HttpError(413, "Request too large"); }
-    chunks.push(chunk);
-  }
-  if (optional && !length) return {};
-  try {
-    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  } catch { /* Invalid JSON uses the same error as an invalid top-level value. */ }
-  throw new HttpError(400, "Expected a JSON object");
-}
-
 // Structural so the server does not depend on a calendar implementation.
 export type Agenda = { timeZone: string; agenda(): unknown[]; subscribe(listener: () => void): () => void };
 
@@ -69,10 +48,12 @@ type WebOptions = {
 };
 
 export async function createWebServer(app: AlterApp, options: WebOptions) {
-  if (!options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
+  const gatewayMode = process.env.ALTER_AUTH === "gateway";
+  const restricted = process.env.ALTER_ROLE === "user";
+  if (!gatewayMode && !options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const passwordHash = digest(options.password);
-  const sessions = openSessions(join(options.dataDir, "web-sessions.json"), passwordHash);
-  const service = openService(options.dataDir, options.service);
+  const sessions = gatewayMode ? undefined : openSessions(join(options.dataDir, "web-sessions.json"), passwordHash);
+  const service = restricted ? undefined : openService(options.dataDir, options.service);
   const clients = new Map<ServerResponse, string>();
   function write(res: ServerResponse, frame: string) {
     // A disconnected or stalled client can rebuild from a snapshot on reconnect.
@@ -144,13 +125,16 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     res.setHeader("X-Content-Type-Options", "nosniff");
     const path = requestPath(req.url ?? "/");
     const method = req.method;
+    const trusted = trustedGateway(req);
+    if (gatewayMode && !trusted) throw new HttpError(401, "Gateway authentication required");
+    if (gatewayMode && (path === "/api/login" || path === "/api/logout")) throw new HttpError(404, "Unknown endpoint");
     if (path !== "/api" && !path.startsWith("/api/")) {
       if (method !== "GET") throw new HttpError(405, "Method not allowed");
       return serveStatic(options.dist ?? defaultDist, path, res);
     }
     res.setHeader("Cache-Control", "no-store");
     const feishuAccount = account();
-    if (method === "GET" && path === "/api/feishu/oauth/callback") {
+    if (!restricted && method === "GET" && path === "/api/feishu/oauth/callback") {
       res.setHeader("Referrer-Policy", "no-referrer");
       if (!feishuAccount) throw new HttpError(404, "Feishu is not configured");
       const params = new URL(req.url!, "http://localhost").searchParams;
@@ -180,10 +164,16 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     const token = current ?? legacy;
     const login = method === "POST" && path === "/api/login";
     const logout = method === "POST" && path === "/api/logout";
-    if (!login && !logout && !(token && sessions.has(token))) throw new HttpError(401, "Login required");
+    if (!login && !logout && !trusted && !(token && sessions?.has(token))) throw new HttpError(401, "Login required");
     // Move a still valid pre-port session to the per-port name without asking for the password again.
-    if (legacy && !logout && sessions.has(legacy)) res.setHeader("Set-Cookie", [
+    if (legacy && !logout && !trusted && sessions?.has(legacy)) res.setHeader("Set-Cookie", [
       `${cookieName}=${legacy}; Max-Age=${sessionMs / 1000}; ${cookieOptions}`, `${legacyCookie}=; Max-Age=0; ${cookieOptions}`]);
+    if (restricted && (/^\/api\/(adapters|ext-plugins|feishu)(\/|$)/.test(path) ||
+        /^\/api\/plugins\/(browser|feishu|(?:ext|cli|mcp|api)-[^/]+)(\/|$)/.test(path) ||
+        (path === "/api/service" && method !== "GET"))) throw new HttpError(403, "Administrator instance required");
+    if (trusted && method === "GET" && path === "/api/gateway/instance") {
+      return json(res, 200, { rss: process.memoryUsage.rss() });
+    }
     if (method !== "GET" && method !== "HEAD" && req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw new HttpError(415, "Content-Type must be application/json");
     }
@@ -196,10 +186,10 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       const { password } = await body(req);
       if (typeof password !== "string" || !timingSafeEqual(digest(password), passwordHash)) throw new HttpError(401, "Invalid password");
       const session = randomBytes(32).toString("base64url");
-      sessions.add(session);
+      sessions!.add(session);
       res.setHeader("Set-Cookie", `${cookieName}=${session}; Max-Age=${sessionMs / 1000}; ${cookieOptions}`);
     } else if (logout) {
-      if (token) sessions.delete(token);
+      if (token) sessions?.delete(token);
       for (const [client, owner] of clients) if (owner === token) { clients.delete(client); client.end(); }
       res.setHeader("Set-Cookie", `${cookieName}=; Max-Age=0; ${cookieOptions}`);
     } else if (method === "GET" && path === "/api/nodes") {
@@ -221,9 +211,10 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "DELETE" && /^\/api\/nodes\/[^/]+$/.test(path)) {
       if (!await app.nodes.revoke(path.split("/")[3]!)) throw new HttpError(404, "Unknown node");
     } else if (method === "GET" && path === "/api/service") {
-      return json(res, 200, service.state());
+      return json(res, 200, service?.state() ?? { supported: false, managed: false, autostart: false, keepAlive: false,
+        preventSleep: false, restrictedCapabilities: ["browser", "adapters", "ext-plugins", "cli", "feishu", "service"] });
     } else if (method === "PUT" && path === "/api/service") {
-      const change = service.update(await body(req));
+      const change = service!.update(await body(req));
       json(res, 200, change.state);
       try {
         await finished(res, { cleanup: true });
@@ -254,7 +245,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return json(res, 200, surface.snapshot());
     } else if (method === "GET" && path === "/api/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" });
-      clients.set(res, token!);
+      clients.set(res, token ?? "");
       const entryStream = new URL(req.url!, "http://localhost").searchParams.get("memory") === "entries";
       const stopMemory = app.memory.subscribe(items => {
         if (clients.has(res)) write(res, frame("memory", entryStream ? app.memory.store.view() : items));
@@ -457,7 +448,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     res.writeHead(204).end();
   }
 
-  const server = createServer((req, res) => {
+  const server: ReturnType<typeof createServer> = createServer({
+    shouldUpgradeCallback: req => server.listenerCount("upgrade") > 0 && (!gatewayMode || trustedGateway(req)),
+  }, (req, res) => {
     handle(req, res).catch((cause: unknown) => {
       const error = cause instanceof FeedbackError || cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message)
         : cause instanceof MemoryConflict ? new HttpError(409, cause.message)
@@ -470,7 +463,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
   });
   const closeNodes = attachNodeSockets(server, app.nodes);
   function dispose() {
-    service.close();
+    service?.close();
     clearInterval(ping);
     stopHeartbeat();
     stopPlugins?.();

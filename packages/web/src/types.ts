@@ -38,7 +38,7 @@ export type ModelCapabilities = Omit<Required<ModelOverrides>, "thinkingLevelMap
   id: string; thinkingLevelMap: NonNullable<ModelOverrides["thinkingLevelMap"]> | null;
   sources: Record<keyof ModelOverrides, "catalog" | "manual" | "default">;
 };
-export type ServiceState = { supported: boolean; autostart: boolean; keepAlive: boolean; preventSleep: boolean; managed: boolean; failedNode?: string };
+export type ServiceState = { supported: boolean; autostart: boolean; keepAlive: boolean; preventSleep: boolean; managed: boolean; restrictedCapabilities?: ("browser" | "adapters" | "ext-plugins" | "cli" | "feishu" | "service")[]; failedNode?: string };
 export type ServiceFlag = "autostart" | "keepAlive" | "preventSleep";
 export type Settings = { compactAtTokens: number; approvalModel: "on" | "off"; heartbeat: HeartbeatSettings };
 export type SettingsPatch = { compactAtTokens?: number; approvalModel?: Settings["approvalModel"]; heartbeat?: Partial<HeartbeatSettings> };
@@ -380,4 +380,18 @@ export type DebugSchedule = {
   memory: { turns: number; threshold: number; idleMs: number; nextAt: number | null; reason: string };
   watch: { pollMs: number; batchMs: number; active: { id: string; until: number; nextPollAt: number | null; batchDueAt: number | null }[]; reason: string };
   feedback: { paused: boolean; nextAt: number | null; reason: string };
+};
+
+export type GatewayRole = "admin" | "user";
+export type GatewayUser = { id: string; username: string; role: GatewayRole };
+export type GatewayInstance = {
+  port: number; managed: boolean; rss: number | null;
+  status: "starting" | "running" | "backoff" | "stopping" | "stopped" | "unavailable";
+};
+export type GatewayAdminUser = GatewayUser & {
+  disabled: boolean; createdAt: number; lastLoginAt: number | null; port: number | null; instance: GatewayInstance;
+};
+export type GatewayUserPatch = { disabled?: boolean; role?: GatewayRole; password?: string };
+export type GatewayInvite = {
+  code: string; createdBy: string; createdAt: number; expiresAt: number; usedBy: string | null; usedAt: number | null; revoked: boolean;
 };

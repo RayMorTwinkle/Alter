@@ -1,0 +1,16 @@
+{
+  "name": "@alter/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@alter/core": "workspace:*",
+    "@alter/node-protocol": "workspace:*",
+    "@alter/server": "workspace:*"
+  }
+}
