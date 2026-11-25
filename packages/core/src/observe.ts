@@ -50,7 +50,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
     const timeline = state.timeline;
     const index = timeline.findIndex(old => old.id === item.id);
     if (index >= 0) {
-      if (item.kind === "tool" && item.isError !== undefined) {
+      if ((item.kind === "tool" && item.isError !== undefined) || item.kind === "message" || item.silent) {
         timeline[index] = item;
         if (publish) emit({ event: "timeline", data: item }, turn.source);
       }
@@ -202,7 +202,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
               // A follow-up is visible in the inbox before it participates in a model turn.
               if (placed.has(change.value.id)) continue;
               // Short answers can finish before pi.live's first progress tick.
-              if (item.kind === "assistant" && streamedId !== item.id) {
+              if (item.kind === "assistant" && !turn.heartbeat && streamedId !== item.id) {
                 emit({ event: "delta", data: { id: item.id, text: item.text } });
               }
               add(item);

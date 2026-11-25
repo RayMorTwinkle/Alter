@@ -16,6 +16,7 @@ export type TaskRecord = {
   createdAt: number;
   endedAt?: number;
   wakeId?: string;
+  originSilent?: true;
   permission: Permission;
   status: "running" | "completed" | "failed" | "cancelled";
   failure?: string;
@@ -30,7 +31,7 @@ export const Tasks = conversationDoc<{ byId: Record<string, TaskRecord> }>("task
 export const TaskIdentity = conversationDoc<{ taskId: string; reminders: number; sourcePlugin?: string; wakeId?: string; scheduled?: true; watchWakeId?: string }>(
   "task-identity", () => ({ taskId: "", reminders: 0 }),
 );
-export type LedgerEntry = { kind?: "unreplied"; taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
+export type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
 export const Ledger = conversationDoc<{ entries: LedgerEntry[] }>("ledger", () => ({ entries: [] }));
 
 export type PermissionItem = { tool: string; target: string; purpose: string };

@@ -64,7 +64,7 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   await next.seen(e => e.event === "delta" && e.data.text === "one two");
   say(release, " three");
   await next.seen(e => e.event === "timeline" && e.data.text === "second answer");
-  const final = { event: "timeline", data: { kind: "assistant", text: "one two three", id: streamed.data.id, at: expect.any(Number), model: "offline/main" } };
+  const final = { event: "timeline", data: { kind: "message", text: "one two three", id: streamed.data.id, at: expect.any(Number), model: "offline/main" } };
   expect(first.events).toContainEqual(final);
   expect(next.events.filter(e => e.event === "timeline" && e.data.id === second.id)).toHaveLength(1);
   await next.seen(e => e.event === "busy" && !e.data.busy);
@@ -73,8 +73,8 @@ it("delivers live cumulative text, replays it on reconnect, and queues messages 
   expect(await (await web.read("/api/usage")).json()).toMatchObject([{ model: "offline/main", calls: 2 }]);
 });
 
-it("publishes the whole turn and counts unanswered user turns once across reconnects", async () => {
-  const text = "回".repeat(79) + "\n" + "明细".repeat(1960);
+it("publishes the whole turn and counts silent turns once across reconnects", async () => {
+  const text = "回".repeat(79) + "\n" + "明细".repeat(2400);
   const web = await setup(({ messages }, res) => {
     const last = messages.at(-1)!;
     if (last.content.endsWith("\n回答我")) {
@@ -82,56 +82,58 @@ it("publishes the whole turn and counts unanswered user turns once across reconn
       delta(res, { content: "内部草稿" });
       return toolCall(res, "schedule_list", {});
     }
-    if (last.role === "tool" && !last.content.startsWith("message-") && messages.some(m => m.content?.endsWith("\n回答我"))) {
-      return toolCall(res, "send_message", { text });
+    if (last.role === "tool" && messages.some(m => m.content?.endsWith("\n回答我"))) {
+      return say(res, text);
     }
-    if (last.content.endsWith("\n只检查")) return toolCall(res, "task_status", {});
+    if (last.content.endsWith("\n只检查")) return toolCall(res, "stay_silent", { reason: "用户不用回" });
     say(res, "结束草稿");
   });
   await web.login();
   const feed = await stream(web.read);
-  const missing = await (await web.post("/api/messages", { text: "只检查" })).json();
+  await web.post("/api/messages", { text: "只检查" });
   await web.app.main.waitForIdle(context);
   await web.post("/api/messages", { text: "回答我" });
   await web.app.main.waitForIdle(context);
   await feed.seen(e => e.event === "timeline" && e.data.kind === "message");
   const state = await web.state();
-  expect(state.ledger).toMatchObject([{ kind: "unreplied", summary: "用户消息未回复", refs: [{ kind: "input", ref: missing.id }] }]);
+  expect(state.ledger).toEqual([]);
   expect(state.notifications).toMatchObject([{ kind: "message", channel: "web", level: "now", title: "回".repeat(60), body: text }]);
   expect(state.timeline).toEqual(expect.arrayContaining([
     expect.objectContaining({ kind: "thinking", text: "先检查日程" }),
     expect.objectContaining({ kind: "assistant", text: "内部草稿" }),
+    expect.objectContaining({ kind: "assistant", text: "结束草稿", silent: true, reason: "用户不用回" }),
     expect.objectContaining({ kind: "message", text }),
   ]));
   const calls = state.timeline.filter(item => item.kind === "tool");
   expect(calls).toMatchObject([
-    { tool: "task_status", args: "{}", isError: false },
+    { tool: "stay_silent", args: JSON.stringify({ reason: "用户不用回" }), isError: false },
     { tool: "schedule_list", args: "{}", isError: false },
-    { tool: "send_message", args: JSON.stringify({ text }).slice(0, 600), isError: false },
   ]);
-  const updates = feed.events.filter(e => e.event === "timeline" && e.data.id === calls[2]!.id);
-  expect(updates).toMatchObject([{ data: { tool: "send_message" } }, { data: { tool: "send_message", isError: false } }]);
-  expect(await (await web.read("/api/stats?range=day")).json()).toMatchObject({ unreplied: 1 });
+  const updates = feed.events.filter(e => e.event === "timeline" && e.data.id === calls[0]!.id);
+  expect(updates).toMatchObject([{ data: { tool: "stay_silent" } }, { data: { tool: "stay_silent", isError: false } }]);
+  expect(await (await web.read("/api/stats?range=day")).json()).toMatchObject({ silent: 1 });
   await web.close();
   const next = await web.reopen();
   await next.login();
   expect((await next.state()).timeline).toEqual(state.timeline);
-  expect(await (await next.read("/api/stats?range=all")).json()).toMatchObject({ unreplied: 1 });
+  expect(await (await next.read("/api/stats?range=all")).json()).toMatchObject({ silent: 1 });
 });
 
-it("records an invalid send as a failed tool call only", async () => {
-  const web = await setup(({ messages }, res) => {
-    if (messages.at(-1)?.role === "user") return toolCall(res, "send_message", { text: "长".repeat(4001) });
-    say(res, "草稿");
+it("offers stay_silent instead of send_message and skips whitespace-only replies", async () => {
+  const names: string[] = [];
+  const web = await setup(({ tools }, res) => {
+    names.push(...tools?.map(t => t.function.name) ?? []);
+    say(res, "  ");
   });
   await web.login();
-  await web.post("/api/messages", { text: "测试长度" });
+  await web.post("/api/messages", { text: "空回复" });
   await web.app.main.waitForIdle(context);
   const state = await web.state();
-  expect(state.timeline.filter(item => item.kind === "tool")).toMatchObject([{ tool: "send_message", isError: true }]);
+  expect(names).toContain("stay_silent");
+  expect(names).not.toContain("send_message");
   expect(state.timeline.filter(item => item.kind === "message")).toEqual([]);
   expect(state.notifications).toEqual([]);
-  expect(await (await web.read("/api/stats")).json()).toMatchObject({ unreplied: 0 });
+  expect(await (await web.read("/api/stats")).json()).toMatchObject({ silent: 0 });
 });
 
 const send = { tool: "outbox_send", capability: "outbox", arguments: { message: "hello" }, reason: "send greeting" };
@@ -215,7 +217,7 @@ it("stops only the active turn and continues an already queued input", async () 
   expect((await web.post("/api/stop")).status).toBe(204);
   await feed.seen(e => e.event === "timeline" && e.data.text === "continued");
   await web.app.main.waitForIdle(context);
-  expect(await (await web.read("/api/stats")).json()).toMatchObject({ unreplied: 2 });
+  expect(await (await web.read("/api/stats")).json()).toMatchObject({ silent: 0 });
   expect(feed.events).toContainEqual({ event: "timeline", data: expect.objectContaining({ kind: "assistant", text: "partial",
     id: feed.events.find(e => e.event === "delta")!.data.id }) });
 });
@@ -490,11 +492,11 @@ it("publishes the notification list and persists independent read and feedback u
   for (const patch of [{ feedback: "useless" }, { status: "read" }, { status: "read", feedback: "useful" }]) {
     expect((await web.post(path, patch)).status).toBe(204);
   }
-  await feed.seen(event => event.event === "notifications" && event.data[0]?.feedback === "useful");
+  await feed.seen(event => event.event === "notifications" && event.data.find(n => n.id === item!.id)?.feedback === "useful");
   await web.close();
   const next = await web.reopen();
   await next.login();
-  expect((await next.state()).notifications).toEqual([{ ...item, status: "read", feedback: "useful" }]);
+  expect((await next.state()).notifications).toMatchObject([{ kind: "message", channel: "web", body: "ok" }, { ...item, status: "read", feedback: "useful" }]);
 });
 
 it.each([true, false])("serves a local-day funnel with Feishu configured=%s", async configured => {
@@ -568,13 +570,13 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
     const { id } = await busy.json();
     expect((await view()).runs[0]).toMatchObject({ id, status: "skipped", skipReason: "busy" });
     expect((await web.post(`/api/heartbeat/${id}/feedback`, { feedback: "useful" })).status).toBe(409);
-  } finally { toolCall(pending!, "send_message", { text: "报名已开放" }); }
+  } finally { say(pending!, "报名已开放"); }
   await events.seen(e => e.event === "heartbeat" && e.data.type === "end" && e.data.id === run.id);
   const finished = (await view()).runs.find((row: HeartbeatRun) => row.id === run.id);
-  expect(finished).toMatchObject({ finalReply: "已安排，请查阅通知", notified: true, tokens: 22, feedback: null,
-    actions: [{ tool: "send_message", id: expect.stringMatching(/^message-/), level: "now" }] });
-  expect(events.events.filter(e => (e.event === "timeline" || e.event === "delta") && e.data.text === finished.finalReply)).toEqual([]);
-  expect((await web.state()).timeline.some(item => item.text === finished.finalReply)).toBe(false);
+  expect(finished).toMatchObject({ finalReply: "报名已开放", notified: true, tokens: 11, feedback: null,
+    actions: [] });
+  await events.seen(e => e.event === "timeline" && e.data.kind === "message" && e.data.text === finished.finalReply);
+  expect((await web.state()).timeline.some(item => item.text === finished.finalReply)).toBe(true);
   const url = `/api/heartbeat/${run.id}/feedback`;
   expect((await web.post(url, { feedback: "invalid" })).status).toBe(400);
   expect((await web.post("/api/heartbeat/unknown/feedback", { feedback: "useful" })).status).toBe(404);

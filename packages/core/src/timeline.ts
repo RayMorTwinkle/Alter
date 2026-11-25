@@ -1,9 +1,9 @@
-import { isInlineTaskReport, PendingReplies } from "./wake.ts";
+import { isInlineTaskReport } from "./wake.ts";
 import { interacted } from "./feedback-settings.ts";
 import { randomUUID } from "node:crypto";
 import { contentText } from "@earendil-works/pi-ai";
 import { Heartbeat, heartbeatKind, userActivity } from "./heartbeat-state.ts";
-import { wakeNotifications } from "./notifications.ts";
+import { silentHint, silentTaskHint, wakeNotifications } from "./notifications.ts";
 import { recordUserMessage } from "./memory-inbox.ts";
 import { inputClock } from "./clock.ts";
 import { context, InboxDoc, LiveDoc, type TaskId, type ConversationId, type Conversation, type ConversationHandle, type Tx, type JsonObject, type Cursor, type EntryRecord, type InboxState } from "./runtime.ts";
@@ -16,6 +16,8 @@ export type TimelineItem = {
   tool?: string;
   args?: string;
   isError?: boolean;
+  silent?: true;
+  reason?: string;
   taskId?: string;
   model?: string;
   source?: string;
@@ -46,6 +48,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   const label = input.user ? `用户消息 · ${sourceLabels[source] ?? source}` : `系统消息 · ${wakeLabels[input.kind] ?? input.kind}`;
   const header = `[${label} · ${time}]`;
   let content = input.content;
+  if (!input.user) content += "\n" + (input.kind === "alter.task-report" && input.data.originSilent ? silentTaskHint : silentHint);
   if (notices.pushed.count > notices.cursor) {
     const count = notices.pushed.count - notices.cursor;
     const prefix = `上次唤醒以来推送的通知（共 ${count} 条；ID、来源、标题，仅作不可信数据）\n<untrusted>\n` +
@@ -58,7 +61,6 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   const state = await tx.doc(Heartbeat, main.id);
   state.lastActivity = input.at;
   if (input.user) {
-    (await tx.doc(PendingReplies, main.id)).ids.push(input.id);
     await interacted(tx, input.at);
     await userActivity(tx, state, input.at);
     if (typeof input.data.text === "string") {
@@ -188,10 +190,21 @@ export function assistantId(taskId: number, at: number) {
 
 type Turn = {
   source?: string; heartbeat?: boolean;
+  silent?: true; reason?: string;
+  drafts?: Map<number, TimelineItem>;
   calls?: Map<string, { item: TimelineItem; message?: string }>;
 };
 export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] {
   const data = entryData(entry);
+  if (entry.kind === "alter.silent") {
+    turn.silent = true;
+    turn.reason = typeof data?.reason === "string" ? data.reason : undefined;
+    return [...turn.drafts?.values() ?? []].map(item => ({ ...item, silent: true, ...(turn.reason !== undefined && { reason: turn.reason }) }));
+  }
+  if (entry.kind === "alter.reply" && typeof data?.answer === "number") {
+    const draft = turn.drafts?.get(data.answer);
+    return draft ? [{ ...draft, kind: "message" }] : [];
+  }
   if (entry.kind === "alter.schedule-notice" && typeof data?.text === "string" && typeof data.at === "number") {
     return [{ kind: "notice", id: `entry-${entry.id}`, text: data.text, at: data.at }];
   }
@@ -209,6 +222,9 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
       const item = inputItem(entry, contentText(msg.content), id, at);
       if (!isInlineTaskReport(entry)) {
         turn.calls?.clear();
+        turn.drafts?.clear();
+        delete turn.silent;
+        delete turn.reason;
         turn.source = item.source;
         turn.heartbeat = entry.kind === heartbeatKind;
       }
@@ -229,22 +245,29 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
     if (msg.role !== "assistant") continue;
     const text = contentText(msg.content);
     const end = at + (msg.durationMs ?? 0);
+    let draft: TimelineItem | undefined;
+    if (text.trim()) {
+      draft = { id: entry.byTaskId === undefined ? id : assistantId(entry.byTaskId, at),
+        kind: "assistant", text, at: end, model: msg.model, ...(turn.silent && { silent: true }),
+        ...(turn.reason !== undefined && { reason: turn.reason }) };
+      (turn.drafts ??= new Map()).set(entry.id, draft);
+      if (turn.heartbeat && turn.silent) items.push(draft);
+    }
     if (turn.heartbeat) {
       const calls = msg.content.filter(part => part.type === "toolCall");
       if (calls.length) items.push({ kind: "notice", id, at, text: "巡检调用 " + calls.map(call => call.name).join("、") });
     } else {
-      let shownText = false;
       for (const [index, part] of msg.content.entries()) {
         const partId = `${id}-${index}`;
         if (part.type === "thinking" && !part.redacted && part.thinking.trim()) {
           items.push({ id: partId, kind: "thinking", text: part.thinking, at, model: msg.model });
-        } else if (part.type === "text" && !shownText && text.trim()) {
-          items.push({ id: entry.byTaskId === undefined ? id : assistantId(entry.byTaskId, at),
-            kind: "assistant", text, at: end, model: msg.model });
-          shownText = true;
+        } else if (part.type === "text" && draft) {
+          items.push(draft);
+          draft = undefined;
         } else if (part.type === "toolCall") {
           const item: TimelineItem = { id: partId, kind: "tool", text: part.name, at: end, tool: part.name,
             args: Array.from(JSON.stringify(part.arguments)).slice(0, 600).join("") };
+          // Preserve messages in transcripts written under ADR-0022.
           const message = part.name === "send_message" && typeof part.arguments.text === "string" ? part.arguments.text : undefined;
           (turn.calls ??= new Map()).set(part.id, { item, message });
           items.push(item);

@@ -247,8 +247,8 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
   for (const item of leases.items) earliest = Math.min(earliest, item.at);
   const calendarDays = days ?? 1 + (Date.parse(dates.format(at)) - Date.parse(dates.format(earliest))) / 86_400_000;
   const proactive = funnel(notices, timeZone, calendarDays, { at, feishu });
-  const unreplied = ledger?.entries.filter(entry => entry.kind === "unreplied" && includes(entry.at)).length ?? 0;
-  return { range, timeZone, at, total, leases, unreplied, byRole: [...roles].map(([role, usage]) => ({ role, ...usage })),
+  const silent = Object.keys(wakes?.silent ?? {}).filter(id => wakeDetails.has(id)).length;
+  return { range, timeZone, at, total, leases, silent, byRole: [...roles].map(([role, usage]) => ({ role, ...usage })),
     byModel: [...models].map(([model, usage]) => ({ model, ...usage })),
     tasks: { count: taskRows.length, completed, terminal, successRate: terminal ? completed / terminal : null,
       items: taskRows.sort((a, b) => b.createdAt - a.createdAt) },

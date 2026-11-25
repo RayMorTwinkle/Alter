@@ -1,13 +1,16 @@
 import { FeedbackOutcomes, interacted, triageScope } from "./feedback-settings.ts";
 import { defineDocFamily } from "@earendil-works/pi-durable";
-import { arr, obj, str } from "@earendil-works/pi-schema";
-import { activeWake } from "./wake.ts";
+import { arr, obj, opt, str } from "@earendil-works/pi-schema";
+import { contentText } from "@earendil-works/pi-ai";
+import { Tasks } from "./state.ts";
+import { recordHeartbeatReply } from "./heartbeat-runs.ts";
+import { activeWake, Wakes } from "./wake.ts";
 import { acknowledgeReport } from "./report-state.ts";
-import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
-import { context, defineTool, reply, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Tx } from "./runtime.ts";
+import { recordAdoption } from "./heartbeat-state.ts";
+import { context, InboxDoc, type EntryId, defineTool, reply, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Tx } from "./runtime.ts";
 
 export type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web" | "cli" | "feishu"; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; category?: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -73,27 +76,57 @@ export async function recordDeliveries(tx: Tx, items: readonly Notification[]) {
   }
 }
 
-export const sendMessageTool = defineTool({
-  name: "send_message", description: "这是主会话对用户说话的唯一方式。回答用户、汇报任务结果、告知值得说的巡检发现时，调用此工具立即发送全文。",
-  parameters: obj({ text: str({ pattern: "\\S", maxLength: 4000 }) }), replay: "safe",
-  execute: ({ text }, api, ctx) => api.commit(async tx => {
-    const id = `message-${api.taskId}`;
-    const receipt = await tx.doc(MessageReceipt, id, null);
-    if (!receipt.sent) {
-      const at = api.now();
-      const wake = await activeWake(tx, api.conversationId, at);
-      const report = await acknowledgeReport(tx);
-      const title = Array.from(text.split(/\r?\n/, 1)[0]!).slice(0, 60).join("");
-      await addNotification(tx, { id, at, kind: "message", level: "now", title, body: text, status: "unread",
-        source: report ? "report" : "alter", ...(wake?.wakeSource === "user-web" && { channel: "web" }),
-        ...await activeHeartbeat(tx) });
-      receipt.sent = true;
+export const silentHint = "若这是静默任务或无需提醒用户，调用 stay_silent，本轮正文不会发给用户。";
+export const silentTaskHint = "这是静默模式下派遣的任务。若无需提醒用户，调用 stay_silent，本轮正文不会发给用户。";
+export const staySilentTool = defineTool({
+  name: "stay_silent", description: "本轮不向用户发送回复。可填写原因，正文仅作为网页静默草稿。",
+  parameters: obj({ reason: opt(str()) }), replay: "safe",
+  execute: ({ reason }, api, ctx) => api.commit(async tx => {
+    const wake = await activeWake(tx, api.conversationId, api.now());
+    if (!wake) return reply("没有活动回合", true);
+    const state = await tx.doc(Wakes, api.conversationId);
+    state.silent ??= {};
+    if (state.silent[wake.wakeId]) return reply("本轮已静默");
+    state.silent[wake.wakeId] = true;
+    // A worker may finish and queue its report before the main turn chooses silence.
+    for (const task of Object.values((await tx.doc(Tasks, api.conversationId)).byId)) {
+      if (task.wakeId === wake.wakeId) task.originSilent = true;
     }
-    return reply(id);
+    for (const item of (await tx.doc(InboxDoc, api.conversationId)).items) {
+      if (item.mode === "write" || item.entry?.kind !== "alter.task-report" || typeof item.content !== "string") continue;
+      const data = item.entry.data;
+      if (data && typeof data === "object" && !Array.isArray(data) && data.wakeId === wake.wakeId && item.content.endsWith(silentHint)) {
+        item.content = item.content.slice(0, -silentHint.length) + silentTaskHint;
+        data.originSilent = true;
+      }
+    }
+    await tx.appendEntry(api.conversationId, { kind: "alter.silent", data: { ...(reason !== undefined && { reason }) } });
+    return reply("本轮已静默");
   }, ctx),
 });
-const MessageReceipt = defineDocFamily<{ sent: boolean }, null>({ kind: "alter.message-receipt", version: 1,
-  family: true, scope: "session", initial: () => ({ sent: false }), checkpointWhen: () => false });
+
+export async function deliverReply(tx: Tx, first: EntryId, answer: EntryId, at: number) {
+  const root = ROOT_CONVERSATION_ID;
+  const wakes = await tx.doc(Wakes, root);
+  const trigger = wakes.current?.entry ?? first;
+  const input = await tx.entry(trigger);
+  const data = input?.data;
+  const origin = data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
+  const final = (await tx.entry(answer))?.model?.findLast(msg => msg.role === "assistant");
+  const text = final ? contentText(final.content) : "";
+  if (!text.trim() || (wakes.current && wakes.silent?.[wakes.current.wakeId])) return;
+
+  const report = await acknowledgeReport(tx, trigger);
+  const channel = input?.kind === "alter.user-input" ? origin?.source : undefined;
+  const heartbeat = input?.kind === "alter.heartbeat" && typeof origin?.id === "string" && typeof origin.at === "number"
+    ? { heartbeatId: origin.id, heartbeatAt: origin.at } : undefined;
+  if (heartbeat) await recordHeartbeatReply(tx, heartbeat.heartbeatId);
+  const title = Array.from(text.split(/\r?\n/, 1)[0]!).slice(0, 60).join("");
+  await addNotification(tx, { id: `message-answer-${answer}`, at, kind: "message", level: "now", title, body: text,
+    status: "unread", source: report ? "report" : "alter", ...((channel === "web" || channel === "cli" || channel === "feishu") && { channel }),
+    ...heartbeat });
+  await tx.appendEntry(root, { kind: "alter.reply", data: { answer } });
+}
 
 const ReportDigests = conversationDoc<{ count: number; initialized?: true }>(
   "report-digests", () => ({ count: 0 }));

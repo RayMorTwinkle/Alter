@@ -88,7 +88,7 @@ export function createFeishuSurface(options: Options): AlterSurface & { pairing(
       const chatId = store.value.owner?.chatId;
       if (!ready || !chatId) return;
       for (const item of [...notifications].reverse()) {
-        if (item.channel === "web" || item.source === "feedback" || item.kind === "event" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
+        if (item.channel === "web" || item.channel === "cli" || item.source === "feedback" || item.kind === "event" || item.level !== "now" || item.status !== "unread" || item.pushedAt !== undefined || queued.has(item.id) || store.value.notifications?.includes(item.id)) continue;
         queued.add(item.id);
         outbox = outbox.then(async () => {
           // Reserve before sending: a crash after Feishu accepts the message must never replay it.

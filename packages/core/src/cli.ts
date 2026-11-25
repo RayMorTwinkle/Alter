@@ -26,7 +26,7 @@ export async function observeChat(app: AlterApp, print: (text: string) => void) 
   let seenMessages: Set<string> | undefined;
   const observer = await observeSurface(app, event => {
     if (event.event === "notifications") {
-      const messages = event.data.filter(n => n.kind === "message" && n.channel !== "web");
+      const messages = event.data.filter(n => n.kind === "message" && n.channel !== "web" && n.channel !== "feishu");
       for (const n of messages.toReversed()) if (seenMessages && !seenMessages.has(n.id)) print(`Alter> ${n.body}`);
       seenMessages = new Set(messages.map(n => n.id));
     }

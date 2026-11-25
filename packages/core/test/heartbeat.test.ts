@@ -61,7 +61,7 @@ it("shortens the interval independently for each signal and clamps both extremes
   expect(nextInterval({ adoptionRate: 1, dueGoals: 20, digestCount: 100, userMessages: 100 })).toBe(2 * hour);
 });
 
-it("summarizes new digests including read items, goals, agenda and tasks, hiding idle output live and on replay", async () => {
+it("summarizes new digests including read items, goals, agenda and tasks, omitting a blank final answer live and on replay", async () => {
   const agenda = vi.fn(() => [
     { id: "today", title: "会议", start: start + 26 * hour, end: start + 27 * hour },
     { id: "later", title: "超出范围", start: start + 100 * hour, end: start + 101 * hour },
@@ -83,7 +83,7 @@ it("summarizes new digests including read items, goals, agenda and tasks, hiding
     if (event.event === "timeline" || event.event === "delta") published.push(event.data.text);
   });
   let brief = "";
-  f.provider.setResponses([({ messages }) => { brief = contentText(messages.at(-1)!.content); return say("HEARTBEAT_OK"); }]);
+  f.provider.setResponses([({ messages }) => { brief = contentText(messages.at(-1)!.content); return say(""); }]);
   expect(await f.due()).toBe(start + 5 * hour);
   await f.advance(start + 5 * hour);
   await f.app.main.waitForIdle(context);
@@ -153,15 +153,15 @@ it("defers busy main past its due time and skips once over an hour late", async 
   await f.app.main.waitForIdle(context);
 });
 
-it("attributes send_message and its feedback once per inspection, preserving EWMA and the schedule on restart", async () => {
+it("attributes a final reply and its feedback once per inspection, preserving EWMA and the schedule on restart", async () => {
   const f = await setup();
   await f.notice("digest");
-  f.provider.setResponses([call("send_message", { text: "提醒" }), say("无事")]);
+  f.provider.setResponses([say("提醒")]);
   const at = start + 5 * hour;
   await f.advance(at);
   await f.app.main.waitForIdle(context);
   const surface = await observeSurface(f.app, () => {});
-  expect(surface.snapshot().timeline).toMatchObject([{ kind: "notice", text: "巡检调用 send_message" }]);
+  expect(surface.snapshot().timeline).toMatchObject([{ kind: "message", text: "提醒" }]);
   const item = surface.snapshot().notifications[0]!;
   expect(item).toMatchObject({ source: "alter", level: "now", kind: "message", heartbeatAt: at });
   surface.detach();
@@ -169,7 +169,7 @@ it("attributes send_message and its feedback once per inspection, preserving EWM
     await updateNotification(f.app.main, item.id, { feedback });
     expect((await f.app.heartbeat.stats()).adoptionRate).toBeCloseTo(feedback === "useful" ? 0.65 : 0.35);
   }
-  expect((await readUsage(f.dir)).filter(row => row.proactive).map(row => row.role)).toEqual(["heartbeat", "heartbeat"]);
+  expect((await readUsage(f.dir)).filter(row => row.proactive).map(row => row.role)).toEqual(["heartbeat"]);
   const stats = await f.app.heartbeat.stats();
   const next = await f.due();
   await f.app.close();
@@ -386,8 +386,7 @@ it("records effective quiet-hour notification levels and the ID of a created sch
   vi.stubEnv("ALTER_HEARTBEAT_HOURS", "23:00-07:00");
   const f = await setup();
   f.clock.now = start + 15 * hour;
-  f.provider.setResponses([call("send_message", { text: "已开始报名" }),
-    call("schedule_create", { type: "reminder", brief: "查看活动", trigger: { kind: "at", at: "2026-12-02T12:00Z" } }), say("已安排")]);
+  f.provider.setResponses([call("schedule_create", { type: "reminder", brief: "查看活动", trigger: { kind: "at", at: "2026-12-02T12:00Z" } }), say("已安排")]);
   const run = await f.app.heartbeat.run();
   f.app.harness.resume();
   await expect.poll(async () => (await f.app.heartbeat.view()).runs.find(row => row.id === run.id)?.finalReply).toBe("已安排");
@@ -396,7 +395,8 @@ it("records effective quiet-hour notification levels and the ID of a created sch
   expect(record.notified).toBe(true);
   const notice = (await f.app.harness.snapshot(Notifications, f.app.main.id, context))!.entries.find(row => row.kind === "message")!;
   const schedule = (await f.app.schedules.list()).find(item => item.brief === "查看活动")!;
-  expect(record.actions).toEqual([{ tool: "send_message", id: notice.id, level: "now" }, { tool: "schedule_create", id: schedule.id }]);
+  expect(notice).toMatchObject({ body: record.finalReply, level: "now" });
+  expect(record.actions).toEqual([{ tool: "schedule_create", id: schedule.id }]);
 });
 
 it("extracts a watch ID from a successful tool result and recovers a placed run after restart", async () => {
@@ -415,6 +415,6 @@ it("extracts a watch ID from a successful tool result and recovers a placed run 
   await expect.poll(pending).toMatchObject({ tool: "watch_create" });
   await answerUserPermission(g.app.main, { requestId: (await pending())!.id, decision: "once" });
   await expect.poll(async () => (await g.app.heartbeat.view()).runs[0]?.finalReply).toBe("准备好了");
-  expect((await g.app.heartbeat.view()).runs[0]).toMatchObject({ id: run.id, notified: false,
+  expect((await g.app.heartbeat.view()).runs[0]).toMatchObject({ id: run.id, notified: true,
     actions: [{ tool: "enable_tool" }, { tool: "watch_create", id: "watch-17" }] });
 });

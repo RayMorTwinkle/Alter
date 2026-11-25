@@ -1,6 +1,6 @@
 # ADR-0022 主会话统一通过 send_message 对用户说话
 
-- 状态：已接受
+- 状态：[部分被 ADR-0025 取代](0025-reply-by-default-stay-silent.md)
 - 日期：2026-11-24
 - 修订：ADR-0012 的主会话回复与通知投递规则
 

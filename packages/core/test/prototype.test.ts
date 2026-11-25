@@ -82,7 +82,7 @@ async function incoming(app: Alter) {
 }
 
 const memoryTools = ["memory_delete", "memory_read", "memory_search", "memory_write"];
-const controls = ["digest_source", "dispatch_task", "enable_tool", "feedback_answer", ...memoryTools, "schedule_create", "schedule_list", "schedule_set", "send_message", "task_message", "task_status", "task_stop", "watch", "watch_cancel", "watch_list"];
+const controls = ["digest_source", "dispatch_task", "enable_tool", "feedback_answer", ...memoryTools, "schedule_create", "schedule_list", "schedule_set", "stay_silent", "task_message", "task_status", "task_stop", "watch", "watch_cancel", "watch_list"];
 const taskTools = ["calendar_create", "calendar_list", "calendar_update", "finish", ...memoryTools, "notes_read", "outbox_send"];
 
 it("offers only real plugins when demos are off, so no simulated send exists", async () => {
@@ -124,7 +124,7 @@ it("dispatches a fresh notes task and delivers its ledger summary to the main mo
     return say("OK");
   });
   await input(app, "delegate");
-  await expect.poll(() => seen.some(line => line.endsWith("finished: Remember the planning meeting."))).toBe(true);
+  await expect.poll(() => seen.some(line => line.includes("finished: Remember the planning meeting."))).toBe(true);
   expect(seen).toContain(controls.join(","));
   expect(seen).toContain(taskTools.join(","));
   expect(await ledger(app)).toEqual([{
@@ -156,9 +156,9 @@ it.each([false, true])("answers once for a fast report, including after a failed
   await app.main.waitForIdle(context);
   if (failOnce) {
     expect(failed).toBe(true);
-    await expect.poll(() => feed.snapshot().timeline.some(item => item.kind === "assistant" && item.text === result)).toBe(true);
+    await expect.poll(() => feed.snapshot().timeline.some(item => item.kind === "message" && item.text === result)).toBe(true);
   }
-  expect(feed.snapshot().timeline.filter(item => item.kind === "assistant").map(item => item.text)).toEqual([result]);
+  expect(feed.snapshot().timeline.filter(item => item.kind === "message").map(item => item.text)).toEqual([result]);
 });
 
 it("starts a report turn when the worker finishes after the user turn", async () => {
@@ -166,7 +166,7 @@ it("starts a report turn when the worker finishes after the user turn", async ()
   const app = await open(async text => {
     if (text === "delegate") return dispatch("slow work");
     if (text === "slow work") { await release.promise; return finish("verified later"); }
-    return say(text.endsWith("finished: verified later") ? "verified later" : "working");
+    return say(text.includes("finished: verified later") ? "verified later" : "working");
   });
   await input(app, "delegate");
   expect(await ledger(app)).toEqual([]);
@@ -189,7 +189,7 @@ it("delivers concurrent reports in full to one main request and settles them wit
       await reported.promise;
       return call("task_status", {});
     }
-    const seen = briefs.filter(brief => messages.some(m => m.role === "user" && contentText(m.content).endsWith(summary(brief))));
+    const seen = briefs.filter(brief => messages.some(m => m.role === "user" && contentText(m.content).includes(summary(brief))));
     return say(seen.join(", "));
   });
   const ids: string[] = [];
@@ -202,7 +202,7 @@ it("delivers concurrent reports in full to one main request and settles them wit
   cleanup.push(async () => feed.detach());
   const user = await submitMessage(app.main, "delegate");
   await app.main.waitForIdle(context);
-  expect(feed.snapshot().timeline.filter(item => item.kind === "assistant").map(item => item.text)).toEqual(["first, second"]);
+  expect(feed.snapshot().timeline.filter(item => item.kind === "message").map(item => item.text)).toEqual(["first, second"]);
   const receipts = await app.main.commit(tx => Promise.all([user, ...ids].map(id => tx.submissionByRequest(app.main.id, id))), context);
   expect(receipts).toHaveLength(3);
   expect(receipts[0]?.answer).toBeDefined();
@@ -320,7 +320,7 @@ it("resumes a SQLite approval after closing and admits exactly one report across
   const third = await open(route, await reopen());
   third.harness.resume();
   await third.main.waitForIdle(context);
-  expect((await incoming(third)).filter(text => text.endsWith("finished: Recorded in outbox"))).toHaveLength(1);
+  expect((await incoming(third)).filter(text => text.includes("finished: Recorded in outbox"))).toHaveLength(1);
   expect(await ledger(third)).toHaveLength(1);
 });
 
@@ -380,7 +380,7 @@ it("recovers a parked call after SIGKILL with no graceful close", async () => {
   await expect.poll(async () => (await ledger(app)).length).toBe(1);
   await app.main.waitForIdle(context);
   expect(app.demo.outbox).toEqual(["recovered"]);
-  expect((await incoming(app)).filter(text => text.endsWith("finished: Recorded in outbox"))).toHaveLength(1);
+  expect((await incoming(app)).filter(text => text.includes("finished: Recorded in outbox"))).toHaveLength(1);
 });
 
 it("renews the calendar lease on use and expires it at thirty idle turns", async () => {

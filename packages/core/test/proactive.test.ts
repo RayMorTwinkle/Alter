@@ -37,13 +37,13 @@ async function setup(plugins: AlterPlugin[] = []) {
   models.setProvider(task.provider);
   const main = fauxProvider({ provider: "main", tokensPerSecond: Infinity });
   models.setProvider(main.provider);
-  main.setResponses(Array.from({ length: 10 }, () => say("收到")));
+  main.setResponses(Array.from({ length: 10 }, () => say("")));
   async function open(file = "main.sqlite") {
     const app = await openAlter(await openNodeSqliteStorage(join(dir, file)), models, { provider: "main", modelId: "faux-1" },
       { provider: "worker", modelId: "faux-1" }, {}, { plugins, now: () => clock.now, timeZone: "Asia/Taipei" });
     cleanup.push(app.close);
     const rows = async () => (await app.harness.snapshot(Notifications, app.main.id, context))?.entries ?? [];
-    const wait = (ref: string) => expect.poll(async () => (await rows())[0]?.ref).toBe(ref);
+    const wait = (ref: string) => expect.poll(async () => (await rows()).some(item => item.ref === ref)).toBe(true);
     return { app, rows, wait, emit: app.events.emit };
   }
   return { clock, main, task, dir, open, ...await open() };
@@ -198,8 +198,8 @@ it("feeds grouped, validated digest lines into the report and looks up their ful
     return say(fauxToolCall("digest_source", { ids: ["mail-123", "n1"] }), { stopReason: "toolUse" });
   }, ({ messages }) => {
     originals = contentText(messages.at(-1)!.content);
-    return say(fauxToolCall("send_message", { text: "报告正文" }), { stopReason: "toolUse" });
-  }, say("已发")]);
+    return say("报告正文");
+  }]);
   f.clock.now = (await f.app.heartbeat.view()).report.nextAt!;
   f.app.harness.resume();
   await expect.poll(async () => (await f.rows())[0]?.source).toBe("report");
@@ -219,7 +219,7 @@ it("feeds grouped, validated digest lines into the report and looks up their ful
   expect(f.task.state.callCount).toBe(1);
 });
 
-it("retries an unnotified report with new arrivals and advances its cursor only on send_message", async () => {
+it("retries an unnotified report with new arrivals and advances its cursor only on a delivered reply", async () => {
   vi.stubEnv("ALTER_REPORT_TIME", "20:30");
   const f = await setup();
   const view = () => f.app.heartbeat.view();
@@ -243,6 +243,7 @@ it("retries an unnotified report with new arrivals and advances its cursor only 
     expect(f.task.state.callCount).toBe(1);
   }
   await finish("乙");
+  f.main.setResponses([say("")]);
   f.clock.now = (await view()).report.nextAt!;
   f.app.harness.resume();
   await expect.poll(() => f.main.state.callCount).toBe(1);
@@ -256,8 +257,8 @@ it("retries an unnotified report with new arrivals and advances its cursor only 
   let input = "";
   f.main.setResponses([({ messages }) => {
     input = contentText(messages.at(-1)!.content);
-    return say(fauxToolCall("send_message", { text: "两条消息" }), { stopReason: "toolUse" });
-  }, say("已发")]);
+    return say("两条消息");
+  }]);
   f.clock.now = next;
   g.app.harness.resume();
   await expect.poll(async () => (await g.rows())[0]?.source).toBe("report");

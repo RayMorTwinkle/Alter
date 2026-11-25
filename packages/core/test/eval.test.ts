@@ -44,7 +44,7 @@ it("removes only the lease tool and lease instruction when leasing is disabled",
   }
   const lease = await agent(true);
   const dispatch = await agent(false);
-  expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_set", "send_message", "digest_source", "feedback_answer", "watch", "watch_list", "watch_cancel",
+  expect(dispatch.tools.map(tool => tool.name)).toEqual(["schedule_create", "schedule_list", "schedule_set", "stay_silent", "digest_source", "feedback_answer", "watch", "watch_list", "watch_cancel",
     "dispatch_task", "task_status", "task_message", "task_stop",
     "memory_read", "memory_search", "memory_write", "memory_delete"]);
   expect(dispatch.instructions).toBe(lease.instructions!.replace("一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。", ""));
@@ -81,8 +81,8 @@ it("waits for the dispatched list and its final reply, and counts usage attempts
     call("dispatch_task", { brief: "列出日程", context: "fresh", permission: "restricted" }),
     say("正在查询"), async ({ messages }) => {
       await appendUsage(dataDir, { ...base, model: "main", conversation: "main", outcome: "ok", inputTokens: 7, outputTokens: 2 });
-      return call("send_message", { text: contentText(messages.at(-1)!.content) });
-    }, say("草稿"),
+      return say(contentText(messages.at(-1)!.content));
+    },
   ]);
   task.setResponses([call("calendar_list", {}), async ({ messages }) => {
     await sleep(1100);
