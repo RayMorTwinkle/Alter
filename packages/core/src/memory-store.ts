@@ -1,20 +1,20 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { bool, compile, int, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
+import { DatabaseSync, type StatementSync, type SQLInputValue } from "node:sqlite";
+import { compile, int, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
 import { calendarTime } from "./calendar-time.ts";
 
 export const entryType = oneOf(["user", "preference", "goal", "reference"]);
 export const status = oneOf(["active", "done", "pending"]);
 export const nonempty = str({ pattern: "\\S" });
 export const due = int({ minimum: -8.64e15, maximum: 8.64e15 });
-const entryFields = { title: nonempty, type: entryType, body: nonempty, source: opt(nonempty), guess: opt(bool()), dueAt: opt(due), status: opt(status) };
+const entryFields = { title: nonempty, type: entryType, body: nonempty, source: opt(nonempty), dueAt: opt(due), status: opt(status) };
 const entrySchema = obj(entryFields);
 const validEntry = compile(entrySchema);
 export const patchFields = { title: opt(nonempty), type: opt(entryType), body: opt(nonempty), source: opt(nonempty),
-  guess: opt(bool()), dueAt: opt(nullable(due)), status: opt(status) };
+  dueAt: opt(nullable(due)), status: opt(status) };
 const validPatch = compile(obj(patchFields));
 export type EntryInput = Static<typeof entrySchema>;
 export type EntryPatch = Partial<Omit<EntryInput, "dueAt">> & { dueAt?: number | null };
-export type MemoryEntry = EntryInput & { id: string; source: string; guess: boolean; status: Static<typeof status>;
+export type MemoryEntry = EntryInput & { id: string; source: string; status: Static<typeof status>;
   createdAt: number; updatedAt: number; supersededBy?: string };
 export type Operation =
   | { op: "add"; entry: EntryInput }
@@ -39,7 +39,7 @@ function indexLine(e: MemoryEntry, expandTitles = false) {
   const title = e.title.trim().replace(/\s+/g, " ");
   const hint = sentence(e.body, 60).replace(/\s+/g, " ");
   const summary = hint.startsWith(title) ? (expandTitles ? hint : title) : title + " — " + hint;
-  return `[${labels[e.type]}] ${summary}（#${e.id}${e.guess ? "，猜的" : ""}${goal}${deadline}）`;
+  return `[${labels[e.type]}] ${summary}（#${e.id}${goal}${deadline}）`;
 }
 
 export function openMemoryStore(path: string, now: () => number, timeZone: string, initial?: { entries: MemoryEntry[]; sequence: number }) {
@@ -51,15 +51,15 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
     try { const result = work(); db.exec("COMMIT"); return result; }
     catch (error) { db.exec("ROLLBACK"); throw error; }
   }
+  let insertEntry: StatementSync;
   function restore(e: MemoryEntry) {
-    db.prepare("INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(e.id, e.title, e.type, e.body, e.source,
-      Number(e.guess), e.dueAt ?? null, e.status, e.createdAt, e.updatedAt, e.supersededBy ?? null);
+    insertEntry.run(e.id, e.title, e.type, e.body, e.source, e.dueAt ?? null, e.status, e.createdAt, e.updatedAt, e.supersededBy ?? null);
   }
   try {
     transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, type TEXT NOT NULL, body TEXT NOT NULL,
-        source TEXT NOT NULL, guess INTEGER NOT NULL, dueAt INTEGER, status TEXT NOT NULL,
+        source TEXT NOT NULL, dueAt INTEGER, status TEXT NOT NULL,
         createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, supersededBy INTEGER);
         CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(title, body, content='entries', content_rowid='id', tokenize='trigram');
         CREATE TRIGGER IF NOT EXISTS entry_insert AFTER INSERT ON entries BEGIN
@@ -71,16 +71,19 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
           INSERT INTO entries_fts(rowid,title,body) VALUES(new.id,new.title,new.body); END;
         CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL,
           operations TEXT NOT NULL, snapshots TEXT NOT NULL, undoneBy INTEGER, batch TEXT UNIQUE);`);
+      // Old schemas require a placeholder on insert. Existing rows keep their original value.
+      const legacy = db.prepare("SELECT 1 FROM pragma_table_info('entries') WHERE name='guess'").get();
+      insertEntry = db.prepare(`INSERT INTO entries(id,title,type,body,source,dueAt,status,createdAt,updatedAt,supersededBy${legacy ? ",guess" : ""})
+        VALUES(?,?,?,?,?,?,?,?,?,?${legacy ? ",0" : ""})`);
       if (initial) {
         for (const entry of initial.entries) restore(entry);
         db.prepare("DELETE FROM sqlite_sequence WHERE name='entries'").run();
         db.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES('entries',?)").run(initial.sequence);
       }
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory'").get()) {
-        const insert = db.prepare("INSERT INTO entries VALUES(?,?,?,?,?,0,?,?,?,?,NULL)");
         for (const row of db.prepare("SELECT * FROM memory ORDER BY id").iterate()) {
-          insert.run(row.id!, sentence(String(row.text), 30), migratedType[row.kind as keyof typeof migratedType], row.text!,
-            dated(Number(row.createdAt)), row.due!, row.status!, row.createdAt!, row.updatedAt!);
+          insertEntry.run(row.id!, sentence(String(row.text), 30), migratedType[row.kind as keyof typeof migratedType], row.text!,
+            dated(Number(row.createdAt)), row.due!, row.status!, row.createdAt!, row.updatedAt!, null);
         }
         db.exec(`DELETE FROM sqlite_sequence WHERE name='entries';
           INSERT INTO sqlite_sequence(name,seq) SELECT 'entries',seq FROM sqlite_sequence WHERE name='memory';
@@ -90,9 +93,9 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
   } catch (error) { db.close(); throw error; }
 
   function entries(where = "supersededBy IS NULL", ...args: SQLInputValue[]): MemoryEntry[] {
-    return db.prepare("SELECT * FROM entries WHERE " + where + " ORDER BY updatedAt DESC,id DESC").all(...args).map(row => {
-      const { id, dueAt, supersededBy, guess, ...fields } = row;
-      return { ...fields, id: String(id), guess: !!guess, ...(dueAt != null && { dueAt }), ...(supersededBy != null && { supersededBy: String(supersededBy) }) } as MemoryEntry;
+    return db.prepare("SELECT id,title,type,body,source,dueAt,status,createdAt,updatedAt,supersededBy FROM entries WHERE " + where + " ORDER BY updatedAt DESC,id DESC").all(...args).map(row => {
+      const { id, dueAt, supersededBy, ...fields } = row;
+      return { ...fields, id: String(id), ...(dueAt != null && { dueAt }), ...(supersededBy != null && { supersededBy: String(supersededBy) }) } as MemoryEntry;
     });
   }
   const read = (id: string) => entries("id=?", id)[0];
@@ -108,8 +111,8 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
     if (!validEntry.check(input)) throw new MemoryInputError("Expected type, title and body");
     if (input.dueAt != null && input.type !== "goal") throw new MemoryInputError("Only goals have deadlines");
     const at = now();
-    return String(db.prepare(`INSERT INTO entries(title,type,body,source,guess,dueAt,status,createdAt,updatedAt)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run(input.title.trim(), input.type, input.body.trim(), input.source ?? dated(at), Number(input.guess ?? false), input.dueAt ?? null, input.status ?? goalStatus, at, at).lastInsertRowid);
+    return String(insertEntry.run(null, input.title.trim(), input.type, input.body.trim(), input.source ?? dated(at),
+      input.dueAt ?? null, input.status ?? goalStatus, at, at, null).lastInsertRowid);
   }
   function edit(old: MemoryEntry, patch: EntryPatch) {
     if (!validPatch.check(patch) || !Object.keys(patch).length) throw new MemoryInputError("Expected an entry patch");
@@ -117,8 +120,8 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
     if (e.dueAt != null && e.type !== "goal") throw new MemoryInputError("Only goals have deadlines");
     const at = now();
     const revived = old.status === "pending" && patch.dueAt != null && patch.dueAt > at;
-    db.prepare("UPDATE entries SET title=?,type=?,body=?,source=?,guess=?,dueAt=?,status=?,updatedAt=? WHERE id=?")
-      .run(e.title.trim(), e.type, e.body.trim(), e.source, Number(e.guess), e.dueAt ?? null, patch.status ?? (revived ? "active" : old.status), at, old.id);
+    db.prepare("UPDATE entries SET title=?,type=?,body=?,source=?,dueAt=?,status=?,updatedAt=? WHERE id=?")
+      .run(e.title.trim(), e.type, e.body.trim(), e.source, e.dueAt ?? null, patch.status ?? (revived ? "active" : old.status), at, old.id);
   }
   const processed = (batch: string) => !!db.prepare("SELECT 1 FROM changes WHERE batch=?").get(batch);
   function lastBatch() {
@@ -174,7 +177,7 @@ export function openMemoryStore(path: string, now: () => number, timeZone: strin
   function changes(where = "1", ...args: SQLInputValue[]): MemoryChange[] {
     return db.prepare("SELECT * FROM changes WHERE " + where + " ORDER BY id DESC").all(...args).map(row => ({
       id: String(row.id), at: Number(row.at), kind: row.kind as MemoryChange["kind"], operations: JSON.parse(String(row.operations)),
-      snapshots: JSON.parse(String(row.snapshots)), ...(row.undoneBy != null && { undoneBy: String(row.undoneBy) }),
+      snapshots: JSON.parse(String(row.snapshots), (key, value) => key === "guess" ? undefined : value), ...(row.undoneBy != null && { undoneBy: String(row.undoneBy) }),
     }));
   }
   function undo(id: string) {

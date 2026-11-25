@@ -1,7 +1,7 @@
 import { arr, bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
-import { activeHeartbeat, recordAdoption } from "./heartbeat-state.ts";
-import { recentUserText, submitWake } from "./timeline.ts";
+import { proactivePrinciple, recordAdoption } from "./heartbeat-state.ts";
+import { activeHeartbeat, recentUserText, submitWake } from "./timeline.ts";
 import { LeaseHistory, Leases } from "./leases.ts";
 import { Audit, Requests } from "./broker.ts";
 import type { inputClock } from "./clock.ts";
@@ -169,7 +169,8 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const wake = !args.triggerSource ? await activeWake(tx, mainId, stamp.at) : undefined;
     const originSilent = wake && (await tx.doc(Wakes, mainId)).silent?.[wake.wakeId];
     const inspection = args.heartbeatId ? { heartbeatId: args.heartbeatId, heartbeatAt: stamp.at } :
-      args.triggerSource ? undefined : await activeHeartbeat(tx);
+      args.triggerSource ? undefined : await activeHeartbeat(tx, mainId);
+    const brief = inspection && !args.heartbeatId ? args.brief + "\n" + proactivePrinciple : args.brief;
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const goal = previous?.goal; // Preserve read-only scope when resuming historical research.
     const at = !previous && args.context === "fork" ? await tx.latestEntryId(mainId) : undefined;
@@ -201,7 +202,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const identity = await tx.doc(TaskIdentity, childId);
     const scope = await tx.doc(ScopeDoc, childId);
     scope.items = inputs ? [...inputs.map(purpose => ({ tool: "", target: "", purpose })),
-      { tool: "", target: "任务 brief", purpose: args.brief }] : [];
+      { tool: "", target: "任务 brief", purpose: brief }] : [];
     if (previous) {
       scope.late = [];
       delete scope.capabilities;
@@ -217,7 +218,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     identity.reminders = 0;
     tasks.byId[taskId] = {
       worker, ...(originSilent && { originSilent: true }), ...(scheduled && { triggerSource: "scheduled" }), ...(watch && { watch: watch.settings }),
-      ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
+      ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief, context: args.context, createdAt: stamp.at, thinking,
       permission: inspection && args.permission === "full" ? "restricted" : args.permission, status: "running",
       ...inspection, ...(goal && { proactive: true, goal: { ...goal } }),
       ...(args.continuedFrom && { continuedFrom: args.continuedFrom }),

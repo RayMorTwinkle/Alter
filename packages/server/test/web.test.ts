@@ -469,9 +469,10 @@ it("authenticates memory routes and streams full lists for tool writes, expiry a
   expect(history[0]).toMatchObject({ operations: [{ op: "delete", ids: [profile] }] });
   expect((await edit("POST", "changes/" + history[0].id + "/undo")).status).toBe(204);
   expect((await edit("POST", "changes/" + history[0].id + "/undo")).status).toBe(409);
-  expect((await edit("PATCH", profile, { guess: true })).status).toBe(204);
-  expect((await edit("PATCH", profile, { guess: false })).status).toBe(204);
-  expect(await (await web.read("/api/memory/" + profile)).json()).toMatchObject({ type: "user", body: "用中文回答", guess: false });
+  expect((await edit("PATCH", profile, { guess: true })).status).toBe(400);
+  const restored = await (await web.read("/api/memory/" + profile)).json();
+  expect(restored).toMatchObject({ type: "user", body: "用中文回答" });
+  expect(restored).not.toHaveProperty("guess");
   expect((await edit("DELETE", profile)).status).toBe(204);
   await web.app.main.waitForIdle(context);
   await web.close();

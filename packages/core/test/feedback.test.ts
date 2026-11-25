@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { afterEach, expect, it, vi } from "vitest";
 import { Audit, Reviews } from "../src/broker.ts";
-import { day, Feedback, issueQuestions, pickQuestions, putQuestion, type Effect } from "../src/feedback.ts";
-import { mergeCorrection } from "../src/feedback-model.ts";
+import { day, Feedback, issueQuestions, putQuestion, type Effect } from "../src/feedback.ts";
 import { interacted } from "../src/feedback-settings.ts";
 import { createGatewayModels } from "../src/models.ts";
 import { gatewayConfig } from "../src/config.ts";
@@ -36,34 +35,6 @@ async function setup() {
   const pick = (outlet: "report" | "checkin", limit: number) => commit(tx => issueQuestions(tx, { outlet, limit }, clock.at));
   return { app, clock, commit, touch, pick };
 }
-it("issues each guess once across outlets, confirms, corrects and deletes through reversible memory changes", async () => {
-  const { app, touch, commit } = await setup();
-  const ids = app.memory.store.apply(["甲", "乙", "丙"].map(name =>
-    ({ op: "add", entry: { type: "user", title: name, body: name, guess: true } }))).map(op => op.ids[0]!);
-  await touch();
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  let report;
-  try { report = await commit(tx => pickQuestions(tx, { outlet: "report", limit: 8 })); }
-  finally { now.mockRestore(); }
-  expect(report).toHaveLength(2);
-  const questions = [...report, ...await app.feedback.more()].filter(q => q.options.includes("部分对"));
-  expect(questions).toHaveLength(3);
-  for (const [index, q] of questions.entries()) {
-    const id = ids.find(id => q.prompt.includes(app.memory.store.read(id)!.title))!;
-    const before = app.memory.store.read(id);
-    const input = [{ options: ["对"] }, { options: ["不对"] }, { options: ["部分对"], other: "只在周末" }][index]!;
-    if (index === 2) await expect(app.feedback.answer(q.id, { options: ["部分对"] })).rejects.toMatchObject({ status: 400 });
-    await Promise.all([app.feedback.answer(q.id, input), app.feedback.answer(q.id, input)]);
-    if (index === 1) expect(app.memory.store.read(id)).toBeUndefined();
-    else expect(app.memory.store.read(id)).toMatchObject({ guess: false, source: "回访于 2026-12-01", body: input.other ?? before!.body });
-    await expect(app.feedback.skip(q.id)).rejects.toMatchObject({ status: 409 });
-    const saved = (await app.feedback.view()).history.find(i => i.id === q.id)!;
-    expect(saved.changeIds).toHaveLength(1);
-    await app.feedback.undo(saved.changeIds[0]!);
-    expect(app.memory.store.read(id)).toEqual(before);
-  }
-  expect(await app.feedback.stats()).toMatchObject({ changeCount: 3, guesses: { confirmed: 1, answered: 3, confirmationRate: 1 / 3 } });
-});
 it("rejects missing or unusable effects and reduces the rank of frequently skipped questions", async () => {
   const { app, commit, touch, pick, clock } = await setup();
   const question = { id: "a", source: "style" as const, prompt: "方式？", options: ["短", "中", "长"], allowOther: false,
@@ -131,8 +102,10 @@ it("sends due checkins only after recent activity and doubles the interval after
   expect(pending).toHaveLength(3);
   for (const q of pending) await app.feedback.skip(q.id);
   clock.at += 7 * day;
-  // This week's fresh guesses can be asked while all of last week's questions are cooling down.
-  app.memory.store.apply([1, 2, 3, 4, 5].map(i => ({ op: "add", entry: { title: String(i), body: "猜测", type: "user", guess: true } })));
+  await commit(async tx => {
+    const bank = await tx.doc(Feedback, app.main.id);
+    for (let i = 0; i < 5; i++) putQuestion(bank, { ...bank.candidates["style:report"]!, id: "new:" + i }, clock.at);
+  });
   expect(await pick("report", 2)).toEqual([]);
   await touch();
   await tick();
@@ -245,19 +218,14 @@ it("requires both a real release and recent use, shows the display name, and cap
   expect(new Set(metrics.map(q => q.batch)).size).toBe(2);
 });
 
-it.each(["只对了一半", "不是这样的"])("reviews a batch once, keeps mapped actions and merges the correction for %s", async choice => {
+it.each([true, false])("reviews a batch once and validates option mappings (valid=%s)", async valid => {
   const dir = await mkdtemp(join(tmpdir(), "alter-feedback-quality-"));
   clean.push(() => rm(dir, { force: true, recursive: true }));
-  const correction = "只是周末熬夜，工作日早上 8 点就起";
-  const body = "周末有时会熬夜写代码，工作日早上 8 点起床。";
   const gateway = await fakeGateway((req, res) => {
     const payload = JSON.parse(req.messages.at(-1)!.content);
-    if (payload.correction) return say(res, JSON.stringify({ title: "工作日与周末作息", body, type: "user" }));
     return say(res, JSON.stringify(payload.candidates.map((q: { id: string; options: string[] }) => {
-      if (q.id.startsWith("guess:")) return { id: q.id, decision: "keep", prompt: "你平时也常熬夜写代码吗？",
-        options: ["是的", "只对了一半", "不是这样的"], mapping: { 是的: "对", 只对了一半: "部分对", 不是这样的: "不对" } };
       if (q.id === "style:report") return { id: q.id, decision: "keep", prompt: "你想多久听一次近况？",
-        options: ["少打扰我", "照旧", "多聊聊"], mapping: { 少打扰我: "少一些", 照旧: "默认频率", 多聊聊: choice === "只对了一半" ? "频繁一些" : "少一些" } };
+        options: ["少打扰我", "照旧", "多聊聊"], mapping: { 少打扰我: "少一些", 照旧: "默认频率", 多聊聊: valid ? "频繁一些" : "少一些" } };
       if (q.id === "style:satisfaction") return { id: q.id, decision: "keep", prompt: "最近的帮助你满意吗？",
         options: ["很满意", "还行", "不太好"], mapping: { 很满意: "满意", 还行: "一般", 不太好: "不满意" } };
       return { id: q.id, decision: "drop" };
@@ -268,10 +236,9 @@ it.each(["只对了一半", "不是这样的"])("reviews a batch once, keeps map
     ALTER_LLM_API_KEY: "offline-key", ALTER_MAIN_MODEL: "offline/main", ALTER_TASK_MODEL: "offline/task", ALTER_DATA_DIR: dir }));
   const app = await openAlter(new MemoryStorage(), models, mainModel, taskModel, {}, { now: () => start, dataDir: dir });
   clean.push(app.close);
-  const id = app.memory.store.apply([
-    { op: "add", entry: { title: "可能是夜猫子型开发者", body: "从半夜写代码和周末参加黑客松推断，作息偏晚。", type: "user", guess: true } },
+  app.memory.store.apply([
     { op: "add", entry: { title: "回复风格", body: "回复风格要简短", type: "preference" } },
-  ])[0]!.ids[0]!;
+  ]);
   await app.main.commit(async tx => {
     const { byId } = await tx.doc(Wakes, app.main.id);
     for (const [key, at] of [["old", start - 8 * day], ["recent", start]] as const) byId[key] = { wakeId: key, wakeSource: "user-web", wakeAt: at };
@@ -283,10 +250,9 @@ it.each(["只对了一半", "不是这样的"])("reviews a batch once, keeps map
   expect(input.memoryIndex).toContain("回复风格要简短");
   expect(input.usage).toMatchObject({ days: 7, userTurns: 1 });
   expect(input.candidates.find((q: { id: string }) => q.id === "style:length")).toBeUndefined();
-  expect(questions).toHaveLength(3);
-  const guess = questions.find(q => q.prompt.includes("熬夜"))!;
+  expect(questions).toHaveLength(2);
   const report = questions.find(q => q.why.includes("近况报告"))!;
-  if (choice === "不是这样的") {
+  if (!valid) {
     expect(report.prompt).toBe("你希望多久收到一次近况报告？");
     expect(report.options).toEqual(["频繁一些", "默认频率", "少一些"]);
     await app.feedback.answer(report.id, { options: ["少一些"] });
@@ -294,35 +260,15 @@ it.each(["只对了一半", "不是这样的"])("reviews a batch once, keeps map
   await app.feedback.answer(questions.find(q => q.options.includes("很满意"))!.id, { options: ["很满意"] });
   expect((await app.feedback.settings()).reportFrequency).toBe(2);
   expect((await app.feedback.stats()).satisfaction).toEqual([{ at: start, value: 3 }]);
-  const answer = { options: [choice], other: correction };
-  await Promise.all([app.feedback.answer(guess.id, answer), app.feedback.answer(guess.id, answer)]);
-  expect(app.memory.store.read(id)).toMatchObject({ title: "工作日与周末作息", body, type: "user", guess: false });
-  expect(gateway.requests).toHaveLength(2);
-  expect(JSON.parse(gateway.requests[1]!.messages.at(-1)!.content)).toMatchObject({ entry: { title: "可能是夜猫子型开发者" }, correction,
-    choice: choice === "只对了一半" ? "部分对" : "不对" });
-  expect((await readUsage(dir)).map(r => [r.role, r.thinking, r.model])).toEqual(Array(2).fill(["feedback", "low", "offline/task"]));
-  await app.feedback.undo(guess.id);
-  expect(app.memory.store.read(id)).toMatchObject({ title: "可能是夜猫子型开发者", guess: true });
+  expect((await readUsage(dir)).map(r => [r.role, r.thinking, r.model])).toEqual([["feedback", "low", "offline/task"]]);
 });
 
-it("expires a pending preference when memory supplies the answer, and rejects stale guess corrections after a body-only edit", async () => {
+it("expires a pending preference when memory supplies the answer", async () => {
   const { app } = await setup();
-  const id = app.memory.store.apply([{ op: "add", entry: { type: "user", title: "可能是夜猫子型开发者", body: "周末参加黑客松", guess: true } }])[0]!.ids[0]!;
-  const questions = await app.feedback.more();
-  const guess = questions.find(q => q.options.includes("部分对"))!;
-  expect(guess.prompt).toBe("「夜猫子型开发者」符合你的情况吗？");
-  const length = questions.find(q => q.why.includes("回复长度"))!;
-  app.memory.store.apply([
-    { op: "add", entry: { title: "沟通习惯", body: "回复风格要简短", type: "preference" } },
-    { op: "modify", id, patch: { body: "只在周五晚上参加黑客松" } },
-  ]);
-  await expect(app.feedback.answer(guess.id, { options: ["不对"] })).rejects.toMatchObject({ status: 409 });
-  await expect.poll(() => app.feedback.view().history.filter(i => i.status === "expired").map(i => i.id)).toEqual(expect.arrayContaining([guess.id, length.id]));
+  const length = (await app.feedback.more()).find(q => q.why.includes("回复长度"))!;
+  app.memory.store.apply([{ op: "add", entry: { title: "沟通习惯", body: "回复风格要简短", type: "preference" } }]);
+  await expect.poll(() => app.feedback.view().history.find(i => i.id === length.id)?.status).toBe("expired");
   expect((await app.feedback.more()).some(q => q.why.includes("回复长度"))).toBe(false);
-  expect(app.memory.store.read(id)?.guess).toBe(true);
-  for (const malformed of [{ title: "长".repeat(21), body: "完整正文", type: "user" }, { title: "标题", body: "完整正文", type: ["user"] }]) {
-    expect(await mergeCorrection(async () => malformed, app.memory.store.read(id)!, "部分对", "周末")).toBeUndefined();
-  }
 });
 
 it("retires legacy ID-only feature questions and excess pending metrics on startup without losing history", async () => {
@@ -337,6 +283,9 @@ it("retires legacy ID-only feature questions and excess pending metrics on start
     const bank = await tx.doc(Feedback, app.main.id);
     const first = Object.values(bank.issues).find(i => i.candidateId === "style:satisfaction")!;
     const second = bank.candidates["style:usefulness"]!;
+    const legacy = { ...first, id: "legacyGuess", source: "guess", candidateId: "guess:1", effect: { kind: "memory", entryId: "1" } };
+    Object.assign(bank.issues, { legacyGuess: legacy });
+    Object.assign(bank.candidates, { "guess:1": { ...second, ...legacy, id: "guess:1" } });
     bank.issues.legacyMetric = { ...first, id: "legacyMetric", candidateId: second.id, effect: second.effect, prompt: second.prompt, options: second.options };
     bank.issues.legacyFeature = { ...first, id: "legacyFeature", source: "feature", candidateId: "feature:calendar",
       effect: { kind: "metric", name: "feature:calendar" }, prompt: "calendar有哪些地方帮到了你？" };
@@ -346,5 +295,11 @@ it("retires legacy ID-only feature questions and excess pending metrics on start
   clean.push(reopened.close);
   const { pending, history } = reopened.feedback.view();
   expect(pending.filter(i => i.candidateId === "style:satisfaction")).toHaveLength(1);
-  expect(history.filter(i => i.status === "expired").map(i => i.id).sort()).toEqual(["legacyFeature", "legacyMetric"]);
+  expect(history.filter(i => i.status === "expired").map(i => i.id).sort()).toEqual(["legacyFeature", "legacyGuess", "legacyMetric"]);
+  await expect(reopened.feedback.answer("legacyGuess", { options: [], other: "更正" })).rejects.toMatchObject({ status: 409 });
+  await reopened.feedback.more();
+  expect(reopened.feedback.view().pending.some(q => q.candidateId === "guess:1")).toBe(false);
+  const stats = await reopened.feedback.stats();
+  expect(stats).not.toHaveProperty("guesses");
+  expect(stats.bySource).not.toHaveProperty("guess");
 });

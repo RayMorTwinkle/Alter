@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { arr, bool, compile, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
+import { arr, compile, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
 import { calendarTime } from "./calendar-time.ts";
 import type { Capability } from "./capabilities.ts";
 import { defaultTimeZone } from "./clock.ts";
@@ -112,7 +112,7 @@ export function createMemory(dataDir?: string, now = Date.now, timeZone = defaul
         execute: async args => reply(JSON.stringify(store.search(args.query).filter(e => !args.kind || legacy(e).kind === args.kind).map(e => ({ ...legacy(e), ...e })))) }),
       defineTool({ name: "memory_write", description: "op 默认 add 新增；modify 提供 id 和要改的字段；supersede 提供旧 id 和完整新条目，旧条目保留在历史中。" + memoryWriteGuidance,
         parameters: obj({ op: opt(oneOf(["add", "modify", "supersede"])), id: opt(id), title: opt(str({ pattern: "\\S", maxLength: 20 })), type: opt(entryType), body: opt(nonempty),
-          guess: opt(bool()), dueAt: opt(nullable(dueText)), status: opt(oneOf(["active", "done"])) }),
+          dueAt: opt(nullable(dueText)), status: opt(oneOf(["active", "done"])) }),
         execute: async ({ op = "add", id, dueAt, ...fields }, api, ctx) => {
           const source = await messageSource(api, ctx);
           const data = { ...fields, ...(source && { source }), ...(dueAt !== undefined && { dueAt: dueAt === null ? null : deadline(dueAt) }) };

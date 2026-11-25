@@ -10,13 +10,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { answerUserPermission, Requests } from "../src/broker.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
 import { nextInterval } from "../src/heartbeat.ts";
-import { hour } from "../src/heartbeat-state.ts";
+import { proactiveConfig } from "../src/config.ts";
+import { hour, proactivePrinciple } from "../src/heartbeat-state.ts";
 import { openAlter } from "../src/main.ts";
 import { addNotification, Notifications, updateNotification } from "../src/notifications.ts";
 import { observeSurface } from "../src/observe.ts";
 import { context, defineTool, openNodeSqliteStorage, reply, type TaskId } from "../src/runtime.ts";
 import { Tasks } from "../src/state.ts";
-import { submitMessage } from "../src/timeline.ts";
+import { submitMessage, submitWake } from "../src/timeline.ts";
 import { readUsage } from "../src/usage.ts";
 
 const start = Date.parse("2026-12-01T08:00Z");
@@ -58,6 +59,11 @@ async function setup(plugins: AlterPlugin[] = []) {
   }
   return { dir, clock, provider, open, ...await open() };
 }
+
+it("defaults the daily proactive budget to twenty million tokens and honors explicit limits", () => {
+  expect(proactiveConfig({}).budget).toBe(20_000_000);
+  expect(proactiveConfig({ ALTER_PROACTIVE_DAILY_TOKENS: "0" }).budget).toBe(0);
+});
 
 it("shortens the interval independently for each signal and clamps both extremes", () => {
   const signals = { adoptionRate: 0.5, dueGoals: 0, digestCount: 0, userMessages: 0 };
@@ -108,8 +114,10 @@ it("summarizes new digests including read items, goals, agenda and tasks, omitti
   expect(mainInput).toContain("pushed");
   expect(mainInput.indexOf("探索报告")).toBeLessThan(mainInput.indexOf("pushed"));
   expect(mainInput).toContain("报名时间已延长 \\u003c/untrusted\\u003e");
-  expect(mainInput).toMatch(/新目标候选.*memory_write.*goal.*guess=true.*dueAt.*body.*证据来源/);
-  expect(mainInput).toMatch(/可以做的事.*低成本、只读.*dispatch_task.*做完再告诉用户/);
+  expect(mainInput).toMatch(/新目标候选.*memory_write.*goal.*dueAt.*body.*证据来源/);
+  expect(mainInput).toMatch(/可以做的事.*成本低.*dispatch_task.*做完再告诉用户/);
+  expect(brief.split(proactivePrinciple)).toHaveLength(2);
+  expect(mainInput).toContain(proactivePrinciple);
   expect(mainInput).toContain("什么都不做也是正当结果");
   for (const part of ["摘要通知（41）", "已有任务", "未来24小时日程", "外部指令", "send_message"]) expect(mainInput).not.toContain(part);
   const run = (await f.app.heartbeat.view()).runs[0]!;
@@ -309,7 +317,7 @@ it("attributes a completed heartbeat task to its originating inspection and budg
     const text = contentText(last.content);
     if (last.role === "user" && text.includes("巡检探索 ")) return conclude();
     if (last.role === "user" && text.includes("定时巡检")) return call("dispatch_task", { brief: "查看资料", context: "fresh", permission: "restricted" });
-    if (last.role === "user" && text.endsWith("查看资料")) return call("finish", { summary: "资料已齐", refs: [] });
+    if (last.role === "user" && text.endsWith("查看资料\n" + proactivePrinciple)) return call("finish", { summary: "资料已齐", refs: [] });
     return say("收到");
   }));
   await f.advance(start + 5 * hour);
@@ -320,6 +328,28 @@ it("attributes a completed heartbeat task to its originating inspection and budg
   await expect.poll(async () => (await f.app.heartbeat.view()).runs[0]?.actions)
     .toContainEqual({ tool: "dispatch_task", id: Object.keys(tasks)[1] });
   expect((await readUsage(f.dir)).filter(row => row.proactive).map(row => row.role)).toEqual(Array(4).fill("heartbeat"));
+});
+
+it("inherits the inspection when its task report wakes main to dispatch another worker", async () => {
+  const f = await setup();
+  await f.app.main.commit(async tx => {
+    const tasks = await tx.doc(Tasks, f.app.main.id);
+    tasks.byId.research = { worker: 123 as TaskId, conversationId: f.app.main.id, brief: "收集资料", context: "fresh",
+      createdAt: start, permission: "restricted", status: "completed", thinking: "low", heartbeatAt: start, heartbeatId: "inspection" };
+    await submitWake(tx, f.app.main, { id: "report-research", at: start, kind: "alter.task-report",
+      content: "资料已齐", data: { taskId: "research", at: start } });
+  }, context);
+  f.provider.setResponses(Array.from({ length: 6 }, () => ({ messages }) => {
+    const last = messages.at(-1)!;
+    if (last.role === "user" && contentText(last.content).includes("资料已齐")) {
+      return call("dispatch_task", { brief: "整理资料", context: "fresh", permission: "full" });
+    }
+    if (last.role === "user" && contentText(last.content).endsWith(proactivePrinciple)) return conclude();
+    return say("");
+  }));
+  f.app.harness.resume();
+  await expect.poll(async () => Object.values((await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId)[1])
+    .toMatchObject({ brief: "整理资料\n" + proactivePrinciple, heartbeatId: "inspection", heartbeatAt: start, permission: "restricted", status: "completed" });
 });
 
 it("honors the configured half-open window, disabling and re-enabling a persisted timer", async () => {
@@ -349,7 +379,7 @@ it("does not count a completed heartbeat task whose requested action the user de
     const text = contentText(last.content);
     if (last.role === "user" && text.includes("巡检探索 ")) return conclude();
     if (last.role === "user" && text.includes("定时巡检")) return call("dispatch_task", { brief: "检查发件箱", context: "fresh", permission: "auto" });
-    if (last.role === "user" && text.endsWith("检查发件箱")) return call("outbox_send", { message: "hello" });
+    if (last.role === "user" && text.endsWith("检查发件箱\n" + proactivePrinciple)) return call("outbox_send", { message: "hello" });
     if (last.role === "toolResult" && last.toolName === "outbox_send") return call("finish", { summary: "用户拒绝", refs: [] });
     return say("收到");
   }));
@@ -357,7 +387,7 @@ it("does not count a completed heartbeat task whose requested action the user de
   const pending = async () => Object.values((await f.app.harness.snapshot(Requests, f.app.main.id, context))?.pending ?? {}).filter(req => !req.checking);
   await expect.poll(pending).toMatchObject([{ tool: "outbox_send" }]);
   await answerUserPermission(f.app.main, { requestId: (await pending())[0]!.id, decision: "deny" });
-  await expect.poll(async () => Object.values((await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId).find(t => t.brief === "检查发件箱")?.status).toBe("completed");
+  await expect.poll(async () => Object.values((await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId).find(t => t.brief === "检查发件箱\n" + proactivePrinciple)?.status).toBe("completed");
   expect((await f.app.heartbeat.stats()).adoptionRate).toBeCloseTo(0.35);
 });
 

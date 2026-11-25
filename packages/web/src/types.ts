@@ -95,9 +95,9 @@ export type Funnel = {
 
 export type MemoryEntry = {
   id: string; title: string; type: "user" | "preference" | "goal" | "reference"; body: string; source: string;
-  guess: boolean; dueAt?: number; status: "active" | "done" | "pending"; createdAt: number; updatedAt: number; supersededBy?: string;
+  dueAt?: number; status: "active" | "done" | "pending"; createdAt: number; updatedAt: number; supersededBy?: string;
 };
-export type MemoryPatch = Partial<Pick<MemoryEntry, "title" | "type" | "body" | "source" | "guess" | "status">> & {
+export type MemoryPatch = Partial<Pick<MemoryEntry, "title" | "type" | "body" | "source" | "status">> & {
   dueAt?: number | null; text?: string; due?: number | null;
 };
 export type MemoryView = { index: string; entries: MemoryEntry[]; needsConsolidation: boolean };
@@ -302,7 +302,7 @@ export type ExtPluginsEvent = { event: "ext-plugins"; data: ExtPluginView[] };
 
 // 反馈闭环（v1.20）
 export type FeedbackQuestion = { id: string; prompt: string; options: string[]; allowOther: boolean; multi: boolean; why: string };
-export type FeedbackSource = "guess" | "mismatch" | "silent-proactive" | "feature" | "style";
+export type FeedbackSource = "mismatch" | "silent-proactive" | "feature" | "style";
 export type FeedbackEffect = { kind: "memory"; entryId: string } | { kind: "metric"; name: string } |
   { kind: "param"; key: "heartbeatBias" | "triagePreference" | "reportFrequency" | "replyLength" | "permissionNotes";
     mapping: Record<string, string | number>; scope?: string };
@@ -322,7 +322,7 @@ export type FeedbackWeek = FeedbackCounts & { week: string; changes: number; sat
   productFeedback: { feature: string; answer: string[] }[] };
 export type FeedbackStats = FeedbackCounts & {
   bySource: Record<FeedbackSource, FeedbackCounts>; byType: Record<"multi" | "single", FeedbackCounts>;
-  guesses: { answered: number; confirmed: number; confirmationRate: number | null }; changeCount: number;
+  changeCount: number;
   satisfaction: { at: number; value: number }[]; usefulness: { at: number; value: number }[];
   impacts: { changeId: string; metric: string; before: number | null; after: number | null; beforeSamples: number; afterSamples: number }[];
   weekly: FeedbackWeek[];

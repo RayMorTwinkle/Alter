@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mergeCorrection, type FeedbackCall } from "./feedback-model.ts";
+import type { FeedbackCall } from "./feedback-model.ts";
 import { calendarTime } from "./calendar-time.ts";
-import { day, Feedback, FeedbackError, featureQuestion, feedbackEditors, fixedMetric, knownReplyLength, memoryVersion, originalOption, lastInteraction, issueQuestions, seedQuestions, syncGuesses,
+import { day, Feedback, FeedbackError, featureQuestion, feedbackEditors, fixedMetric, isFeedbackSource, knownReplyLength, lastInteraction, issueQuestions, seedQuestions,
   type Answer, type Bank, type Change, type Issued } from "./feedback.ts";
 import { feedbackPaused, interacted, Preferences, type FeedbackSettings } from "./feedback-settings.ts";
 import { openFeedbackTables } from "./feedback-tables.ts";
 import { feedbackStats } from "./feedback-stats.ts";
 import type { createMemory } from "./memory.ts";
-import { MemoryConflict, sentence, type MemoryEntry, type Operation } from "./memory-store.ts";
+import type { Operation } from "./memory-store.ts";
 import { addNotification } from "./notifications.ts";
 import { context, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID as root, type Conversation, type Harness, type Tx } from "./runtime.ts";
 import type { createScheduler } from "./scheduler.ts";
@@ -36,10 +36,6 @@ function parseAnswer(i: Issued, input: Record<string, unknown>): Answer {
     new Set(options).size !== options.length || (!i.multi && options.length > 1) || (!other && !options.length) ||
     (input.other !== undefined && (typeof input.other !== "string" || !i.allowOther || input.other.length > 2000)) ||
     Object.keys(input).some(k => k !== "options" && k !== "other")) throw new FeedbackError(400, "Invalid options or other text");
-  const choice = originalOption(i, options[0]);
-  if (i.effect.kind === "memory" && ((choice === "部分对" && !other) || (other && choice === "对"))) {
-    throw new FeedbackError(400, "请在部分正确时写下修正，或单独填写其他内容");
-  }
   return { options: i.options.filter(o => options.includes(o)), ...(other && { other }) };
 }
 function issue(bank: Bank, id: string) {
@@ -57,31 +53,14 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
   let tables: Awaited<ReturnType<typeof openFeedbackTables>>;
   const time = calendarTime(timeZone);
   const commit = <T>(f: (tx: Tx) => Promise<T>) => main().commit(f, context);
-  function syncEntries(bank: Bank, at: number) {
+  function syncEntries(bank: Bank) {
     const entries = memory.store.entries();
-    syncGuesses(bank, entries.filter(e => e.guess), at);
     if (knownReplyLength(entries)) {
       for (const i of Object.values(bank.issues)) if (i.status === "pending" && i.candidateId === "style:length") i.status = "expired";
     }
   }
-  function matchesGuess(i: Issued, e: MemoryEntry | undefined): e is MemoryEntry {
-    return !!e?.guess && !e.supersededBy && (i.memoryVersion ? i.memoryVersion === memoryVersion(e)
-      : i.prompt === "我推测「" + e.title + "」：" + e.body + "。这准确吗？");
-  }
-  type Correction = Awaited<ReturnType<typeof mergeCorrection>>;
-  function memoryOp(i: Issued, source: string, bank: Bank, correction?: Correction): Operation {
+  function replyLengthMemory(i: Issued, source: string, bank: Bank): Operation {
     const a = i.answer!;
-    if (i.effect.kind === "memory") {
-      const id = i.effect.entryId;
-      const e = memory.store.read(id);
-      if (!matchesGuess(i, e)) {
-        throw new MemoryConflict("猜测已更新，请重新取题");
-      }
-      if (!a.other && originalOption(i, a.options[0]) === "不对") return { op: "delete", id };
-      const patch = correction ?? (a.other ? { body: a.other, title: sentence(a.other, 20), type: e.type } : undefined);
-      return { op: "modify", id, patch: { guess: false, source, ...patch,
-        ...(patch && e.type === "goal" && patch.type !== "goal" && { dueAt: null, status: "active" }) } };
-    }
     if (i.effect.kind !== "param" || i.effect.key !== "replyLength") throw new Error("Expected a reply length effect");
     const text = a.other ?? String(i.effect.mapping[a.options[0]!]);
     const previous = Object.values(bank.changes).reverse().find(c => c.kind === "param" && c.key === "replyLength" && !c.undoneBy && c.memoryChangeId);
@@ -90,7 +69,7 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
     if (existing && !existing.supersededBy) return { op: "modify", id: existing.id, patch: { body: text, source } };
     return { op: "add", entry: { type: "preference", title: "回复长短", body: text, source } };
   }
-  async function finish(tx: Tx, bank: Bank, i: Issued, correction?: Correction) {
+  async function finish(tx: Tx, bank: Bank, i: Issued) {
     const at = i.at!;
     const e = i.effect;
     const a = i.answer!;
@@ -100,7 +79,9 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
       const batch = "feedback:" + i.id;
       let receipt = memory.store.changes("batch=?", batch)[0];
       if (!receipt) {
-        const op = memoryOp(i, "回访于 " + time.describe(at).iso.slice(0, 10), bank, correction);
+        // A legacy answer may already have committed its SQLite change before shutdown.
+        if (e.kind === "memory") { i.status = "expired"; delete i.answer; return; }
+        const op = replyLengthMemory(i, "回访于 " + time.describe(at).iso.slice(0, 10), bank);
         memory.store.apply([op], "write", batch);
         receipt = memory.store.changes("batch=?", batch)[0]!;
       }
@@ -133,40 +114,17 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
     q.lastAnsweredAt = at;
     if (q.source === "style") q.cooldownUntil = Math.max(q.cooldownUntil, at + 28 * day);
   }
-  const completing = new Map<string, Promise<void>>();
-  function complete(id: string) {
-    const active = completing.get(id);
-    if (active) return active;
-    const work = applyAnswer(id).finally(() => completing.delete(id));
-    completing.set(id, work);
-    return work;
-  }
-  async function applyAnswer(id: string) {
-    const pending = (await harness().snapshot(Feedback, root, context))?.issues[id];
-    if (pending?.status !== "applying") return;
-    let correction: Correction;
-    if (pending.effect.kind === "memory" && pending.answer?.other && !memory.store.changes("batch=?", "feedback:" + id).length) {
-      const entry = memory.store.read(pending.effect.entryId);
-      if (matchesGuess(pending, entry)) correction = await mergeCorrection(call, entry, originalOption(pending, pending.answer.options[0]), pending.answer.other);
-    }
-    const error = await commit(async tx => {
+  async function complete(id: string) {
+    await commit(async tx => {
       const bank = await tx.doc(Feedback, root);
       const i = issue(bank, id);
-      if (i.status !== "applying") return;
-      try { await finish(tx, bank, i, correction); }
-      catch (e) {
-        if (!(e instanceof MemoryConflict)) throw e;
-        i.status = "expired";
-        delete i.answer;
-        return e.message;
-      }
+      if (i.status === "applying") await finish(tx, bank, i);
     });
-    if (error) throw new FeedbackError(409, error);
   }
   async function answer(id: string, input: Record<string, unknown>) {
     await commit(async tx => {
       const bank = await tx.doc(Feedback, root);
-      syncEntries(bank, now());
+      syncEntries(bank);
       const i = issue(bank, id);
       const answer = parseAnswer(i, input);
       if (i.status !== "pending") {
@@ -206,7 +164,7 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
   let memoryRevision = 0;
   async function syncMemory(tx: Tx) {
     const bank = await tx.doc(Feedback, root);
-    syncEntries(bank, now());
+    syncEntries(bank);
     const settings = await tx.doc(Preferences, root);
     for (const undo of memory.store.changes("kind='undo' AND id>?", memoryRevision).reverse()) {
       const original = memory.store.changes("undoneBy=?", undo.id)[0];
@@ -273,6 +231,8 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
       const prefs = await tx.doc(Preferences, root);
       seedQuestions(bank, now());
       bank.runtimeId = runtimeId;
+      // Persisted banks can contain candidates from the retired memory-confirmation source.
+      for (const q of Object.values(bank.candidates)) if (!isFeedbackSource(q.source) || q.effect.kind === "memory") q.retired = true;
       const knownLength = prefs.replyLength !== null || knownReplyLength(memory.store.entries());
       const issues = Object.values(bank.issues);
       const metricBatches = new Set(issues.filter(i => fixedMetric(i) && ["applying", "answered", "skipped"].includes(i.status)).map(i => i.batch));
@@ -283,15 +243,12 @@ export function createFeedback(main: () => Conversation, harness: () => Harness,
           metricBatches.add(i.batch);
         }
         const candidate = bank.candidates[i.candidateId];
-        if (i.candidateId === "style:length" && knownLength ||
+        if (!isFeedbackSource(i.source) || i.effect.kind === "memory" || i.candidateId === "style:length" && knownLength ||
           i.source === "feature" && (!candidate?.feature || (!i.optionMap && i.prompt !== candidate.prompt))) i.status = "expired";
       }
-      syncEntries(bank, now());
       return { first: bank.startedAt! + 7 * day, restoring: Object.values(bank.issues).filter(i => i.status === "applying").map(i => i.id) };
     });
-    for (const id of initialized.restoring) {
-      try { await complete(id); } catch (e) { if (!(e instanceof FeedbackError && e.status === 409)) throw e; }
-    }
+    for (const id of initialized.restoring) await complete(id);
     memoryRevision = await commit(syncMemory);
     await scheduler.ensureAdaptive("feedback", "每周回访", feedbackPaused ? undefined : initialized.first);
     tables = await openFeedbackTables(dir, harness());

@@ -2,6 +2,7 @@ import { isInlineTaskReport } from "./wake.ts";
 import { interacted } from "./feedback-settings.ts";
 import { randomUUID } from "node:crypto";
 import { contentText } from "@earendil-works/pi-ai";
+import { Tasks } from "./state.ts";
 import { Heartbeat, heartbeatKind, userActivity } from "./heartbeat-state.ts";
 import { silentHint, silentTaskHint, wakeNotifications } from "./notifications.ts";
 import { recordUserMessage } from "./memory-inbox.ts";
@@ -120,6 +121,20 @@ export async function hasUserInput(tx: Tx, id: ConversationId) {
     if (entry?.kind === inputKind && typeof source === "string" && userSources.has(source)) return true;
   }
   return false;
+}
+
+export async function activeHeartbeat(tx: Tx, id: ConversationId) {
+  const first = (await tx.doc(LiveDoc, id)).run?.first;
+  const entry = first === undefined ? undefined : await tx.entry(first);
+  const data = entryData(entry);
+  if ((entry?.kind !== heartbeatKind && entry?.kind !== "alter.task-report") || !data || await hasUserInput(tx, id)) return;
+  if (entry?.kind === "alter.task-report" && typeof data.taskId === "string") {
+    const task = (await tx.doc(Tasks, id)).byId[data.taskId];
+    if (task?.heartbeatAt !== undefined) return { heartbeatAt: task.heartbeatAt, ...(task.heartbeatId && { heartbeatId: task.heartbeatId }) };
+  }
+  if (entry?.kind === heartbeatKind && typeof data.at === "number") {
+    return { heartbeatAt: data.at, ...(typeof data.id === "string" && { heartbeatId: data.id }) };
+  }
 }
 
 export async function queuedReports(tx: Tx, id: ConversationId, wakeId?: string) {

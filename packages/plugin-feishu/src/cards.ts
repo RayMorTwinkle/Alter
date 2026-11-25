@@ -38,7 +38,7 @@ function feedbackCard(q: IssuedFeedback) {
         { tag: q.multi ? "multi_select_static" : "select_static", name: "options", placeholder: plain(q.multi ? "可多选" : "请选择"),
           options: q.options.map(value => ({ text: plain(value), value })) },
         ...(q.allowOther ? [{ tag: "input", name: "other",
-          placeholder: plain(q.source === "guess" ? "需要修正时，请写下你的实际情况" : "其他（选填）") }] : []),
+          placeholder: plain("其他（选填）") }] : []),
         feedbackButton(q.id, "answer", "提交"),
       ] },
       feedbackButton(q.id, "skip", "跳过"), ...more,

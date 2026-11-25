@@ -110,7 +110,6 @@ function Outcomes({ stats }: { stats: FeedbackStats }) {
   return (
     <div className="stat-tiles fb-tiles">
       <div className="stat-tile"><span>{t.answerRate}</span><b>{percent(stats.answerRate)}</b><small>{t.answered(stats.answered, stats.asked)}</small></div>
-      <div className="stat-tile"><span>{t.guessRate}</span><b>{percent(stats.guesses.confirmationRate)}</b><small>{t.guesses(stats.guesses.confirmed, stats.guesses.answered)}</small></div>
       <div className="stat-tile"><span>{t.changes}</span><b>{stats.changeCount}</b><small>{t.changesSub}</small></div>
       <div className="stat-tile"><span>{t.satisfaction}</span><b>{satisfaction === null ? "—" : t.satisfactionLevels[Math.round(satisfaction) - 1] ?? satisfaction}</b><small>{t.samples(stats.satisfaction.length)}</small></div>
     </div>

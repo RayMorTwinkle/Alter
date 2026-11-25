@@ -22,7 +22,7 @@ function Row({ entry, onUpdate, onDelete }: { entry: MemoryEntry } & Omit<Props,
     else setDraft(null);
   };
   return (
-    <li className={`memory-item ${entry.status} ${entry.guess ? "guess" : ""}`}>
+    <li className={`memory-item ${entry.status}`}>
       <div className="row-main">
         {draft ? (
           <div className="memory-form">
@@ -38,7 +38,6 @@ function Row({ entry, onUpdate, onDelete }: { entry: MemoryEntry } & Omit<Props,
           <button className="memory-title" onClick={() => setOpen(o => !o)} aria-expanded={open}>{entry.title}</button>
           {entry.body !== entry.title && <div className={`memory-body ${open ? "open" : ""}`}>{entry.body}</div>}
           <div className="row-meta">
-            {entry.guess && <span className="chip guess" title={t.guessHint}>{t.guess}</span>}
             {entry.dueAt !== undefined && <span>{t.due(day(entry.dueAt))}</span>}
             {entry.status === "pending" && <span className="chip warn">{t.pending}</span>}
             {entry.status === "done" && <span className="chip">{t.done}</span>}
@@ -48,11 +47,7 @@ function Row({ entry, onUpdate, onDelete }: { entry: MemoryEntry } & Omit<Props,
       </div>
       {!draft && (
         <div className="memory-actions">
-          {entry.guess && (
-            <button className="icon-btn ghost" title={t.confirmGuess} aria-label={t.confirmGuess}
-              onClick={() => void onUpdate(entry.id, { guess: false }).catch(() => {})}><Check /></button>
-          )}
-          {!entry.guess && entry.type === "goal" && entry.status !== "done" && (
+          {entry.type === "goal" && entry.status !== "done" && (
             <button className="icon-btn ghost" title={t.markDone} aria-label={t.markDone}
               onClick={() => void onUpdate(entry.id, { status: "done" }).catch(() => {})}><Check /></button>
           )}
@@ -108,16 +103,14 @@ export function MemoryPanel({ view, onUpdate, onDelete }: Props) {
   const t = all.mem;
   if (!view) return <div className="panel-body"><p className="empty">{all.loading}</p></div>;
   const current = view.entries.filter(e => !e.supersededBy);
-  const guesses = current.filter(e => e.guess);
-  // Guesses and expired goals need a decision, so they lead; finished goals sink.
+  // Expired goals need a decision, so they lead; finished goals sink.
   const rank = (e: MemoryEntry) => (e.status === "pending" ? 0 : e.status === "done" ? 2 : 1);
   return (
     <div className="panel-body">
       {current.length === 0 && <p className="empty">{all.emptyMemory}</p>}
-      {guesses.length > 0 && <p className="memory-hint">{t.guessIntro(guesses.length)}</p>}
       {view.needsConsolidation && <p className="memory-hint">{t.consolidate}</p>}
       {types.map(type => {
-        const group = current.filter(e => e.type === type).sort((a, b) => rank(a) - rank(b) || Number(b.guess) - Number(a.guess) || b.updatedAt - a.updatedAt);
+        const group = current.filter(e => e.type === type).sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
         if (!group.length) return null;
         return (
           <section key={type} className="memory-group">
