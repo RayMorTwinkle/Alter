@@ -56,7 +56,7 @@ it("takes ISO deadlines in the user's time zone and revives a goal whose deadlin
   try {
     const call = (name: string, args: Record<string, unknown>) =>
       memory.tools.find(tool => tool.name === name)!.execute(args as never, {} as never, {} as never);
-    await call("memory_write", { op: "add", type: "goal", title: "操作系统期末", body: "准备操作系统期末考试。", dueAt: "2026-12-15" });
+    await call("memory_write", { type: "goal", title: "操作系统期末", body: "准备操作系统期末考试。", dueAt: "2026-12-15" }); // op defaults to add.
     const goal = memory.list()[0]!;
     // A date means the whole local day: the deadline is midnight at the start of Dec 16 in Shanghai.
     expect(goal.due).toBe(Date.parse("2026-12-15T16:00:00Z"));

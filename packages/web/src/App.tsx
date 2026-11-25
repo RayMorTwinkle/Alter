@@ -134,7 +134,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
     { id: "tasks", label: t.tasks, icon: ListChecks, count: state.tasks.filter(task => task.status === "running").length },
     { id: "approvals", label: t.approvals, icon: SealCheck, count: waiting },
     ...state.agenda ? [{ id: "agenda" as const, label: t.agenda, icon: CalendarBlank }] : [],
-    { id: "memory", label: t.memory, icon: Brain, count: (state.memory?.entries ?? []).filter(item => item.status === "pending" || item.guess).length },
+    { id: "memory", label: t.memory, icon: Brain, count: (state.memory?.entries ?? []).filter(item => item.status === "pending").length },
     { id: "ledger", label: t.ledger, icon: Notebook },
   ];
 
