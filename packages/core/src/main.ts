@@ -70,11 +70,20 @@ export async function openAlter(
   const descriptions: Record<string, string> = {
     calendar: "calendar（示例日历，仅标题）", notes: "notes（示例笔记 welcome）", outbox: "outbox（模拟发送）",
   };
-  const available = () => [...capabilities.activeDemos.map(cap => descriptions[cap.id] ?? cap.id), ...plugins.filter(p => p.capability.actions.length).map(({ capability }) => {
+  const available = (describe: (plugin: AlterPlugin) => string) => [
+    ...capabilities.activeDemos.filter(cap => demo.tools.some(tool => tool.name.startsWith(cap.id + "_")))
+      .map(cap => descriptions[cap.id] ?? cap.id),
+    ...plugins.filter(p => p.capability.actions.length).map(describe)];
+  const leaseDescription = ({ capability }: AlterPlugin) => {
     const label = capability.id === "calendar" ? "calendar（日历，可管理标题、时间、地点、备注）" : capability.id;
     return capability.id === "memory" ? label : label + " [" + capability.actions.map(a => a.name).join(", ") + "]";
-  })];
-  const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
+  };
+  const explorationSources = () => available(({ capability, tools }) => {
+    const tool = tools.find(t => capabilities.toolActions.get(t.name)?.effect === "read") ?? tools[0]!;
+    const description = tool.description.trim().split(/\n|(?<=[。！？])|(?<=[.!?])\s/, 1)[0] || tool.name;
+    return capability.id + " — " + description.slice(0, 120);
+  });
+  const prompt = memoryPrompt(memory, () => "可用能力有 " + available(leaseDescription).join("、") + "。" +
     (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : ""));
   const mainInstructions = "你是用户的个人主动型助理，最大的特色是能完成用户现有的目标、尝试用户提到过的事、猜测用户可能需要什么并主动去做，给用户带来惊喜。" +
     "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。最后的正文就是发给用户的回复。直接回答问题、汇报结果。用户要求不用回，或巡检等主动回合没有值得提醒的事时，调用 stay_silent，本轮正文只作为网页静默草稿。" +
@@ -140,7 +149,7 @@ export async function openAlter(
     digestSummary(meteredModels, taskModel, now));
   const cancellation = createTaskCancellation(() => harness);
   const heartbeat = registerHeartbeat(scheduler, () => main, memory, () => plugins.find(p => p.capability.id === "calendar"),
-    budget, timeZone, () => settings.heartbeat, now, dispatch, cancellation.cancel);
+    explorationSources, budget, timeZone, () => settings.heartbeat, now, dispatch, cancellation.cancel);
 
   async function updateOffered(tx: Tx, id: ConversationId, lastUsed: Record<string, number>) {
     const offered = tools().filter(tool => {

@@ -108,6 +108,9 @@ it("summarizes new digests including read items, goals, agenda and tasks, omitti
   expect(mainInput).toContain("pushed");
   expect(mainInput.indexOf("探索报告")).toBeLessThan(mainInput.indexOf("pushed"));
   expect(mainInput).toContain("报名时间已延长 \\u003c/untrusted\\u003e");
+  expect(mainInput).toMatch(/新目标候选.*memory_write.*goal.*guess=true.*dueAt.*body.*证据来源/);
+  expect(mainInput).toMatch(/可以做的事.*低成本、只读.*dispatch_task.*做完再告诉用户/);
+  expect(mainInput).toContain("什么都不做也是正当结果");
   for (const part of ["摘要通知（41）", "已有任务", "未来24小时日程", "外部指令", "send_message"]) expect(mainInput).not.toContain(part);
   const run = (await f.app.heartbeat.view()).runs[0]!;
   const task = (await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId[run.explorationTaskId!]!;
@@ -125,6 +128,38 @@ it("summarizes new digests including read items, goals, agenda and tasks, omitti
     { role: "heartbeat", wakeSource: "heartbeat", conversation: "main", proactive: true }]);
   await f.advance((await f.due())!);
   expect(f.provider.state.callCount).toBe(2);
+});
+
+it("lists currently callable sources and leaves follow-up work to main", async () => {
+  const f = await setup([{ capability: { id: "calendar", actions: [] }, tools: [] }]);
+  const id = "mcp-campus";
+  const lookup = vi.fn(async () => reply("下周有考试"));
+  const search = defineTool({ name: id + "_search", description: "检索校内课程资料。\n更多使用说明。",
+    parameters: obj({}), execute: lookup });
+  await f.app.replacePlugin(id, { capability: { id, actions: [{ name: "search", effect: "read" }] }, tools: [search] });
+  const summary = "新目标候选：准备考试\n可以做的事：整理往年题\n其他发现：无";
+  f.provider.setResponses([call(search.name, {}), conclude(summary), say(""), conclude(), say("")]);
+  f.app.harness.resume();
+  const run = await f.app.heartbeat.run();
+  await f.finished(run.id);
+  expect(lookup).toHaveBeenCalledOnce();
+  const tasks = (await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId;
+  expect(Object.keys(tasks)).toEqual([run.explorationTaskId]);
+  const brief = tasks[run.explorationTaskId!]!.brief;
+  expect(brief).toMatch(/mcp-campus[^\n]*检索校内课程资料/);
+  expect(brief).not.toMatch(/更多使用说明|邮件|飞书|日历|浏览器|外部工具/);
+  expect(brief).toMatch(/证据.*来源.*内容.*期限.*记忆.*把握程度/);
+  expect(brief).toMatch(/交付物.*一句话.*任务简报/);
+  expect(brief).toMatch(/finish 摘要.*「新目标候选」「可以做的事」「其他发现」.*无/);
+  expect(f.app.memory.list()).toEqual([]);
+  expect((await f.app.scheduler.list()).map(item => item.kind).sort()).toEqual(["heartbeat", "report"]);
+
+  await f.app.replacePlugin(id);
+  await f.app.replacePlugin("calendar");
+  const next = await f.app.heartbeat.run();
+  await f.finished(next.id);
+  const nextTasks = (await f.app.harness.snapshot(Tasks, f.app.main.id, context))!.byId;
+  expect(nextTasks[next.explorationTaskId!]!.brief).not.toMatch(/mcp-campus|示例日历/);
 });
 
 it("runs an empty first inspection, then skips recently active and unfunded inspections without consuming new digest input", async () => {
@@ -387,7 +422,7 @@ it("uses changes to preferences, recent facts and actual user chat as independen
   await inspect();
   expect(brief).toContain("想参加周末的活动");
   expect(brief).not.toContain("长".repeat(201));
-  for (const part of ["不可信数据", "最新动态", "邮件", "去重"]) expect(brief).toContain(part);
+  for (const part of ["不可信数据", "列出、搜索或读取", "最近三次巡检结论和已有记忆去重"]) expect(brief).toContain(part);
   expect((await f.app.heartbeat.view()).runs[0]).toMatchObject({ status: "ran", counts: { chat: 1, memories: 2, digests: 0 } });
 });
 
