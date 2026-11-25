@@ -9,7 +9,8 @@ import type { Harness, HarnessId } from "@alter/node-protocol";
 const crossSpawn: typeof spawn = createRequire(import.meta.url)("cross-spawn");
 export function* commandCandidates(name: string, env = process.env, platform = process.platform) {
   const win = platform === "win32", api = win ? path.win32 : path.posix;
-  const extensions = win && !api.extname(name) ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  const extensions = win && !api.extname(name) ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";")
+    .filter(ext => /^\.(?:com|exe|bat|cmd)$/i.test(ext)) : [""];
   for (const entry of (env.PATH || env.Path || "").split(api.delimiter)) {
     const dir = win ? entry.replace(/^"(.*)"$/, "$1") : entry;
     if (!api.isAbsolute(dir)) continue;

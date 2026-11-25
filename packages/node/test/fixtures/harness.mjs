@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const [provider, ...args] = process.argv.slice(2);
+if (args[0] === "--echo-argv") { console.log(JSON.stringify(args.slice(1))); process.exit(0); }
 if (args.includes("--version")) { console.log(provider + " 1.2.3"); process.exit(0); }
 const trace = m => appendFileSync("trace.jsonl", JSON.stringify(m) + "\n");
 trace({ args });
@@ -42,7 +43,9 @@ async function execute() {
   }
   if (brief === "hold") {
     const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 10000)"], { stdio: "ignore" });
-    writeFileSync("pids.json", JSON.stringify([process.pid, grandchild.pid]));
+    const pids = [process.pid, grandchild.pid];
+    if (process.platform === "win32") pids.unshift(process.ppid); // The .cmd wrapper.
+    writeFileSync("pids.json", JSON.stringify(pids));
     assistant("等待"); return;
   }
   if (brief === "ask" || brief === "ask-edit") {
