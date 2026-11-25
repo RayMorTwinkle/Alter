@@ -14,14 +14,14 @@ export function workspace() {
   const root = path.join(base, "工作 目录"), bin = path.join(base, "代理 bin"), dir = path.join(base, "临时 config");
   mkdirSync(root); mkdirSync(bin);
   const harnesses: Detected[] = [];
-  for (const name of ["claude", "codex", "opencode"] as const) {
+  for (const name of ["claude", "codex", "opencode", "dsh"] as const) {
     const win = process.platform === "win32";
     const executable = path.join(bin, name + (win ? ".cmd" : ""));
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
     writeFileSync(executable, win ? '@echo off\r\n"' + process.execPath + '" "' + script + '" ' + name + ' %*\r\n'
       : "#!/bin/sh\nexec " + quote(process.execPath) + " " + quote(script) + " " + name + ' "$@"\n');
     chmodSync(executable, 0o700);
-    harnesses.push({ id: name === "claude" ? "claude-code" : name, executable, available: name !== "opencode" });
+    harnesses.push({ id: name === "claude" ? "claude-code" : name, executable, available: true, sessions: true });
   }
   return { base, root, bin, dir, harnesses };
 }

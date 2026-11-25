@@ -1,14 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import { afterEach, expect, test } from "vitest";
 import type { ApprovalRequest, HarnessId, Hello, HubMessage, NodeMessage, TaskEnd, TaskStart } from "@alter/node-protocol";
 import { runNode } from "../src/connection.ts";
-import { configDir, pair } from "../src/config.ts";
+import { configDir, directory, pair, saveConfig } from "../src/config.ts";
 import { workspace, until } from "./helpers.ts";
 import { killTree } from "../src/spawn.ts";
 
@@ -21,7 +21,7 @@ function processExited(pid: number) {
     throw err;
   }
 }
-async function setup(timeoutMs?: number, retryMs = 30) {
+async function setup(timeoutMs?: number, retryMs = 30, listTimeoutMs?: number) {
   const f = workspace();
   const hub = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(hub, "listening");
@@ -38,7 +38,7 @@ async function setup(timeoutMs?: number, retryMs = 30) {
       if (m.type === "hello") send({ type: "welcome", protocol: 1, userId: "user", ackSeq });
     });
   });
-  const node = runNode(f.dir, f.harnesses, { retryMs, timeoutMs });
+  const node = runNode(f.dir, f.harnesses, { retryMs, timeoutMs, listTimeoutMs });
   cleanup.push(async () => {
     await node.stop();
     for (const s of hub.clients) s.terminate();
@@ -62,6 +62,7 @@ test("hello, ping, roots and unavailable harness", async () => {
   f.send({ type: "ping", at: 123 }); await until(() => f.messages.find(m => m.type === "pong" && m.at === 123));
   f.start("escape", "run", "codex", { cwd: f.base });
   expect(await f.end("escape")).toMatchObject({ status: "failed", reportSource: "failure", report: { summary: expect.stringContaining("roots") } });
+  f.harnesses.find(h => h.id === "opencode")!.available = false;
   f.start("missing", "run", "opencode");
   expect((await f.end("missing")).report.summary).toContain("不可用");
   expect(existsSync(path.join(f.root, "trace.jsonl"))).toBe(false);
@@ -126,7 +127,7 @@ test("Claude uses streaming input for a follow-up and checks error flags on succ
   expect(await f.end("bad")).toMatchObject({ status: "failed", reportSource: "failure", report: { summary: expect.stringContaining("HTTP 429") } });
 });
 
-test.each(["codex", "claude-code"] as const)("stop kills the %s process tree before the report", async harness => {
+test.each(["codex", "claude-code", "dsh", "opencode"] as const)("stop kills the %s process tree before the report", async harness => {
   const f = await setup();
   f.start("long", "hold", harness);
   await until(() => f.messages.find(m => m.type === "task.event" && m.text === "等待"));
@@ -136,7 +137,7 @@ test.each(["codex", "claude-code"] as const)("stop kills the %s process tree bef
   f.send({ type: "task.stop", taskId: "long", reason: "手动停止" });
   expect(await f.end("long")).toMatchObject({ status: "interrupted", reportSource: "failure", report: { summary: "手动停止\n等待" } });
   if (process.platform !== "win32") expect(readFileSync(path.join(f.root, "trace.jsonl"), "utf8"))
-    .toContain(harness === "codex" ? '"method":"turn/interrupt"' : '"subtype":"interrupt"');
+    .toContain(harness === "codex" ? '"method":"turn/interrupt"' : harness === "claude-code" ? '"subtype":"interrupt"' : '"method":"session/cancel"');
   await until(() => pids.every(processExited) || undefined);
 });
 
@@ -216,7 +217,7 @@ test("CLI run advertises detected shims, reports live status and drains on shutd
   try {
     await until(() => wire.find(m => m.type === "task.event" && m.text === "等待"));
     expect(wire[0]).toMatchObject({ type: "hello", harnesses: [{ available: true, version: "1.2.3" },
-      { available: true, version: "1.2.3" }, { available: false, version: "1.2.3" }] });
+      { available: true, version: "1.2.3" }, { available: true, sessions: true, version: "1.2.3" }, { available: true, sessions: true, version: "1.2.3" }] });
     expect(JSON.parse(execFileSync(process.execPath, [cli, "status"], { env, encoding: "utf8" })).state).toBe("在线");
     // Windows child.kill is a hard termination. A hub rejection exercises the CLI shutdown path.
     if (process.platform === "win32") {
@@ -232,4 +233,102 @@ test("CLI run advertises detected shims, reports live status and drains on shutd
     for (const s of hub.clients) s.terminate();
     await new Promise<void>(resolve => hub.close(() => resolve())); rmSync(f.base, { recursive: true, force: true });
   }
+});
+
+test.each(["dsh", "opencode"] as const)("%s maps ACP updates, reports and stop reasons", async harness => {
+  const f = await setup();
+  const model = harness === "dsh" ? '["zen","deepseek-v4-flash"]' : "zen/deepseek-v4-flash";
+  saveConfig(f.dir, { ...f.config, models: { [harness]: model } });
+  f.reconnect({});
+  const hello = await until(() => f.messages.filter(m => m.type === "hello")[1]);
+  expect(hello.harnesses.find(h => h.id === harness)).toMatchObject({ sessions: true, model });
+  f.start("text", "流式回复", harness, { thinking: "medium" });
+  expect(await f.end("text")).toMatchObject({ nativeSessionId: "new-acp", status: "completed", reportSource: "last_message", report: { summary: "正文 流式回复" } });
+  expect(f.messages).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "thinking", text: "思考" }), expect.objectContaining({ kind: "tool_call", tool: "读文件", args: { path: "a" } }),
+    expect.objectContaining({ kind: "tool_result", tool: "读文件", text: "文件内容" }),
+  ]));
+  const trace = readFileSync(path.join(f.root, "trace.jsonl"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+  expect(trace.filter(m => m.method === "session/set_config_option").map(m => m.params)).toEqual([
+    { sessionId: "new-acp", configId: "model", value: model }, { sessionId: "new-acp", configId: "reasoning_effort", value: "low" },
+  ]);
+  for (const brief of ["finish-ok", "finish-crash", "refusal", "max_tokens", "cancelled"]) {
+    f.start(brief, brief, harness);
+    const e = await f.end(brief);
+    if (brief === "finish-ok") expect(e).toMatchObject({ status: "completed", reportSource: "finish", report: { summary: "结构化报告", refs: [{ kind: "file", ref: "a.txt" }] } });
+    else expect(e).toMatchObject({ status: brief === "cancelled" ? "interrupted" : "failed", reportSource: "failure",
+      report: { summary: expect.stringContaining("正文 " + brief) } });
+  }
+}, 30000);
+
+test("ACP resume, load replay, follow-up and occupied sessions", async () => {
+  const f = await setup();
+  saveConfig(f.dir, { ...f.config, models: { dsh: "仅新会话" } });
+  for (const method of ["resume", "load"]) {
+    if (method === "load") writeFileSync(path.join(f.root, "load-only"), "");
+    f.start(method, "finish-ask", "dsh", { resume: "saved" });
+    const req = await f.approval(method);
+    f.send({ type: "task.message", taskId: method, text: "续写" });
+    f.send({ type: "approval.answer", taskId: method, requestId: req.requestId, decision: "always" });
+    expect(await f.end(method)).toMatchObject({ status: "completed", nativeSessionId: "saved", reportSource: "last_message", report: { summary: "正文 续写" } });
+    expect(f.messages.filter(m => m.type === "task.end" && m.taskId === method)).toHaveLength(1);
+    expect(readFileSync(path.join(f.root, "trace.jsonl"), "utf8")).toContain('"method":"session/' + method + '"');
+    expect(f.messages.some(m => m.type === "task.event" && m.text === "旧会话正文")).toBe(false);
+  }
+  f.start("busy", "run", "dsh", { resume: "busy" });
+  expect(await f.end("busy")).toMatchObject({ status: "failed", reportSource: "failure", report: { summary: expect.stringContaining("该会话正在原界面打开，关掉后再试") } });
+  expect(readFileSync(path.join(f.root, "trace.jsonl"), "utf8")).not.toContain("session/set_config_option");
+}, 30000);
+
+test.each([
+  ["restricted", "read", "read", "deny", "no"],
+  ["restricted", "search", "read", "once", "yes"],
+  ["auto", "read", null, null, "yes"], ["auto", "edit", null, null, "yes"], ["auto", "fetch", null, null, "yes"],
+  ["auto", "move", "write", "once", "yes"], ["auto", "delete", "irreversible", "deny", "no"],
+  ["auto", "execute", "irreversible", "always", "yes"],
+  ["full", "execute", null, null, "yes"], ["full", "missing", null, null, "cancelled"],
+] as const)("ACP permissions %s / %s", async (permission, kind, effect, decision, outcome) => {
+  const f = await setup();
+  f.start("ask", "ask-" + kind, "opencode", { permission });
+  if (decision) {
+    const req = await f.approval("ask");
+    expect(req).toMatchObject({ effect, tool: "原生工具", args: { command: "test" } });
+    f.send({ type: "approval.answer", taskId: "ask", requestId: req.requestId, decision });
+  }
+  expect(await f.end("ask")).toMatchObject({ status: "completed", report: { summary: outcome } });
+  expect(f.messages.filter(m => m.type === "approval.request")).toHaveLength(decision ? 1 : 0);
+});
+
+test("sessions.list paginates, filters by real cwd and roots before sorting and limiting", async () => {
+  const f = await setup();
+  const root = directory(f.root), sub = path.join(root, "子目录"), escape = path.join(root, "link");
+  mkdirSync(sub); symlinkSync(f.bin, escape, process.platform === "win32" ? "junction" : "dir");
+  const row = (id: number, cwd = root) => ({ sessionId: String(id), cwd, updatedAt: new Date(1740000000000 + id).toISOString(), title: "会话 " + id });
+  const second = path.join(f.base, "第二个 root");
+  mkdirSync(second);
+  saveConfig(f.dir, { ...f.config, roots: [root, directory(second)] });
+  const pages = [[row(21, second), row(1000, escape), row(999, f.base), row(0)], [row(23, sub), ...Array.from({ length: 22 }, (_, i) => row(i + 1)).filter(r => r.sessionId !== "21")]];
+  writeFileSync(path.join(root, "pages.json"), JSON.stringify(pages));
+  async function list(requestId: string, harness: HarnessId, cwd?: string, limit?: number) {
+    f.send({ type: "sessions.list", requestId, harness, cwd, limit });
+    return until(() => f.messages.filter(m => m.type === "sessions.result").find(m => m.requestId === requestId));
+  }
+  const all = await list("all", "opencode");
+  expect(all.error).toBeUndefined();
+  expect(all.sessions.map(s => s.sessionId)).toEqual(Array.from({ length: 20 }, (_, i) => String(23 - i)));
+  expect(all.sessions.find(s => s.sessionId === "21")?.cwd).toBe(directory(second));
+  expect(all.sessions[0]).toEqual({ sessionId: "23", cwd: sub, updatedAt: 1740000000023, title: "会话 23" });
+  expect((await list("exact", "opencode", root, 1)).sessions.map(s => s.sessionId)).toEqual(["22"]);
+  expect(await list("outside", "opencode", escape)).toMatchObject({ sessions: [], error: expect.stringContaining("roots") });
+  expect(await list("threads", "codex", root)).toMatchObject({ sessions: [{ sessionId: "codex-1", cwd: root, title: "保存的线程", updatedAt: 1790000000000 }] });
+  expect(readFileSync(path.join(root, "trace.jsonl"), "utf8")).not.toContain("session/new");
+});
+
+test("a timed out sessions.list replies with an error and releases its process", async () => {
+  const f = await setup(undefined, 30, process.platform === "win32" ? 4000 : 1400);
+  writeFileSync(path.join(f.root, "hang"), "");
+  f.send({ type: "sessions.list", requestId: "slow", harness: "opencode" });
+  const pid = await until(() => existsSync(path.join(f.root, "listing.pid")) ? Number(readFileSync(path.join(f.root, "listing.pid"), "utf8")) : undefined);
+  expect(await until(() => f.messages.find(m => m.type === "sessions.result"))).toMatchObject({ requestId: "slow", sessions: [], error: "列出会话超时" });
+  await until(() => processExited(pid) || undefined);
 });

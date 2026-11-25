@@ -7,7 +7,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import {
   AllowedCapabilities, answerUserPermission, approvalStats, parseApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  validModelOverrides, FeedbackError, MemoryConflict, MemoryInputError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
+  validModelOverrides, validHarness, FeedbackError, MemoryConflict, MemoryInputError, NodeSessionsError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
 } from "@alter/core";
 import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
 import { templates, SourceError } from "@alter/plugin-sources";
@@ -194,6 +194,11 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       res.setHeader("Set-Cookie", `${cookieName}=; Max-Age=0; ${cookieOptions}`);
     } else if (method === "GET" && path === "/api/nodes") {
       return json(res, 200, await app.nodes.all());
+    } else if (method === "GET" && /^\/api\/nodes\/[^/]+\/sessions$/.test(path)) {
+      const query = new URL(req.url!, "http://localhost").searchParams;
+      const harness = query.get("harness");
+      if (!validHarness.check(harness)) throw new HttpError(400, "Invalid harness");
+      return json(res, 200, await app.nodes.sessions(path.split("/")[3]!, harness, query.get("cwd") ?? undefined));
     } else if (method === "POST" && path === "/api/nodes") {
       const { name } = await body(req);
       if (typeof name !== "string" || !name.trim() || name.length > 128 || /[\x00-\x1f\x7f]/.test(name)) throw new HttpError(400, "Invalid node name");
@@ -452,7 +457,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     shouldUpgradeCallback: req => server.listenerCount("upgrade") > 0 && (!gatewayMode || trustedGateway(req)),
   }, (req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof FeedbackError || cause instanceof SourceError || cause instanceof PluginError ? new HttpError(cause.status, cause.message)
+      const error = cause instanceof FeedbackError || cause instanceof SourceError || cause instanceof PluginError || cause instanceof NodeSessionsError ? new HttpError(cause.status, cause.message)
         : cause instanceof MemoryConflict ? new HttpError(409, cause.message)
         : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);

@@ -115,7 +115,7 @@ export const codex: HarnessAdapter = {
       if (stopping) return;
       write({ method: "initialized" });
       const result = await rpc(task.resume ? "thread/resume" : "thread/start",
-        { cwd: task.cwd, approvalPolicy: policy, sandbox, ...(task.resume && { threadId: task.resume }) });
+        { cwd: task.cwd, model: task.model, approvalPolicy: policy, sandbox, ...(task.resume && { threadId: task.resume }) });
       if (stopping) return;
       if (!result.thread?.id) throw new Error("缺少 thread.id");
       thread = result.thread.id; sink.session(thread);

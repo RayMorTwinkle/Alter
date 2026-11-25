@@ -624,3 +624,8 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .node-command code { flex: 1; min-width: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
 .node-command .text-btn { flex: none; font-size: 12px; padding: 2px 6px; }
 .preset-options input { flex: 1; min-width: 0; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--fill); background: var(--surface); color: var(--ink); }
+.node-sessions > summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+.node-sessions ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.node-sessions li { display: flex; gap: 8px; font-size: 13px; min-width: 0; }
+.node-sessions li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-sessions li time { flex: none; color: var(--muted); font-size: 12px; }

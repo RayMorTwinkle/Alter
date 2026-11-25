@@ -258,7 +258,7 @@ const hant = {
   },
   nodes: {
     title: "我的電腦",
-    hint: "在你自己的電腦上運行 Alter 節點後，Alter 可以把寫代碼、改文件的任務派給這台電腦上的 Claude Code 或 Codex。電腦關機時任務會排隊，開機後自動開始，做完向你匯報。",
+    hint: "在你自己的電腦上運行 Alter 節點後，Alter 可以把寫代碼、改文件的任務派給這台電腦上的 Claude Code、Codex、DeepSeek Harness 或 opencode，也能接著你在它們裡面已有的對話做。電腦關機時任務會排隊，開機後自動開始，做完向你匯報。",
     empty: "還沒有添加電腦。", add: "添加電腦", name: "電腦名稱", namePlaceholder: "電腦名稱，例如：宿舍台式", create: "生成配對命令",
     online: "在線", offline: "離線", lastSeen: "最近在線", never: "從未連接",
     roots: "可工作的目錄", noRoots: "未授權目錄，任務會被拒絕", harnesses: "可用代理", none: "未探測到",
@@ -266,7 +266,8 @@ const hant = {
     onceWarning: "配對令牌只顯示這一次。關閉後無法再查看，丟了就移除後重新添加。",
     steps: { install: "1. 安裝節點（需要 Git、Node.js 24 和 pnpm；之後的命令都在 Alter 目錄裡運行）", pair: "2. 配對", root: "3. 授權目錄（把路徑換成你的項目目錄）", run: "4. 運行" },
     platforms: { windows: "Windows", unix: "macOS / Linux" }, copy: "複製", copied: "已複製", done: "完成",
-    harnessNames: { "claude-code": "Claude Code", codex: "Codex", opencode: "opencode" } as Record<string, string>,
+    harnessNames: { "claude-code": "Claude Code", codex: "Codex", opencode: "opencode", dsh: "DeepSeek Harness" } as Record<string, string>,
+    sessions: "最近會話", sessionsHint: "對 Alter 說「接著我在 opencode 裡那個對話做」，它就會在原會話裡繼續，回到原界面能看到。", loadingSessions: "讀取中…", noSessions: "沒有會話。", untitled: "（無標題）", model: "默認模型",
   },
   debug: {
     title: "調試", views: { traces: "模型調用", schedule: "調度" },
@@ -689,7 +690,7 @@ const hans: Strings = {
   },
   nodes: {
     title: "我的电脑",
-    hint: "在你自己的电脑上运行 Alter 节点后，Alter 可以把写代码、改文件的任务派给这台电脑上的 Claude Code 或 Codex。电脑关机时任务会排队，开机后自动开始，做完向你汇报。",
+    hint: "在你自己的电脑上运行 Alter 节点后，Alter 可以把写代码、改文件的任务派给这台电脑上的 Claude Code、Codex、DeepSeek Harness 或 opencode，也能接着你在它们里面已有的对话做。电脑关机时任务会排队，开机后自动开始，做完向你汇报。",
     empty: "还没有添加电脑。", add: "添加电脑", name: "电脑名称", namePlaceholder: "电脑名称，例如：宿舍台式", create: "生成配对命令",
     online: "在线", offline: "离线", lastSeen: "最近在线", never: "从未连接",
     roots: "可工作的目录", noRoots: "未授权目录，任务会被拒绝", harnesses: "可用代理", none: "未探测到",
@@ -697,7 +698,8 @@ const hans: Strings = {
     onceWarning: "配对令牌只显示这一次。关闭后无法再查看，丢了就移除后重新添加。",
     steps: { install: "1. 安装节点（需要 Git、Node.js 24 和 pnpm；之后的命令都在 Alter 目录里运行）", pair: "2. 配对", root: "3. 授权目录（把路径换成你的项目目录）", run: "4. 运行" },
     platforms: { windows: "Windows", unix: "macOS / Linux" }, copy: "复制", copied: "已复制", done: "完成",
-    harnessNames: { "claude-code": "Claude Code", codex: "Codex", opencode: "opencode" } as Record<string, string>,
+    harnessNames: { "claude-code": "Claude Code", codex: "Codex", opencode: "opencode", dsh: "DeepSeek Harness" } as Record<string, string>,
+    sessions: "最近会话", sessionsHint: "对 Alter 说“接着我在 opencode 里那个对话做”，它就会在原会话里继续，回到原界面能看到。", loadingSessions: "读取中…", noSessions: "没有会话。", untitled: "（无标题）", model: "默认模型",
   },
   debug: {
     title: "调试", views: { traces: "模型调用", schedule: "调度" },

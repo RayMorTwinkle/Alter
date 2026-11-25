@@ -1,8 +1,9 @@
-// Mirrors docs/architecture/web-api.md (v1.28).
+// Mirrors docs/architecture/web-api.md (v1.30).
 
 import type { Hello, HarnessId, TaskEnd } from "../../node-protocol/src/index.ts";
 
-export type NodeRunner = { node: string; harness: HarnessId };
+export type { HarnessId, NativeSession } from "../../node-protocol/src/index.ts";
+export type NodeRunner = { node: string; harness: HarnessId; session?: string };
 export type Node = Pick<Hello, "name" | "roots" | "harnesses"> & {
   id: string; platform: Hello["platform"] | null; online: boolean; createdAt: number; lastSeen: number | null;
 };
