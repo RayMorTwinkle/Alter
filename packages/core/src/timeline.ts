@@ -253,8 +253,10 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
       if (!call || call.item.tool !== msg.toolName) continue;
       turn.calls?.delete(msg.toolCallId);
       const result = !msg.isError && msg.toolName === "dispatch_task" ? contentText(msg.content) : "";
-      const taskId = /^(task-\d+)(?: 已排队，电脑上线后开始)?$/.exec(result)?.[1];
-      items.push({ ...call.item, isError: msg.isError, ...(taskId && { taskId }), ...(taskId && result.endsWith("已排队，电脑上线后开始") && { status: "queued" }) });
+      // Older receipts are a bare id; newer ones add the queue state and an auto-report note.
+      const receipt = /^(task-\d+)(?:$| (已排队，电脑上线后开始|已开始)。)/.exec(result);
+      const taskId = receipt?.[1];
+      items.push({ ...call.item, isError: msg.isError, ...(taskId && { taskId }), ...(receipt?.[2]?.startsWith("已排队") && { status: "queued" }) });
       if (!msg.isError && call.message !== undefined) {
         items.push({ id: `${call.item.id}-message`, kind: "message", text: call.message, at: Math.max(at, call.item.at) });
       }

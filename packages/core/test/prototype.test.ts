@@ -142,7 +142,7 @@ it.each([false, true])("answers once for a fast report, including after a failed
     if (text === "create events") return finish(result);
     if (last.role === "toolResult" && last.toolName === "dispatch_task") {
       await reported.promise;
-      return call("task_status", { taskId: text });
+      return call("task_status", { taskId: text.split(" ")[0]! });
     }
     if (!text.includes(result)) return say("missing result");
     if (failOnce && !failed) { failed = true; throw new Error("offline model unavailable"); }
@@ -173,6 +173,28 @@ it("starts a report turn when the worker finishes after the user turn", async ()
   release.resolve();
   await expect.poll(async () => (await readTranscript(app.main)).flatMap(m => m.kind === "assistant" ? [m.text] : []))
     .toEqual(["working", "verified later"]);
+});
+
+it("tells main not to poll a task it started this turn, but answers status in a later turn", async () => {
+  const release = gate();
+  let polled: { text: string; error?: boolean } | undefined;
+  let later = "";
+  const app = await open(async (text, last) => {
+    if (text === "delegate") return dispatch("slow work");
+    if (text === "slow work") { await release.promise; return finish("done later"); }
+    if (last.role === "toolResult" && last.toolName === "dispatch_task") return call("task_status", { taskId: text.split(" ")[0]! });
+    if (last.role === "toolResult" && last.toolName === "task_status" && !polled) polled = { text, error: last.isError };
+    else if (last.role === "toolResult" && last.toolName === "task_status") later = text;
+    if (text.startsWith("check task-")) return call("task_status", { taskId: text.slice(6) });
+    return say("ok");
+  });
+  await input(app, "delegate");
+  expect(polled).toMatchObject({ error: true, text: expect.stringContaining("自动送回") });
+  const [taskId] = Object.keys((await app.harness.snapshot(Tasks, app.main.id, context))!.byId);
+  await input(app, `check ${taskId}`);
+  expect(JSON.parse(later)).toMatchObject({ taskId, status: "running" });
+  release.resolve();
+  await expect.poll(async () => (await ledger(app)).length).toBe(1);
 });
 
 it("delivers concurrent reports in full to one main request and settles them with the user input", async () => {
