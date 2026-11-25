@@ -259,6 +259,8 @@ function lookup<T>(byId: Record<string, T>, id: string) {
   return Object.hasOwn(byId, id) ? byId[id] : undefined;
 }
 
+const autoReport = "。结束后报告会自动送回并唤醒你，本轮直接回复用户即可，不要轮询 task_status。";
+
 export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, nodes: NodeHub) {
   return defineTool({
     name: "dispatch_task", description: "Start a task with context and permission. For a node runner, include the necessary context in brief and optionally specify cwd. Set runner.session to a sessionId from node_sessions to resume the user's conversation. Use continue_from to continue an ended Alter task.",
@@ -271,7 +273,7 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, node
     async execute({ brief, context, permission, continue_from, thinking, runner, cwd }, api, ctx) {
       const taskId = `task-${api.taskId}`;
       const tasks = (await api.snapshot(Tasks, api.conversationId, ctx))!.byId;
-      const receipt = (queued: boolean) => reply(queued ? taskId + " 已排队，电脑上线后开始" : taskId);
+      const receipt = (queued: boolean) => reply(taskId + (queued ? " 已排队，电脑上线后开始" : " 已开始") + autoReport);
       if (tasks[taskId]) return receipt(tasks[taskId].status === "queued");
       let target: NodeRunner | undefined;
       if (continue_from) {
@@ -362,6 +364,11 @@ export const taskStatus = defineTool({
       id: req.id, audience: req.audience, tool: req.tool, arguments: clip(req.argumentsJson, 200),
       remainingMs: Math.max(0, req.expiresAt - api.now()),
     }));
+    // Models tend to poll a task they just started; the report wakes main anyway.
+    if ((task.status === "running" || task.status === "queued") && !requests.length && task.wakeId !== undefined &&
+      (await activeWake(tx, api.conversationId, api.now()))?.wakeId === task.wakeId) {
+      return reply(`${taskId} 是本轮刚派出的任务，仍在${task.status === "queued" ? "排队" : "运行"}${autoReport}`, true);
+    }
     const activity = await taskActivity(tx, taskId, task);
     const failure = task.failure && clip(task.failure, 200);
     return reply(JSON.stringify({ ...summary(taskId, task), ...activity, failure, pending: requests }));

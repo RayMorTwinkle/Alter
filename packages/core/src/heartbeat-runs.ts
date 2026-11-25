@@ -65,6 +65,7 @@ export async function rateRun(tx: Tx, id: string, feedback: NonNullable<Heartbea
 function actionId(tool: string, result: string) {
   if (!["dispatch_task", "watch", "watch_create", "send_message", "schedule_create", "schedule_set", "task_stop"].includes(tool)) return;
   if (/^[\w.-]+$/.test(result)) return result;
+  if (tool === "dispatch_task") { const id = /^(task-\d+) /.exec(result)?.[1]; if (id) return id; }
   if (result.startsWith("{")) {
     try {
       const record = JSON.parse(result);
