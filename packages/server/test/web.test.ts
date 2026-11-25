@@ -280,7 +280,17 @@ it("rebuilds the 200-item window, lease state and legacy task metadata from SQLi
   expect(before.timeline[0]).toMatchObject({ text: "5", source: "web" });
   await web.close();
   const reopened = await web.reopen();
-  expect((await fetch(reopened.base + "/api/state", { headers: { cookie: web.sessionCookie() } })).status).toBe(200); // Sessions persist across restarts.
+  const token = web.sessionCookie().split("=")[1]!;
+  const port = new URL(reopened.base).port;
+  // Sessions persist across restarts; the cookie name carries the port so instances on one host stay apart.
+  expect(web.sessionCookie().startsWith(`alter_session_${new URL(web.base).port}=`)).toBe(true);
+  expect((await fetch(reopened.base + "/api/state", { headers: { cookie: `alter_session_${port}=${token}` } })).status).toBe(200);
+  expect((await fetch(reopened.base + "/api/state", { headers: { cookie: `alter_session_1=${token}` } })).status).toBe(401);
+  const upgraded = await fetch(reopened.base + "/api/state", { headers: { cookie: `alter_session=${token}` } });
+  expect(upgraded.status).toBe(200);
+  expect(upgraded.headers.getSetCookie()).toEqual([expect.stringMatching(new RegExp(`^alter_session_${port}=${token}; Max-Age=31536000`)),
+    expect.stringMatching(/^alter_session=; Max-Age=0/)]);
+  expect((await fetch(reopened.base + "/api/state", { headers: { cookie: `alter_session_${port}=other; alter_session=${token}` } })).status).toBe(401);
   await reopened.login();
   const restored = await reopened.state();
   expect(restored.timeline).toEqual(before.timeline);
