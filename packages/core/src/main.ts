@@ -14,7 +14,7 @@ import { createCapabilityRegistry, createDemoCapabilities, type AlterPlugin, typ
 import {
   AgentDoc, configure, context, createRegistry, defineExtension, defineTask, defineTool,
   GenerationTask, Harness, hook, hookTask, LiveDoc, ProviderDoc, reply, storageDirectories, type Conversation,
-  type ConversationId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type JsonObject, type ToolRegistration, type TaskId, type Tx,
+  type ConversationId, type EntryId, type HarnessOptions, type ModelRef, type ModelThinkingLevel, type Storage, type JsonObject, type ToolRegistration, type TaskId, type Tx,
 } from "./runtime.ts";
 import { defaultApprovalTimeoutMs, proactiveConfig, validateApprovalTimeout } from "./config.ts";
 import { defaultTimeZone, inputClock } from "./clock.ts";
@@ -25,7 +25,7 @@ import { digestSummary } from "./digest-summary.ts";
 import { registerReports } from "./reports.ts";
 import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
-import { addNotification, claim, isClaimed, digestSource, sendMessageTool, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
+import { addNotification, claim, isClaimed, digestSource, staySilentTool, deliverReply, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
 import { createProactiveBudget } from "./usage.ts";
 import { gatewayCapabilities, auxiliaryModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
@@ -75,7 +75,7 @@ export async function openAlter(
   })];
   const prompt = memoryPrompt(memory, () => "可用能力有 " + available().join("、") + "。" +
     (leasing ? "一两步、结果短、需要对话上下文或用户正在等时，用 enable_tool 启用；可指定 action 单租只读工具。" : ""));
-  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。普通正文是草稿，只记在网页，用户收不到。要对用户说话必须调用 send_message，用户发来消息一般都要用它回复。用它汇报任务结果；巡检等主动回合没有值得说的事就不要发。发送后不必在正文里复述，草稿留空即可。" +
+  const mainInstructions = "你是 Alter 的主助手，负责与用户对话，默认跟随用户的语言。每条输入的第一行标明来源：[用户消息 · 渠道 · 时间] 是用户本人说的话，一般都要回复；[系统消息 · 类型 · 时间] 是任务报告、巡检、定时安排、近况报告等框架唤醒，不是用户在说话。最后的正文就是发给用户的回复。直接回答问题、汇报结果。用户要求不用回，或巡检等主动回合没有值得提醒的事时，调用 stay_silent，本轮正文只作为网页静默草稿。" +
     "用户说“记住”、纠正你或表达明确偏好时，立即用 memory_write 新增、修改或取代对应条目。" + memoryWriteGuidance +
     "按索引 ID 用 memory_read 打开正文；一次性的事不要记。" +
     "用 schedule_create 创建定时安排：reminder 直接通知用户，task 到点派任务，wake 到点由你判断。用 schedule_list 查看，用 schedule_set 改时间、内容、思考强度或暂停、恢复、删除。" +
@@ -158,7 +158,7 @@ export async function openAlter(
   const cancellation = createTaskCancellation(() => harness);
   const watches = createWatches(() => main, () => harness, () => plugins, dispatch, cancellation, budget, time, now);
   const controls: ToolRegistration[] = [
-    ...scheduler.tools, sendMessageTool, digestSource,
+    ...scheduler.tools, staySilentTool, digestSource,
     defineTool({
       name: "feedback_answer", description: "代用户提交已明确回答的反馈题。issueId 为本次出题的 id，options 使用显示的选项原文，other 为用户补充。",
       parameters: obj({ issueId: str({ minLength: 1 }), options: arr(str()), other: opt(str()) }), replay: "safe",
@@ -206,11 +206,12 @@ export async function openAlter(
     }),
   );
 
-  // afterRun children finish before queued follow-ups are placed, including on recovery.
-  const AdvanceLeases = defineTask<null, { phase: "advance" }, null>({
+  // Keep the persisted task name and null input for runs created before reply-by-default.
+  const FinishMainTurn = defineTask<{ first: EntryId; answer: EntryId } | null, { phase: "advance" }, null>({
     name: "alter.advance-leases", version: 1, initial: () => ({ phase: "advance" }),
     phases: {
-      advance: (_, runtime, ctx) => runtime.commit(async tx => {
+      advance: ({ input }, runtime, ctx) => runtime.commit(async tx => {
+        if (input) await deliverReply(tx, input.first, input.answer, runtime.now());
         const leases = await tx.doc(Leases, runtime.conversationId);
         (await tx.doc(Heartbeat, runtime.conversationId)).lastActivity = runtime.now();
         leases.turns++;
@@ -230,7 +231,7 @@ export async function openAlter(
   const controlPlane = defineExtension({
     name: "alter.main", tools: controls,
     sections: [{ key: "memory-index", tag: false, render: (_, ctx) => main.commit(tx => prompt.index(tx, main.id), ctx) }],
-    tasks: [SourceBorrow, AdvanceLeases, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
+    tasks: [SourceBorrow, FinishMainTurn, BackgroundTask, cancellation.stop, watches.worker, watches.poller],
     hooks: [
       mainCompaction(memory, mainModel),
       hook(BackgroundTask, {
@@ -243,7 +244,7 @@ export async function openAlter(
         },
       }),
       hook(GenerationTask, {
-        afterRun: () => ({ tasks: [hookTask(AdvanceLeases, null)] }) }),
+        afterRun: ({ first, answer }) => ({ tasks: [hookTask(FinishMainTurn, { first, answer })] }) }),
     ],
   });
   for (const extension of [...taskExtensions, WatchTools, controlPlane]) registry.install(extension);

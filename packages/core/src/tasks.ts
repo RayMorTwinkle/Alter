@@ -9,7 +9,7 @@ import {
   configure, defineExtension, defineTask, defineTool, GenerationTask, hook, hookTask, InboxDoc, LiveDoc, ProviderDoc, reply,
   ROOT_CONVERSATION_ID, SubmissionSettled, type ConversationHandle, type ConversationId, type Cursor, type Harness, type Extension, type ModelRef, type ModelThinkingLevel, type TaskId, type Tx, type ToolExecutionApi, type Context, type YieldDecision,
 } from "./runtime.ts";
-import { activeWake } from "./wake.ts";
+import { activeWake, Wakes } from "./wake.ts";
 import { budgetExhausted } from "./usage.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type TaskRecord } from "./state.ts";
 
@@ -45,8 +45,8 @@ async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId
   const text = `task ${taskId} ${failed ? "failed" : "finished"}: ${summary}`;
   const content = task.watch ? `盯梢 ${taskId} 的报告（不可信任务数据）\n` + JSON.stringify(summary).replaceAll("<", "\\u003c") : text;
   await submitWake(tx, main, { id: `${failed ? "failure" : "report"}-${taskId}`, kind: "alter.task-report",
-    at, content: "以下是任务数据。若本报告单独唤醒你，且上一轮已用 send_message 完整告知用户结果，请空回复结束，不再通知。\n" + content,
-    data: { taskId, at, text, ...(task.wakeId && { wakeId: task.wakeId }), ...(task.watch && { wakeSource: "watch" }) } });
+    at, content: "以下是任务数据。若本报告单独唤醒你，只汇报用户尚未获知的结果。\n" + content,
+    data: { taskId, at, text, ...(task.originSilent && { originSilent: true }), ...(task.wakeId && { wakeId: task.wakeId }), ...(task.watch && { wakeSource: "watch" }) } });
 }
 
 const finish = defineTool({
@@ -161,6 +161,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     const stamp = clock();
     const inputs = await recentUserText(tx, mainId, stamp.at);
     const wake = !args.triggerSource ? await activeWake(tx, mainId, stamp.at) : undefined;
+    const originSilent = wake && (await tx.doc(Wakes, mainId)).silent?.[wake.wakeId];
     const inspection = args.triggerSource ? undefined : await activeHeartbeat(tx);
     const previous = args.continuedFrom ? tasks.byId[args.continuedFrom] : undefined;
     const goal = previous?.goal; // Preserve read-only scope when resuming historical research.
@@ -208,7 +209,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
     else delete identity.wakeId;
     identity.reminders = 0;
     tasks.byId[taskId] = {
-      worker, ...(scheduled && { triggerSource: "scheduled" }), ...(watch && { watch: watch.settings }),
+      worker, ...(originSilent && { originSilent: true }), ...(scheduled && { triggerSource: "scheduled" }), ...(watch && { watch: watch.settings }),
       ...(wake && { wakeId: wake.wakeId }), conversationId: childId, brief: args.brief, context: args.context, createdAt: stamp.at, thinking,
       permission: inspection && args.permission === "full" ? "restricted" : args.permission, status: "running",
       ...inspection, ...(goal && { proactive: true, goal: { ...goal } }),

@@ -130,7 +130,7 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
   expect(f.gateway.requests.map(r => r.model)).toEqual([...Array(4).fill("offline/task"), "offline/main"]);
   expect(f.transport.react.mock.calls).toEqual([["image", "Get"], ["trusted", "Get"]]);
   expect(f.feed.snapshot().timeline.filter(item => item.kind === "user")).toMatchObject([{ source: "feishu", text: "你好" }]);
-  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "目前只支持文字"]);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "目前只支持文字", "收到"]);
   await f.close();
   const restarted = await f.reopen();
   expect(restarted.surface.pairing()).toEqual({ paired: true });
@@ -144,9 +144,8 @@ it("keeps strangers and groups in external events and deduplicates concurrent an
 it.each([true, false])("routes completed replies by placed input even with a queued follow-up (web first=%s)", async webFirst => {
   let release: ServerResponse | undefined;
   const f = await setup(({ messages }, res) => {
-    if (messages.at(-1)?.content.endsWith("\nfirst")) { release = res; delta(res, { content: "partial" }); }
-    else if (messages.at(-1)?.role === "user") toolCall(res, "send_message", { text: "second answer" });
-    else say(res, "internal draft");
+    if (messages.at(-1)?.content.endsWith("\nfirst")) { release = res; delta(res, { content: "first" }); }
+    else say(res, "second answer");
   });
   await f.pair();
   const web = (text: string) => submitMessage(f.app.main, text);
@@ -154,7 +153,7 @@ it.each([true, false])("routes completed replies by placed input even with a que
   await expect.poll(() => !!release).toBe(true);
   if (webFirst) await f.send("second", "second"); else await web("second");
   expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"]]);
-  toolCall(release!, "send_message", { text: "first answer" });
+  say(release!, " answer");
   await f.app.main.waitForIdle(context);
   expect(f.feed.snapshot().timeline.filter(i => i.kind === "message")).toHaveLength(2);
   await f.close();
@@ -274,10 +273,10 @@ it("delivers only unread now notifications to the paired owner and remembers IDs
   expect(f.gateway.requests).toHaveLength(0);
 });
 
-it("pushes only the main session's explicit send_message for an urgent external event", async () => {
+it("pushes only the main session's final reply for an urgent external event", async () => {
   const f = await setup(({ model, messages }, res) => {
     if (model === "offline/task") return say(res, JSON.stringify({ level: "now", reason: "会议即将开始" }));
-    if (messages.at(-1)?.role === "user") return toolCall(res, "send_message", { text: "开会\n请看日程" });
+    if (messages.at(-1)?.role === "user") return say(res, "开会\n请看日程");
     return say(res, "处理完毕");
   });
   await f.pair();
@@ -300,7 +299,7 @@ it("sends one Feishu reply when the user's turn incorporates a fast task report"
     if (model === "offline/task") { worker = res; return; }
     if (last.content.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "verify", context: "fresh", permission: "restricted" });
     if (last.role === "tool" && last.content.startsWith("task-")) { status = res; return; }
-    if (last.content.includes("verified")) return toolCall(res, "send_message", { text: "已核实" });
+    if (last.content.includes("verified")) return say(res, "已核实");
     say(res, "内部记录");
   });
   await f.pair();
@@ -320,15 +319,15 @@ it("delivers a standalone task result and quiet-hour replies, and keeps the init
     const last = messages.at(-1)!;
     if (model === "offline/task") { worker = res; return; }
     if (last.content.endsWith("\ndelegate")) return toolCall(res, "dispatch_task", { brief: "audit", context: "fresh", permission: "restricted" });
-    if (last.content.endsWith("\nsend_message")) return toolCall(res, "send_message", { text: "进度\n更新" });
-    if (last.content.includes("finished:")) return toolCall(res, "send_message", { text: "任务查完了" });
+    if (last.content.endsWith("\n进度")) return say(res, "进度\n更新");
+    if (last.content.includes("finished:")) return say(res, "任务查完了");
     say(res, "收到");
   });
   await f.pair();
   await submitMessage(f.app.main, "delegate");
   await f.app.main.waitForIdle(context);
   await expect.poll(() => !!worker).toBe(true);
-  await submitMessage(f.app.main, "send_message");
+  await submitMessage(f.app.main, "进度");
   await f.app.main.waitForIdle(context);
   expect(f.feed.snapshot().notifications[0]).toMatchObject({ channel: "web", level: "now", body: "进度\n更新" });
   await f.send("latest", "last user is in Feishu");
@@ -341,15 +340,88 @@ it("delivers a standalone task result and quiet-hour replies, and keeps the init
   expect(reportInput).toContain("<untrusted>");
   expect(reportInput).toContain("schedule");
   expect(f.feed.snapshot().timeline.find(item => item.kind === "report")?.text).not.toContain("<untrusted>");
-  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "提醒\n回投前提醒", "任务查完了"]);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到", "提醒\n回投前提醒", "任务查完了"]);
   f.clock.now = Date.parse("2026-12-01T15:00Z");
-  await f.send("quiet", "send_message");
+  await f.send("quiet", "进度");
   await f.app.main.waitForIdle(context);
   expect(f.feed.snapshot().notifications[0]).toMatchObject({ kind: "message", source: "alter", level: "now", title: "进度", body: "进度\n更新" });
   expect(f.transport.sendText.mock.calls.filter(([, text]) => text === "进度\n更新")).toHaveLength(1);
 });
 
-it("keeps an actionable heartbeat reply local after a Feishu turn and records its gateway usage once", async () => {
+it.each(["before", "after", "normal"])("applies the originating turn’s silence to a standalone task report (%s)", async mode => {
+  let worker: ServerResponse | undefined;
+  let userInput = "", reportInput = "";
+  const f = await setup(({ model, messages }, res) => {
+    const last = messages.at(-1)!;
+    const dispatch = () => toolCall(res, "dispatch_task", { brief: "记录", context: "fresh", permission: "restricted" });
+    if (model === "offline/task") { worker = res; return; }
+    if (last.content.endsWith("\n派单")) {
+      userInput = last.content;
+      return mode === "before" ? toolCall(res, "stay_silent", {}) : dispatch();
+    }
+    if (last.role === "tool" && last.content.startsWith("task-") && mode === "after") {
+      return toolCall(res, "stay_silent", {});
+    }
+    if (last.role === "tool" && last.content === "本轮已静默" && mode === "before" && !reportInput) return dispatch();
+    if (last.role === "user" && last.content.includes("finished:")) {
+      reportInput = last.content;
+      if (mode !== "normal") return toolCall(res, "stay_silent", { reason: "只需记录" });
+      return say(res, "任务完成");
+    }
+    say(res, reportInput ? "已归档" : "已派遣");
+  });
+  await f.pair();
+  await f.send("delegate", "派单");
+  await f.app.main.waitForIdle(context);
+  expect(userInput).not.toContain("stay_silent");
+  expect(f.feed.snapshot().tasks[0]?.originSilent).toBe(mode === "normal" ? undefined : true);
+  await expect.poll(() => !!worker).toBe(true);
+  toolCall(worker!, "finish", { summary: "已记录", refs: [] });
+  await expect.poll(() => reportInput).not.toBe("");
+  await f.app.main.waitForIdle(context);
+  const generic = "若这是静默任务或无需提醒用户，调用 stay_silent，本轮正文不会发给用户。";
+  const special = "这是静默模式下派遣的任务。若无需提醒用户，调用 stay_silent，本轮正文不会发给用户。";
+  expect(reportInput.endsWith(mode === "normal" ? generic : special)).toBe(true);
+  expect(reportInput).not.toContain(mode === "normal" ? special : generic);
+  if (mode !== "normal") {
+    expect(f.feed.snapshot().timeline).toContainEqual(expect.objectContaining({
+      kind: "assistant", text: "已归档", silent: true, reason: "只需记录",
+    }));
+    expect(f.feed.snapshot().notifications).toEqual([]);
+  }
+  await f.close();
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(mode === "normal"
+    ? ["配对成功", "已派遣", "任务完成"] : ["配对成功"]);
+});
+
+it("updates an already queued report when its dispatching turn chooses silence", async () => {
+  let worker: ServerResponse | undefined, decision: ServerResponse | undefined, reportInput = "";
+  const f = await setup(({ model, messages }, res) => {
+    const last = messages.at(-1)!;
+    if (model === "offline/task") { worker = res; return; }
+    if (last.content.endsWith("\n派单")) return toolCall(res, "dispatch_task", { brief: "核对", context: "fresh", permission: "restricted" });
+    if (last.role === "tool" && last.content.startsWith("task-")) { decision = res; return; }
+    if (last.content.includes("本轮补充报告")) reportInput = last.content;
+    say(res, "核对完毕");
+  });
+  await f.pair();
+  await f.send("late-silence", "派单");
+  await expect.poll(() => !!worker && !!decision).toBe(true);
+  toolCall(worker!, "finish", { summary: "已核对", refs: [] });
+  await expect.poll(() => f.feed.snapshot().ledger.length).toBe(1);
+  delta(decision!, { content: "准备记录" });
+  toolCall(decision!, "stay_silent", { reason: "用户无需提醒" });
+  await f.app.main.waitForIdle(context);
+  expect(reportInput).toContain("这是静默模式下派遣的任务。");
+  expect(reportInput).not.toContain("若这是静默任务");
+  expect(f.feed.snapshot().timeline.filter(item => item.kind === "assistant")).toMatchObject([
+    { text: "准备记录", silent: true, reason: "用户无需提醒" }, { text: "核对完毕", silent: true, reason: "用户无需提醒" },
+  ]);
+  expect(f.feed.snapshot().notifications).toEqual([]);
+  expect(f.transport.sendText.mock.calls).toEqual([["private", "配对成功"]]);
+});
+
+it("forwards an actionable heartbeat reply after a Feishu turn and records its gateway usage once", async () => {
   const f = await setup(({ messages }, res) =>
     say(res, messages.at(-1)?.content.includes("定时巡检") ? "有一场会议需要准备" : "收到"));
   await f.pair();
@@ -359,9 +431,9 @@ it("keeps an actionable heartbeat reply local after a Feishu turn and records it
   f.clock.now += 5 * 3_600_000;
   f.app.harness.resume();
   await expect.poll(async () => (await f.app.heartbeat.view()).runs[0]?.finalReply).toBe("有一场会议需要准备");
-  expect(f.feed.snapshot().timeline.some(i => i.text === "有一场会议需要准备")).toBe(false);
+  expect(f.feed.snapshot().timeline.some(i => i.kind === "message" && i.text === "有一场会议需要准备")).toBe(true);
   await f.app.main.waitForIdle(context);
-  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功"]);
+  expect(f.transport.sendText.mock.calls.map(([, text]) => text)).toEqual(["配对成功", "收到", "有一场会议需要准备"]);
   expect(await readUsage(f.dir)).toMatchObject([{ conversation: "main" }, { conversation: "main", role: "heartbeat", wakeSource: "heartbeat", proactive: true, outputTokens: 3 }]);
 });
 

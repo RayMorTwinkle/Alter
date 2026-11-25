@@ -1,7 +1,7 @@
 import { contentText } from "@earendil-works/pi-ai";
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import { recordAdoption } from "./heartbeat-state.ts";
-import { context, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Cursor, type Harness, type Tx } from "./runtime.ts";
+import { context, LiveDoc, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Cursor, type EntryId, type Harness, type Tx } from "./runtime.ts";
 import { startsTurn } from "./wake.ts";
 import { Reports, type ReportView } from "./report-state.ts";
 import { Schedules } from "./scheduler.ts";
@@ -64,9 +64,15 @@ function actionId(tool: string, result: string) {
   }
 }
 
-async function finish(tx: Tx, id: string, at: number) {
+export async function recordHeartbeatReply(tx: Tx, id: string) {
+  const run = (await tx.doc(Runs, id, null)).run;
+  if (run) run.notified = true;
+}
+
+async function finish(tx: Tx, id: string, at: number, activeFirst?: EntryId) {
   const submission = await tx.submissionByRequest(ROOT_CONVERSATION_ID, id);
   if (submission?.type !== "input" || (submission.status !== "done" && submission.status !== "unanswered")) return;
+  if (activeFirst !== undefined && submission.entry === activeFirst) return;
   const run = (await tx.doc(Runs, id, null)).run;
   if (!run || run.finishedAt !== null) return;
   let cursor: Cursor | undefined;
@@ -87,6 +93,7 @@ async function finish(tx: Tx, id: string, at: number) {
           const action: HeartbeatRun["actions"][number] = { tool };
           const id = actionId(tool, result);
           if (id) action.id = id;
+          // A pre-0025 inspection can finish recovery with an already delivered tool result.
           if (tool === "send_message" && action.id) {
             action.level = "now";
             run.notified = true;
@@ -104,21 +111,29 @@ async function finish(tx: Tx, id: string, at: number) {
 }
 
 export async function observeHeartbeatRuns(harness: Harness, main: Conversation, now: () => number) {
-  const pending = await main.commit(async tx => [...(await tx.doc(Index, main.id)).pending], context);
-  for (const id of pending) await main.commit(tx => finish(tx, id, now()), context);
+  // The answer settles before afterRun commits its notification. Finalize once the run leaves pi.live,
+  // including when Stop cancels its afterRun work or an older run resumes without a delivery task.
+  async function finishPending() {
+    await main.commit(async tx => {
+      const first = (await tx.doc(LiveDoc, main.id)).run?.first;
+      for (const id of [...(await tx.doc(Index, main.id)).pending]) await finish(tx, id, now(), first);
+    }, context);
+  }
   let draining = Promise.resolve();
-  const sub = harness.observeCommits({ advance({ changes }) {
-    for (const change of changes) {
-      if (change.type !== "submission" || change.value.conversationId !== main.id) continue;
-      const { status, requestId } = change.value;
-      if ((status === "done" || status === "unanswered") && requestId?.startsWith("heartbeat-")) {
-        const at = now();
-        draining = draining.then(() => main.commit(tx => finish(tx, requestId, at), context))
-          .catch(error => { console.error("Failed to finalize heartbeat", requestId, error); });
+  let previous: number | undefined;
+  const sub = await harness.observeDoc(LiveDoc, main.id, {
+    advance(call) {
+      if (call.kind !== "value") return;
+      const first = call.value.run?.first;
+      if (previous !== undefined && previous !== first) {
+        draining = draining.then(finishPending).catch(error => console.error("Failed to finalize heartbeat", error));
       }
-    }
-  }, end() {} });
-  return async () => { sub.detach(); await draining; };
+      previous = first;
+    }, end() {},
+  }, context);
+  previous = sub?.value.run?.first;
+  await finishPending();
+  return async () => { sub?.detach(); await draining; };
 }
 
 export async function subscribeHeartbeat(harness: Harness, listener: (event: HeartbeatEvent) => void) {

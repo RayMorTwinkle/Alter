@@ -68,11 +68,11 @@ function Item({ item, pending, onAnswer, onOpenTask }: {
           <time>{clock(item.at)}</time>
         </article>
       );
-    // The model's plain text never reaches the user; show it as working notes.
+    // Intermediate text, or a final answer withheld by stay_silent.
     case "assistant":
       return (
         <article className="draft">
-          <span className="process-label">{t.steps.draft}</span>
+          <span className="process-label">{item.silent ? t.steps.silent(item.reason) : t.steps.draft}</span>
           <Markdown text={item.text} />
         </article>
       );
