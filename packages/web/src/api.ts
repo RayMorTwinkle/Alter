@@ -1,3 +1,4 @@
+import type { DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
 import type { Action } from "./store.ts";
 import type { AdapterCreate, AdapterPatch, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
@@ -20,6 +21,14 @@ async function request<T>(path: string, init?: { method?: string; body?: unknown
 }
 
 export const api = {
+  debugTraces: (query: DebugTraceQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    return request<DebugTracePage>(`/api/debug/traces?${params}`);
+  },
+  debugTrace: (id: number) => request<DebugTrace>(`/api/debug/traces/${id}`),
+  debugPrompt: (hash: string) => request<DebugPrompt>(`/api/debug/prompts/${encodeURIComponent(hash)}`),
+  debugSchedule: () => request<DebugSchedule>("/api/debug/schedule"),
   login: (password: string) => request<void>("/api/login", { body: { password } }),
   logout: () => request<void>("/api/logout", { method: "POST", body: {} }),
   state: () => request<Snapshot>("/api/state"),

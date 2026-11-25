@@ -339,6 +339,8 @@ it("pauses exactly seven days after interaction and resumes evening checks on re
   await f.app.reports.sync();
   expect(await f.app.heartbeat.run()).toMatchObject({ skipReason: "inactive" });
   expect(await f.app.heartbeat.view()).toMatchObject({ enabled: false, report: { paused: true, nextAt: null } });
+  expect(await f.app.debugSchedule()).toMatchObject({ heartbeat: { configured: true, enabled: false, reason: expect.stringContaining("七天") },
+    report: { activeDays: 0, paused: true, nextAt: null, reason: expect.stringContaining("七天") } });
   expect((await f.app.harness.snapshot(Reports, f.app.main.id, context))?.lastUser).toBe(left);
   await f.app.close();
   const g = await f.open();

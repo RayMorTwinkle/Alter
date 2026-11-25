@@ -19,10 +19,24 @@ const base = 5 * hour;
 const explorationTimeout = 10 * 60_000;
 const decision = "发给用户的内容必须包含用户原本不知道的信息，或一件已经做完的事。转述用户已知的内容等于没做。" +
   "先做后说：能直接做的就派任务去做，做完再告诉用户。什么都不做也是正当结果。";
-export function nextInterval({ adoptionRate, dueGoals, digestCount, userMessages }: Signals, bias = 1) {
+export function intervalDecision({ adoptionRate, dueGoals, digestCount, userMessages }: Signals, bias = 1) {
   const demand = 0.2 * Math.min(4, dueGoals) + 0.04 * Math.min(20, digestCount) + 0.06 * Math.min(12, userMessages);
   const factor = 2 ** (6.6 * (0.5 - adoptionRate) - demand);
-  return Math.round(Math.max(2 * hour, Math.min(48 * hour, base * factor * bias)));
+  const rawMs = base * factor * bias;
+  const minMs = 2 * hour, maxMs = 48 * hour;
+  const clamped = rawMs < minMs ? "min" : rawMs > maxMs ? "max" : null;
+  const intervalMs = Math.round(Math.max(minMs, Math.min(maxMs, rawMs)));
+  const reasons = [`采纳率 ${Math.round(adoptionRate * 100)}% ${adoptionRate < 0.5 ? "偏低，拉长间隔" : adoptionRate > 0.5 ? "偏高，缩短间隔" : "处于基准水平"}`];
+  if (dueGoals) reasons.push(`未来七天有 ${dueGoals} 个到期目标，缩短间隔`);
+  if (digestCount) reasons.push(`积压 ${digestCount} 条摘要，缩短间隔`);
+  if (userMessages) reasons.push(`近 24 小时有 ${userMessages} 条用户消息，缩短间隔`);
+  if (bias !== 1) reasons.push(`偏好将间隔乘以 ${bias}`);
+  if (clamped) reasons.push(clamped === "min" ? "达到 2 小时下限" : "达到 48 小时上限");
+  return { adoptionRate, dueGoals, digestCount, userMessages, bias, baseMs: base, demand, factor, rawMs, minMs, maxMs, clamped, intervalMs,
+    reason: reasons.join("；") + "。" };
+}
+export function nextInterval(signals: Signals, bias = 1) {
+  return intervalDecision(signals, bias).intervalMs;
 }
 
 function section(label: string, lines: string[], count = lines.length) {
@@ -111,6 +125,7 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     async function result(status: HeartbeatRun["status"], skipReason: HeartbeatReason | null, explorationTaskId?: string) {
       const run: HeartbeatRun = { id, at, status, skipReason, ...(explorationTaskId && { explorationTaskId }), counts, actions: [], notified: false, finalReply: "",
         tokens: 0, feedback: null, finishedAt: status === "ran" ? null : at };
+      if (!manual) state.lastTick = { at, nextAt, skipReason };
       await recordRun(tx, run);
       return { run, nextAt };
     }
@@ -138,8 +153,9 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     const fingerprint = createHash("sha256").update(JSON.stringify([goals, memories, agenda, chat,
       tasks.map(([id, t]) => [id, t.brief])])).digest("hex");
     if (!manual) {
-      const intervalMs = nextInterval({ adoptionRate: state.adoptionRate, dueGoals: signals.dueGoals,
+      state.lastDecision = intervalDecision({ adoptionRate: state.adoptionRate, dueGoals: signals.dueGoals,
         digestCount: signals.backlog, userMessages: signals.userMessages24h }, (await tx.doc(Preferences, ROOT_CONVERSATION_ID)).heartbeatBias);
+      const { intervalMs } = state.lastDecision;
       state.history = [...state.history.slice(-49), { at, intervalMs }];
       nextAt = allowed(at + intervalMs);
       if (!signals.backlog && state.fingerprint === fingerprint && state.lastInspection !== undefined &&
@@ -188,6 +204,30 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
       const result = await rateRun(tx, id, feedback);
       if (result === "ok") await interacted(tx, now());
       return result;
+    }, context),
+    debug: () => main().commit(async tx => {
+      const at = now();
+      const { state, signals } = await inputs(tx, at);
+      const config = settings();
+      const schedule = (await tx.doc(Schedules, ROOT_CONVERSATION_ID)).byId["adaptive-heartbeat"]?.item;
+      const paused = await inactive(tx, at);
+      const enabled = config.enabled && !paused && schedule?.status === "scheduled";
+      const current = intervalDecision({ adoptionRate: state.adoptionRate, dueGoals: signals.dueGoals,
+        digestCount: signals.backlog, userMessages: signals.userMessages24h }, (await tx.doc(Preferences, ROOT_CONVERSATION_ID)).heartbeatBias);
+      const last = state.history.at(-1);
+      let reason = !config.enabled ? "设置已关闭巡检。" : paused ? "连续七天没有用户互动，巡检暂停。" : !enabled ? "巡检计划未启用。"
+        : state.lastDecision?.reason ?? (last ? "沿用上次巡检间隔，旧记录未保存计算输入。" : "首次巡检使用 5 小时初始间隔。");
+      const tick = state.lastTick;
+      if (enabled && tick && tick.nextAt === schedule.at) {
+        const skipped = { busy: "主会话忙，一分钟后在允许时段重试。", "outside-hours": "已顺延至允许时段。",
+          "busy-timeout": "主会话繁忙超过一小时，跳过本次巡检。", "recent-activity": "半小时内有活动，跳过本次巡检。",
+          unchanged: "线索没有变化，跳过本次巡检。", budget: "主动预算已用尽，跳过本次巡检。",
+          inactive: "连续七天没有互动。", disabled: "巡检已关闭。" };
+        if (tick.skipReason) reason += skipped[tick.skipReason];
+        if (!tick.skipReason && last && tick.nextAt > tick.at + last.intervalMs) reason += "下次时间已顺延至允许时段。";
+      }
+      return { configured: config.enabled, enabled, start: config.start, end: config.end, lastAt: state.lastInspection ?? null,
+        nextAt: enabled ? schedule.at : null, intervalMs: last?.intervalMs ?? base, lastDecision: state.lastDecision ? { ...state.lastDecision } : null, current, reason };
     }, context),
     view: () => main().commit(async tx => {
       const { state, signals } = await inputs(tx, now());

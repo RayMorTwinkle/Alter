@@ -236,7 +236,18 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
   const cancel = (id: string) => main().commit(async tx => typeof await cancellation.cancel(tx, id, now(), true) === "number", context);
   const watching = (event: ExternalEvent) => main().commit(async tx => Object.values((await tx.doc(Tasks, root)).byId)
     .some(t => t.status === "running" && t.watch && now() < t.watch.until && matchesWatch({ ...t.watch, keywords: [] }, t.createdAt, event)), context);
-  return { worker, poller, create, list, cancel, receive, watching, message: (event: ExternalEvent) => main().commit(tx => receive(tx, event), context), tools: [
+  return { worker, poller, create, list, cancel, receive, watching,
+    schedule: () => main().commit(async tx => {
+      const active = [];
+      for (const [id, task] of Object.entries((await tx.doc(Tasks, root)).byId)) {
+        if (!task.watch || task.status !== "running") continue;
+        const buffer = await tx.doc(BufferDoc, task.conversationId);
+        active.push({ id, until: task.watch.until, nextPollAt: buffer.pollDone ? null : buffer.pollAt,
+          batchDueAt: buffer.due ?? null });
+      }
+      return { pollMs: minute, batchMs, active, reason: `每分钟补拉一次，命中消息后合并 ${batchMs / 1000} 秒再唤醒，到期收尾。` };
+    }, context),
+    message: (event: ExternalEvent) => main().commit(tx => receive(tx, event), context), tools: [
     defineTool({ name: "watch", description: "Watch incoming messages until an ISO time or a duration in minutes. contact is a Feishu sender ID or email address.",
       parameters, replay: "safe", async execute(args, api) {
         try { return reply(await create(args, `watch-${api.taskId}`)); }

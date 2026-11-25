@@ -243,7 +243,21 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
     defineTool({ name: "schedule_set", description: "Edit the trigger, brief or thinking, pause, resume or delete a schedule by ID.",
       parameters: changes, replay: "safe", execute: async args => await set(args) ? reply(args.id) : reply("Unknown or finished schedule", true) }),
   ];
-  return { create, list, set, importReminder, start, actions, tools,
+  async function schedule() {
+    return (await list()).map(({ id, brief, type, trigger, paused, nextAt }) => {
+      const offline = trigger.kind === "event" && !getCalendar();
+      let reason: string;
+      switch (trigger.kind) {
+        case "at": reason = `在 ${trigger.at} 执行一次`; break;
+        case "every": reason = `从创建时间起每 ${trigger.minutes} 分钟执行`; break;
+        case "daily": reason = `${trigger.weekdays ? "每周" + trigger.weekdays.map(d => "日一二三四五六"[d]).join("、") : "每天"} ${trigger.time} 执行`; break;
+        case "event": reason = `按日程 ${trigger.eventId} 的${trigger.anchor === "start" ? "开始" : "结束"}时间偏移 ${trigger.offsetMinutes} 分钟执行`; break;
+      }
+      return { id, brief, type, trigger, paused, nextAt: paused || offline ? null : nextAt,
+        reason: reason + (paused ? "，当前已暂停。" : offline ? "，等待日历可用。" : nextAt === null ? "，已结束。" : "。") };
+    });
+  }
+  return { create, list, set, importReminder, start, actions, tools, schedule,
     pause: (id: string, paused: boolean) => set({ id, status: paused ? "paused" : "active" }),
     cancel: (id: string) => set({ id, status: "deleted" }) };
 }

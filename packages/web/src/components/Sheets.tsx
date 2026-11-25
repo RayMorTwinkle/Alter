@@ -7,7 +7,7 @@ import { Markdown } from "../markdown.tsx";
 import type { Funnel, Notification, Task, TranscriptItem, UsageRow } from "../types.ts";
 import { StatusChip } from "./Panels.tsx";
 
-export function Sheet({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
+export function Sheet({ title, onClose, children, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const t = useT();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -16,7 +16,7 @@ export function Sheet({ title, onClose, children }: { title: ReactNode; onClose:
   }, [onClose]);
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <aside className="sheet" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+      <aside className={`sheet${wide ? " wide" : ""}`} role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
         <header className="sheet-head">
           <h2>{title}</h2>
           <button className="icon-btn ghost" onClick={onClose} aria-label={t.close}><X /></button>
