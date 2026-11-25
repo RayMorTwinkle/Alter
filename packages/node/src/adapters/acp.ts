@@ -4,13 +4,25 @@ import type { HarnessAdapter } from "./types.ts";
 
 type Capabilities = { loadSession?: boolean; sessionCapabilities?: { list?: object; resume?: object; close?: object } };
 type ConfigOption = { id: string; options?: { value?: string; options?: { value: string }[] }[] };
-type ToolCall = { toolCallId: string; title?: string; kind?: string; rawInput?: unknown; status?: string;
+type ToolCall = { toolCallId: string; name?: string; title?: string; kind?: string; rawInput?: unknown; status?: string;
   rawOutput?: unknown; content?: { type: string; content?: { type: string; text?: string } }[] };
 type Update = { sessionUpdate: "agent_message_chunk" | "agent_thought_chunk"; messageId?: string; content: { type: string; text?: string } }
   | (ToolCall & { sessionUpdate: "tool_call" | "tool_call_update" });
 type Permission = { sessionId: string; toolCall: ToolCall; options: { kind: string; optionId: string }[] };
 
 export function acpArgs(harness: string) { return harness === "dsh" ? ["--profile", "acp"] : ["acp"]; }
+
+// Both agents allow most actions by their own rules, so the permission tier has to be set
+// when the process starts or Alter never sees a request. Resumed sessions keep their own mode.
+export function permissionEnv(harness: string, permission: "restricted" | "auto" | "full", base = process.env): NodeJS.ProcessEnv {
+  if (harness === "dsh") return { ...base, DSH_PERMISSION_MODE: { restricted: "read-only", auto: "workspace-write", full: "danger-full-access" }[permission] };
+  if (harness === "opencode") {
+    const ask = { restricted: { edit: "ask", bash: "ask", webfetch: "ask" }, auto: { edit: "allow", bash: "ask", webfetch: "ask" },
+      full: { edit: "allow", bash: "allow", webfetch: "allow" } }[permission];
+    return { ...base, OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: ask }) };
+  }
+  return base;
+}
 
 export async function initializeAcp(rpc: ReturnType<typeof stdioRpc>) {
   const init = await rpc.request<{ protocolVersion: number; agentCapabilities?: Capabilities }>("initialize", {
@@ -40,7 +52,7 @@ export const acp: HarnessAdapter = {
       const effect = toolEffect(tool.kind);
       const automatic = task.permission === "full" || (task.permission === "auto" && (effect === "read" || tool.kind === "edit"));
       const { signal } = permissions;
-      const allow = automatic || (await sink.approve(tool.title || tool.kind || "tool", tool.rawInput ?? tool, signal, effect)).decision !== "deny";
+      const allow = automatic || (await sink.approve(tool.name || tool.title || tool.kind || "tool", tool.rawInput ?? tool, signal, effect)).decision !== "deny";
       const selected = p.options.find(o => o.kind === (allow ? "allow_once" : "reject_once"));
       return { outcome: selected && !signal.aborted && !stopping ? { outcome: "selected", optionId: selected.optionId } : { outcome: "cancelled" } };
     }
@@ -73,7 +85,7 @@ export const acp: HarnessAdapter = {
         const p = params as { sessionId: string; update: Update };
         if (p.sessionId === sessionId) update(p.update);
       }
-    });
+    }, permissionEnv(task.harness, task.permission));
     async function message(text: string) {
       if (stopping) return;
       tools.clear(); body = ""; lastId = undefined;

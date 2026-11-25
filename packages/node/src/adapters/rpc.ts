@@ -6,8 +6,8 @@ type Frame = { id?: number | string; method?: string; params?: unknown; result?:
   error?: { code?: number; message: string; data?: unknown } };
 
 export function stdioRpc(command: string, args: string[], cwd: string, jsonrpc: boolean,
-  onMethod?: (method: string, params: unknown, request: boolean) => Promise<unknown>) {
-  const child = spawnTree(command, args, cwd);
+  onMethod?: (method: string, params: unknown, request: boolean) => Promise<unknown>, env?: NodeJS.ProcessEnv) {
+  const child = spawnTree(command, args, cwd, env);
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const pending = new Map<number, { resolve(result: unknown): void; reject(error: Error): void }>();
   let serial = 0, stderr = "", failure: Error | undefined;

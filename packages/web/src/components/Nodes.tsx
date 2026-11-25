@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.ts";
 import { clock } from "../format.ts";
 import { useT } from "../i18n.tsx";
-import type { CreatedNode, Node } from "../types.ts";
+import type { CreatedNode, HarnessId, NativeSession, Node } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
 
 function Command({ text }: { text: string }) {
@@ -45,6 +45,38 @@ function Pairing({ created, onDone }: { created: CreatedNode; onDone: () => void
   );
 }
 
+// Loaded on open: listing spawns the agent on the user's computer, so it should not run on every refresh.
+function Sessions({ node, harness }: { node: Node; harness: HarnessId }) {
+  const t = useT().nodes;
+  const [items, setItems] = useState<NativeSession[] | null>(null);
+  const [error, setError] = useState("");
+  const load = () => { if (!items && !error) api.nodeSessions(node.id, harness).then(list => setItems(list.slice(0, 8)), err => setError((err as Error).message)); };
+  return (
+    <details className="node-sessions" onToggle={event => { if ((event.target as HTMLDetailsElement).open) load(); }}>
+      <summary>{t.harnessNames[harness]} · {t.sessions}</summary>
+      {error && <p className="form-error">{error}</p>}
+      {!items && !error && <p className="settings-hint">{t.loadingSessions}</p>}
+      {items?.length === 0 && <p className="settings-hint">{t.noSessions}</p>}
+      {items && items.length > 0 && (
+        <ul>
+          {items.map(item => (
+            <li key={item.sessionId} title={item.cwd}>
+              <span>{item.title || t.untitled}</span>
+              {item.updatedAt && <time>{clock(item.updatedAt)}</time>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
+
+// dsh model values are JSON pairs like ["amd","DeepSeek-V4-Flash"].
+function modelName(value: string) {
+  try { const parts = JSON.parse(value); if (Array.isArray(parts)) return parts.join("/"); } catch { /* plain name */ }
+  return value;
+}
+
 function NodeCard({ node, onRemoved }: { node: Node; onRemoved: () => void }) {
   const t = useT().nodes;
   const [error, setError] = useState("");
@@ -61,11 +93,15 @@ function NodeCard({ node, onRemoved }: { node: Node; onRemoved: () => void }) {
         <span className={`node-state${node.online ? " online" : ""}`}><i />{node.online ? t.online : t.offline}</span>
       </header>
       <div className="row-meta">
-        <span>{t.harnesses}：{usable.length ? usable.map(h => t.harnessNames[h.id] + (h.version ? ` ${h.version}` : "")).join("、") : t.none}</span>
+        <span>{t.harnesses}：{usable.length ? usable.map(h => t.harnessNames[h.id] + (h.version ? ` ${h.version}` : "") + (h.model ? `（${modelName(h.model)}）` : "")).join("、") : t.none}</span>
       </div>
       <div className="row-meta">
         <span>{t.roots}：{node.roots.length ? node.roots.join("、") : t.noRoots}</span>
       </div>
+      {node.online && usable.some(h => h.sessions) && <>
+        {usable.filter(h => h.sessions).map(h => <Sessions key={h.id} node={node} harness={h.id} />)}
+        <p className="settings-hint">{t.sessionsHint}</p>
+      </>}
       {!node.online && <div className="row-meta"><span>{t.lastSeen} {node.lastSeen ? clock(node.lastSeen) : t.never}</span></div>}
       {error && <p className="form-error">{error}</p>}
       <div className="form-actions"><button className="text-btn" onClick={() => void remove()}>{t.remove}</button></div>

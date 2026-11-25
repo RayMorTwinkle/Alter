@@ -75,7 +75,7 @@ export class NodeHub {
     if (!nodes.length) return "";
     const inventory = nodes.map(n => ({ name: n.name, online: n.online, harnesses: n.harnesses.filter(h => h.available).map(h => ({ id: h.id, sessions: !!h.sessions })), roots: n.roots }));
     return "\n我的电脑（节点资料）" + JSON.stringify(inventory) + "。用户提到自己的电脑或要写代码、改文件时，可以用 dispatch_task 的 runner 派给节点上的代理。节点离线时任务会排队；结束后报告自动送回，不用轮询 task_status。" +
-      "sessions 表示支持已有会话，dsh 是 DeepSeek Harness。用户要求接着在 opencode、dsh 等代理里的对话做时，先用 node_sessions 找到对应会话，再将 sessionId 填入 dispatch_task 的 runner.session。新任务默认开启新会话。";
+      "sessions 表示支持已有会话，dsh 是 DeepSeek Harness。用户要求接着在 opencode、dsh 等代理里的对话做时，先用 node_sessions 找到对应会话，再将 sessionId 填入 dispatch_task 的 runner.session；这时 brief 会原样发进那个会话，要写成用户本人在原界面里会说的话，不要写“继续这个对话、向它提问”之类的转述。新任务默认开启新会话。";
   }
 
   create(name: string) {

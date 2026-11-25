@@ -289,6 +289,8 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, node
       }
       // An external agent never sees Alter's conversation, so fork means nothing to it.
       if (runner && !context) context = "fresh";
+      // The external agent still asks before acting; restricted routes every ask to approval.
+      if (runner && !permission) permission = "restricted";
       if (!context || !permission) return reply("A new task requires context and permission", true);
       if (cwd && !runner && !target) return reply("cwd requires a node runner", true);
       const result = await api.commit(async tx => {

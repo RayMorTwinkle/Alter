@@ -4,6 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import type { ApprovalAnswer, ApprovalRequest, Effect, Report, TaskEnd, TaskStart } from "@alter/node-protocol";
 import { loadConfig, taskDirectory } from "./config.ts";
+import { listSessions } from "./sessions.ts";
 import { finishScript, reportSchema } from "./finish.ts";
 import { Outbox, type Entry } from "./outbox.ts";
 import type { Detected } from "./spawn.ts";
@@ -122,17 +123,24 @@ export class Tasks {
         } catch (err) { void stop({ status: "failed", reason: String(err) }); }
       },
     };
-    try {
+    void (async () => { try {
       if (!["restricted", "auto", "full"].includes(task.permission) || typeof task.brief !== "string") throw new Error("任务参数无效");
       const config = loadConfig(this.dir);
-      const cwd = taskDirectory(config.roots, task.cwd);
+      // Continuing one of the user's own sessions runs in that session's directory, not the first root.
+      const cwd = taskDirectory(config.roots, task.cwd ?? (task.resume ? await this.sessionDirectory(task) : undefined));
       const executable = this.harnesses.find(h => h.available && h.id === task.harness)?.executable;
       if (!executable) throw new Error("代理不可用");
       folder = mkdtempSync(path.join(tmpdir(), "alter-finish-")); reportFile = path.join(folder, "report.json");
       const adapter = { codex, "claude-code": claude, dsh: acp, opencode: acp }[task.harness];
       const model = task.resume ? undefined : config.models?.[task.harness];
       handle = adapter.start({ ...task, cwd, executable, model, finish: { command: process.execPath, args: [finishScript, reportFile] } }, sink);
-    } catch (err) { void stop({ status: "failed", reason: String(err) }); }
+    } catch (err) { void stop({ status: "failed", reason: String(err) }); } })();
+  }
+
+  private async sessionDirectory(task: TaskStart) {
+    const found = await listSessions(this.dir, this.harnesses, { type: "sessions.list", requestId: task.taskId, harness: task.harness, limit: 500 }, AbortSignal.timeout(20_000))
+      .catch(() => undefined);
+    return found?.sessions.find(s => s.sessionId === task.resume)?.cwd;
   }
 
   answer(msg: ApprovalAnswer) {
