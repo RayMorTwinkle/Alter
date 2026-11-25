@@ -541,7 +541,8 @@ it("persists an authenticated approval mode and reports approval counts", async 
 
 it("publishes heartbeat starts, finishes and schedule changes and serves direct run feedback", async () => {
   let pending: ServerResponse | undefined;
-  const web = await setup(({ messages }, res) => {
+  const web = await setup(({ messages, model }, res) => {
+    if (model === "offline/task") return toolCall(res, "finish", { summary: "报名已开放", refs: [] });
     if (messages.at(-1)?.content.includes("定时巡检")) pending = res;
     else say(res, messages.at(-1)?.role === "user" ? "收到" : "已安排，请查阅通知");
   }, false, undefined, () => Date.parse("2026-12-01T02:00Z"));
@@ -562,6 +563,8 @@ it("publishes heartbeat starts, finishes and schedule changes and serves direct 
   expect(response.status).toBe(202);
   const run: HeartbeatRun = await response.json();
   expect(run).toMatchObject({ status: "ran", finishedAt: null, counts: { chat: 1 } });
+  expect((await web.state()).tasks.find(task => task.taskId === run.explorationTaskId))
+    .toMatchObject({ brief: expect.stringMatching(/^巡检探索 /), context: "fork", permission: "auto" });
   await events.seen(e => e.event === "heartbeat" && e.data.type === "start" && e.data.id === run.id);
   await expect.poll(() => !!pending).toBe(true);
   try {

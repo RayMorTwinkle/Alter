@@ -1,7 +1,7 @@
 import { FeedbackOutcomes } from "./feedback-settings.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { defineDocFamily } from "@earendil-works/pi-durable";
-import { conversationDoc, LiveDoc, ROOT_CONVERSATION_ID, type Cursor, type EntryId, type Tx } from "./runtime.ts";
+import { conversationDoc, LiveDoc, ROOT_CONVERSATION_ID, type Cursor, type Tx } from "./runtime.ts";
 
 export const hour = 3_600_000;
 export const heartbeatKind = "alter.heartbeat";
@@ -9,7 +9,7 @@ const alpha = 0.3;
 type State = {
   adoptionRate: number; inspections: number; userMessages: number[];
   chat?: { id: string; text: string }[]; lastRunId?: string;
-  initialized?: true; lastActivity?: number; lastInspection?: number; firstEntry?: EntryId; fingerprint?: string; deferredFrom?: number;
+  initialized?: true; lastActivity?: number; lastInspection?: number; exploring?: true; fingerprint?: string; deferredFrom?: number;
   history: { at: number; intervalMs: number }[];
 };
 export const Heartbeat = conversationDoc<State>("heartbeat", () => ({
@@ -88,10 +88,11 @@ export async function userActivity(tx: Tx, state: State, at: number) {
   if (last !== undefined && at >= last && at <= last + 2 * hour) await recordAdoption(tx, state.lastRunId ?? last);
 }
 export async function activeHeartbeat(tx: Tx) {
-  const state = await tx.doc(Heartbeat, ROOT_CONVERSATION_ID);
-  const run = (await tx.doc(LiveDoc, ROOT_CONVERSATION_ID)).run;
-  if (run?.first !== undefined && state.firstEntry === run.first && state.lastInspection !== undefined) {
-    return { heartbeatAt: state.lastInspection, ...(state.lastRunId && { heartbeatId: state.lastRunId }) };
+  const first = (await tx.doc(LiveDoc, ROOT_CONVERSATION_ID)).run?.first;
+  const entry = first === undefined ? undefined : await tx.entry(first);
+  const data = entry?.data;
+  if (entry?.kind === heartbeatKind && data && typeof data === "object" && !Array.isArray(data) && typeof data.at === "number") {
+    return { heartbeatAt: data.at, ...(typeof data.id === "string" && { heartbeatId: data.id }) };
   }
 }
 

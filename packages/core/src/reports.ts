@@ -51,7 +51,7 @@ export function registerReports(scheduler: ReturnType<typeof createScheduler>, m
     const tasks = (await tx.doc(Tasks, root)).byId;
     const wakes = (await tx.doc(Wakes, root)).byId;
     const completed = new Map(ledger.slice(state.ledgerCursor)
-      .filter(r => tasks[r.taskId]?.status === "completed").map(r => [r.taskId, r]));
+      .filter(r => tasks[r.taskId]?.status === "completed" && tasks[r.taskId]!.heartbeatReview === undefined).map(r => [r.taskId, r]));
     const results = [...completed.values()];
     if (results.length < 2) return;
     const digests = await reportDigests(tx, state.digestCursor);
