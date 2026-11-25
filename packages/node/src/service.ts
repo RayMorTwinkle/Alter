@@ -2,21 +2,23 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { atomicWrite, windowsUserSid } from "./config.ts";
+import { cliScript as cli } from "./finish.ts";
 
 const label = "org.alter.node";
 const unit = "alter-node.service";
-const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
 const xml = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
-export function taskXml(sid: string, node: string, script: string) {
+// Started through a hidden PowerShell so logging in does not leave a console window that closing would kill.
+export function taskXml(sid: string, node: string, script: string, shell = "powershell.exe") {
+  const literal = (s: string) => "'" + s.replaceAll("'", "''") + "'";
+  const args = `-NoProfile -NonInteractive -WindowStyle Hidden -Command "& ${literal(node)} ${literal(script)} run"`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><UserId>${xml(sid)}</UserId></LogonTrigger></Triggers>
   <Principals><Principal id="user"><UserId>${xml(sid)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
-  <Actions Context="user"><Exec><Command>${xml(node)}</Command><Arguments>"${xml(script)}" run</Arguments></Exec></Actions>
+  <Actions Context="user"><Exec><Command>${xml(shell)}</Command><Arguments>${xml(args)}</Arguments></Exec></Actions>
 </Task>
 `;
 }
@@ -60,7 +62,8 @@ export function configureService(install: boolean) {
     const dir = mkdtempSync(path.join(tmpdir(), "alter-node-task-"));
     const file = path.join(dir, "task.xml");
     try {
-      writeFileSync(file, "\uFEFF" + taskXml(sid, process.execPath, cli), "utf16le");
+      const shell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+      writeFileSync(file, "\uFEFF" + taskXml(sid, process.execPath, cli, shell), "utf16le");
       execFileSync(scheduler, ["/Create", "/TN", task, "/XML", file, "/F"], { windowsHide: true });
     } finally {
       rmSync(dir, { recursive: true, force: true });

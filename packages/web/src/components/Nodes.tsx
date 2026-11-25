@@ -32,14 +32,9 @@ function Pairing({ created, onDone }: { created: CreatedNode; onDone: () => void
           </button>
         ))}
       </div>
-      <h4>{t.steps.install}</h4>
-      <Command text={created.installCommand} />
-      <h4>{t.steps.pair}</h4>
-      <Command text={platform === "windows" ? created.pairCommandPowerShell : created.pairCommand} />
-      <h4>{t.steps.root}</h4>
-      <Command text={created.rootCommand} />
-      <h4>{t.steps.run}</h4>
-      <Command text={created.runCommand} />
+      <p className="settings-hint">{t.installHint[platform]}</p>
+      <Command text={platform === "windows" ? created.installCommandPowerShell : created.installCommandUnix} />
+      <p className="settings-hint">{t.installAfter}</p>
       <div className="form-actions"><button className="btn" onClick={onDone}>{t.done}</button></div>
     </div>
   );

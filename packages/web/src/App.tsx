@@ -68,6 +68,8 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
   const [showUsage, setShowUsage] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [showNodes, setShowNodes] = useState(false);
+  // Until a computer is paired, the header spells the entry out instead of showing a bare icon.
+  const [hasNodes, setHasNodes] = useState(true);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showHeartbeat, setShowHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -83,6 +85,7 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
 
   useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
   // Refetched on every heartbeat SSE event and after the owner acts in the sheet; a 404 means no heartbeat on this server.
+  useEffect(() => { if (!showNodes) api.nodes().then(list => setHasNodes(list.length > 0), () => {}); }, [showNodes]);
   useEffect(() => { api.heartbeat().then(setHeartbeat, () => setHeartbeat(null)); }, [state.heartbeatTick, heartbeatTick]);
 
   // The code rotates every 10 minutes until the owner pairs; a 404 means Feishu is not configured.
@@ -182,7 +185,9 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
           <button className="icon-btn ghost bell" onClick={openNotices} title={t.notifications} aria-label={t.notifications}>
             <Bell />{unread.length > 0 && <span className="badge">{unread.length}</span>}
           </button>
-          <button className="icon-btn ghost" onClick={() => setShowNodes(true)} title={t.nodes.title} aria-label={t.nodes.title}><Desktop /></button>
+          {hasNodes
+            ? <button className="icon-btn ghost" onClick={() => setShowNodes(true)} title={t.nodes.title} aria-label={t.nodes.title}><Desktop /></button>
+            : <button className="text-btn" onClick={() => setShowNodes(true)} title={t.nodes.title}>{t.nodes.connect}</button>}
           {user?.role === "admin" && (
             <button className="icon-btn ghost" onClick={() => setShowAdmin(true)} title={t.gw.admin} aria-label={t.gw.admin}><UsersThree /></button>
           )}

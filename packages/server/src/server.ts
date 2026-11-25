@@ -206,13 +206,12 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (!origin || !["https:", "http:"].includes(origin.protocol)) throw new HttpError(400, "Invalid server origin");
       const created = await app.nodes.create(name.trim());
       if (!created) throw new HttpError(409, "Node name already exists");
-      const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-      const cli = "node packages/node/src/cli.ts";
-      const pair = (literal: (s: string) => string) =>
-        `${cli} pair --server ${literal(origin.origin)} --token ${literal(created.token)} --name ${literal(name.trim())}`;
-      return mutation(201, { ...created, installCommand: "git clone https://github.com/RayMorTwinkle/Alter.git\ncd Alter\npnpm install --frozen-lockfile", pairCommand: pair(quote),
-        pairCommandPowerShell: pair(s => "'" + s.replace(/['‘’‚‛]/g, c => "'" + c) + "'"),
-        rootCommand: cli + ' roots add "项目目录的绝对路径"', runCommand: cli + " run" });
+      const sh = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+      const ps = (s: string) => "'" + s.replace(/['‘’‚‛]/g, c => "'" + c) + "'";
+      const env = { ALTER_SERVER: origin.origin, ALTER_TOKEN: created.token, ALTER_NAME: name.trim() };
+      return mutation(201, { ...created,
+        installCommandPowerShell: Object.entries(env).map(([k, v]) => `$env:${k}=${ps(v)}; `).join("") + `irm ${ps(origin.origin + "/node/install.ps1")} | iex`,
+        installCommandUnix: `curl -fsSL ${sh(origin.origin + "/node/install.sh")} | ` + Object.entries(env).map(([k, v]) => `${k}=${sh(v)} `).join("") + "sh" });
     } else if (method === "DELETE" && /^\/api\/nodes\/[^/]+$/.test(path)) {
       if (!await app.nodes.revoke(path.split("/")[3]!)) throw new HttpError(404, "Unknown node");
     } else if (method === "GET" && path === "/api/service") {

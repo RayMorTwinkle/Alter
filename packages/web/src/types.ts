@@ -8,7 +8,7 @@ export type Node = Pick<Hello, "name" | "roots" | "harnesses"> & {
   id: string; platform: Hello["platform"] | null; online: boolean; createdAt: number; lastSeen: number | null;
 };
 export type CreatedNode = {
-  id: string; token: string; installCommand: string; pairCommand: string; pairCommandPowerShell: string; rootCommand: string; runCommand: string;
+  id: string; token: string; installCommandPowerShell: string; installCommandUnix: string;
 };
 
 export type TimelineItem = {
