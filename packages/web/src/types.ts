@@ -394,5 +394,5 @@ export type GatewayAdminUser = GatewayUser & {
 };
 export type GatewayUserPatch = { disabled?: boolean; role?: GatewayRole; password?: string };
 export type GatewayInvite = {
-  code: string; createdBy: string; createdAt: number; expiresAt: number; usedBy: string | null; usedAt: number | null; revoked: boolean;
+  code: string; createdBy: string; createdAt: number; expiresAt: number; usedBy: string | null; usedAt: number | null; revoked: boolean; uses: number; maxUses: number;
 };

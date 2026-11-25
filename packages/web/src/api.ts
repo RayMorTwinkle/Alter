@@ -30,7 +30,7 @@ export const gatewayApi = {
   updateUser: (id: string, patch: GatewayUserPatch) => request<GatewayAdminUser>(`/gateway/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }),
   restartUser: (id: string) => request<void>(`/gateway/admin/users/${encodeURIComponent(id)}/restart`, { body: {} }),
   invites: () => request<GatewayInvite[]>("/gateway/admin/invites"),
-  createInvite: (days?: number) => request<GatewayInvite>("/gateway/admin/invites", { body: { days } }),
+  createInvite: (days?: number, code?: string, maxUses?: number) => request<GatewayInvite>("/gateway/admin/invites", { body: { days, code, maxUses } }),
   revokeInvite: (code: string) => request<void>(`/gateway/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE", body: {} }),
 };
 
