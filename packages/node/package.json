@@ -1,0 +1,25 @@
+{
+  "name": "@alter/node",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "alter-node": "./src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@alter/node-protocol": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "0.3.263",
+    "@anthropic-ai/sdk": "0.129.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "cross-spawn": "7.0.6",
+    "ws": "8.23.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
+  }
+}
