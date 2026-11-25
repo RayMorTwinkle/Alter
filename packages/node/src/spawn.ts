@@ -72,10 +72,56 @@ function version(file: string, signal?: AbortSignal) {
 
 export type Detected = Harness & { executable?: string };
 export const harnessCommands = { "claude-code": "claude", codex: "codex", opencode: "opencode", dsh: "dsh" } satisfies Record<HarnessId, string>;
-export async function detectHarnesses(env = process.env, signal?: AbortSignal): Promise<Detected[]> {
+
+function existingFile(file: string) {
+  try { return statSync(file).isFile() ? file : undefined; } catch { return undefined; }
+}
+
+// Windows installers record where they put the app; the DeepSeek Harness desktop installer lets
+// users pick any folder, so the uninstall entry is the only reliable pointer.
+async function windowsInstallDirs(displayName: string) {
+  const reg = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+  const run = (args: string[]) => promisify(execFile)(reg, args, { windowsHide: true, timeout: 5000 }).then(r => r.stdout, () => "");
+  const dirs: string[] = [];
+  for (const hive of ["HKCU", "HKLM"]) {
+    const found = await run(["query", hive + "\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", "/s", "/f", displayName, "/d", "/e"]);
+    for (const key of found.split(/\r?\n/).filter(line => /^HKEY_/.test(line))) {
+      const values = await run(["query", key.trim()]);
+      const value = (name: string) => values.match(new RegExp("^\\s*" + name + "\\s+REG_\\w+\\s+(.+)$", "m"))?.[1]?.trim();
+      const location = value("InstallLocation")?.replace(/^"(.*)"$/, "$1");
+      const icon = value("DisplayIcon")?.replace(/,\d+$/, "").replace(/^"(.*)"$/, "$1");
+      const dir = location || (icon && path.win32.dirname(icon));
+      if (dir) dirs.push(dir);
+    }
+  }
+  return dirs;
+}
+
+// Desktop apps that bundle a CLI outside PATH. Most people install DeepSeek Harness as the desktop
+// app, and the npm build of dsh is unreliable on Windows.
+export async function desktopCandidates(id: HarnessId, env = process.env, platform = process.platform) {
+  if (id !== "dsh") return [];
+  if (platform === "win32") {
+    const defaults = [env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, "Programs", "DeepSeek Harness"),
+      env.ProgramFiles && path.win32.join(env.ProgramFiles, "DeepSeek Harness")].filter(Boolean) as string[];
+    return [...await windowsInstallDirs("DeepSeek Harness"), ...defaults]
+      .map(dir => path.win32.join(dir, "resources", "runtime", "cli", "bin", "dsh.cmd"));
+  }
+  if (platform === "darwin") {
+    return ["/Applications", env.HOME && path.posix.join(env.HOME, "Applications")].filter(Boolean)
+      .map(dir => path.posix.join(dir!, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "cli", "bin", "dsh"));
+  }
+  return [];
+}
+
+export async function detectHarnesses(env = process.env, signal?: AbortSignal,
+  paths: Partial<Record<HarnessId, string>> = {}, desktop = desktopCandidates): Promise<Detected[]> {
   const commands = Object.entries(harnessCommands) as [HarnessId, string][];
   return Promise.all(commands.map(async ([id, command]) => {
-    const executable = resolveCommand(command, env);
+    const configured = paths[id];
+    if (configured && !existingFile(configured)) return { id, available: false, detail: "指定的路径不存在：" + configured };
+    let executable = configured || resolveCommand(command, env);
+    for (const file of executable ? [] : await desktop(id, env)) if ((executable = existingFile(file))) break;
     if (!executable) return { id, available: false, detail: "未安装 " + command };
     try {
       const v = await version(executable, signal);

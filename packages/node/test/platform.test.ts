@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { configDir, directory, inside, loadConfig, lock, pair, taskDirectory } from "../src/config.ts";
-import { commandCandidates, detectHarnesses, spawnTree } from "../src/spawn.ts";
+import { commandCandidates, desktopCandidates, detectHarnesses, spawnTree } from "../src/spawn.ts";
 import { Tasks } from "../src/tasks.ts";
 import { workspace } from "./helpers.ts";
 
@@ -29,6 +29,13 @@ test("pair/status/roots through CLI, durable identity, mode and token secrecy", 
   expect(exec("harness", "model", "dsh").trim()).toBe(model);
   exec("harness", "model", "dsh", "--clear");
   expect(loadConfig(dir).models?.dsh).toBeUndefined();
+  const shim = path.join(f.bin, "dsh");
+  writeFileSync(shim, "");
+  exec("harness", "path", "dsh", shim);
+  expect(exec(...pairArgs)).toContain(c.nodeId);
+  expect(loadConfig(dir).paths?.dsh).toBe(shim);
+  exec("harness", "path", "dsh", "--clear");
+  expect(exec("harness", "path", "dsh").trim()).toBe("自动查找");
   expect(exec("status")).not.toContain("fake-token");
   if (process.platform !== "win32") expect(statSync(path.join(dir, "config.json")).mode & 0o777).toBe(0o600);
   else {
@@ -82,7 +89,25 @@ test("probes only the supplied executables, including .cmd shims on Windows", as
   expect(detected).toMatchObject([{ id: "claude-code", available: true, version: "1.2.3" },
     { id: "codex", available: true, version: "1.2.3" }, { id: "opencode", available: true, sessions: true, version: "1.2.3" },
     { id: "dsh", available: true, sessions: true, version: "1.2.3" }]);
-  expect((await detectHarnesses({ PATH: "" })).every(h => !h.available && h.detail)).toBe(true);
+  expect((await detectHarnesses({ PATH: "" }, undefined, {}, async () => [])).every(h => !h.available && h.detail)).toBe(true);
+});
+
+test("falls back to a desktop app's bundled CLI and honours a configured path", async () => {
+  const f = fixture(), dsh = (await detectHarnesses({ PATH: f.bin, PATHEXT: ".CMD" })).find(h => h.id === "dsh")!.executable!;
+  const offPath = async (id: string) => id === "dsh" ? [path.join(f.root, "missing"), dsh] : [];
+  const found = await detectHarnesses({ PATH: "" }, undefined, {}, offPath);
+  expect(found.find(h => h.id === "dsh")).toMatchObject({ available: true, executable: dsh });
+  expect(found.find(h => h.id === "codex")?.available).toBe(false);
+  const configured = await detectHarnesses({ PATH: "" }, undefined, { codex: dsh, opencode: path.join(f.root, "nope") }, async () => []);
+  expect(configured.find(h => h.id === "codex")).toMatchObject({ available: true, executable: dsh });
+  expect(configured.find(h => h.id === "opencode")?.detail).toContain("不存在");
+});
+
+test("desktop candidates point at the bundled DeepSeek Harness CLI", async () => {
+  expect(await desktopCandidates("dsh", { HOME: "/Users/me" }, "darwin")).toEqual([
+    "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+    "/Users/me/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"]);
+  expect(await desktopCandidates("codex", {}, "darwin")).toEqual([]);
 });
 
 test("the harness wrapper preserves argument boundaries and Unicode", async () => {

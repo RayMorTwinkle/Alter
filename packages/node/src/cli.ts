@@ -11,6 +11,7 @@ alter-node run
 alter-node status
 alter-node roots list | add <目录> | remove <目录>
 alter-node harness model <claude-code|codex|opencode|dsh> [<值>|--clear]
+alter-node harness path <claude-code|codex|opencode|dsh> [<可执行文件>|--clear]
 alter-node install-service | uninstall-service`;
 
 async function main([cmd, ...args]: string[]) {
@@ -36,15 +37,17 @@ async function main([cmd, ...args]: string[]) {
   }
   if (cmd === "harness") {
     const [op, id, value] = args;
-    if (op !== "model" || !id || !Object.hasOwn(harnessCommands, id) || args.length > 3 || value?.trim() === "") throw new Error(help);
+    if ((op !== "model" && op !== "path") || !id || !Object.hasOwn(harnessCommands, id) || args.length > 3 || value?.trim() === "") throw new Error(help);
     const harness = id as HarnessId;
     const release = lock(dir, "config");
     try {
       const c = loadConfig(dir);
-      if (value === undefined) { console.log(c.models?.[harness] ?? "使用代理默认模型"); return; }
-      c.models ??= {};
-      if (value === "--clear") delete c.models[harness];
-      else c.models[harness] = value;
+      const field = op === "model" ? "models" : "paths";
+      if (value === undefined) { console.log(c[field]?.[harness] ?? (op === "model" ? "使用代理默认模型" : "自动查找")); return; }
+      const map = c[field] ??= {};
+      if (value === "--clear") delete map[harness];
+      else if (op === "path" && !existsSync(path.resolve(value))) throw new Error("文件不存在：" + value);
+      else map[harness] = op === "path" ? path.resolve(value) : value;
       saveConfig(dir, c);
     } finally { release(); }
     return;
@@ -89,7 +92,7 @@ async function main([cmd, ...args]: string[]) {
   const stop = () => { controller.abort(); void runtime?.stop().catch(() => {}); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   try {
-    const harnesses = await detectHarnesses(process.env, controller.signal);
+    const harnesses = await detectHarnesses(process.env, controller.signal, loadConfig(dir).paths);
     if (controller.signal.aborted) return;
     runtime = runNode(dir, harnesses);
     await runtime.done;
