@@ -1,6 +1,6 @@
 # Alter 节点
 
-在运行编码代理的电脑上启动 `alter-node`。节点主动连接自己的 Alter hub，使用这台电脑上已经登录的代理，在授权的工作目录里接收任务。运行节点的终端需要保持打开。
+在运行编码代理的电脑上启动 `alter-node`。节点主动连接自己的 Alter hub，使用这台电脑上已经登录的代理，在授权的工作目录里接收任务。前台运行时请保持终端打开，也可以设置登录自启。
 
 ## 安装和配对
 
@@ -31,6 +31,18 @@ alter-node roots remove "/Users/me/第二个项目"
 ```
 
 `--root` 可重复。任务省略 cwd 时取第一个 root，未授权任何目录时拒绝启动任务。节点检查目录的真实路径，包含符号链接和 Windows junction。目录修改对下一项任务生效，下次连接时更新 hub 上的目录列表。roots 限制任务的起始目录，代理能访问的文件还取决于原生沙箱、工具权限和操作系统账户。
+
+## 登录自启
+
+配对后运行 `alter-node install-service`，下次登录时启动节点。运行 `alter-node uninstall-service` 可取消后续登录自启。节点自启使用安装时的 Node 和 CLI 绝对路径，移动仓库或切换 Node 安装位置后请重新执行安装命令。
+
+| 平台 | 当前用户的登录配置 |
+| --- | --- |
+| Windows | 任务计划程序中的 `Alter Node <当前用户 SID>`，以该用户的交互令牌运行。代理目录需在登录环境的 PATH 中。 |
+| macOS | `~/Library/LaunchAgents/org.alter.node.plist`，由 launchd 在图形登录时加载。 |
+| Linux | `$XDG_CONFIG_HOME/systemd/user/alter-node.service`，默认在 `~/.config` 下，通过 `systemctl --user enable` 启用。 |
+
+macOS 和 Linux 会把安装时 PATH 中的绝对目录写入登录配置。登录后可用 `alter-node status` 查看连接状态。
 
 ## 代理和审批
 
@@ -64,4 +76,4 @@ Ctrl+C 或 SIGTERM 会停止活跃任务并保存中断报告。POSIX 平台结�
 
 ## 验证范围
 
-`pnpm -C packages/node test` 使用临时配置、本地 WebSocket hub 和假代理进程，经过真实 SDK、stdio 和 MCP 工具调用。macOS 已验证这些路径，包括进程树退出。Windows 的盘符、大小写、UNC 和设备前缀有跨平台测试；Windows ACL、cmd 包装和 taskkill 仍需 Windows 真机验收。Linux 和真实代理账号端到端联调也待验收。
+`pnpm -C packages/node test` 使用临时配置、本地 WebSocket hub 和假代理进程，经过真实 SDK、stdio 和 MCP 工具调用。macOS 已验证这些路径，包括进程树退出。Windows 11 x64 实机已验证 npm 命令探测、中文目录、junction、配置 ACL、进程树退出和报告回传。登录自启和真实账号任务的验证范围见 [Windows 验证记录](../../docs/node/windows.md#本机验证记录)。

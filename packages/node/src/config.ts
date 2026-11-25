@@ -18,12 +18,17 @@ export function configDir(platform = process.platform, home = homedir(), appData
   throw new Error("不支持此操作系统");
 }
 
-function restrictWindowsFile(file: string) {
+export function windowsUserSid() {
   const system = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32");
   const output = execFileSync(path.join(system, "whoami.exe"), ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
   const sid = output.match(/S-1-\d+(?:-\d+)+/i)?.[0];
   if (!sid) throw new Error("无法取得当前用户 SID");
-  execFileSync(path.join(system, "icacls.exe"), [file, "/inheritance:r", "/grant:r", "*" + sid + ":F"], { windowsHide: true });
+  return sid;
+}
+
+function restrictWindowsFile(file: string) {
+  const system = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32");
+  execFileSync(path.join(system, "icacls.exe"), [file, "/inheritance:r", "/grant:r", "*" + windowsUserSid() + ":F"], { windowsHide: true });
 }
 
 export function atomicWrite(file: string, value: string, privateConfig = false) {

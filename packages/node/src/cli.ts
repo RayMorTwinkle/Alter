@@ -3,13 +3,13 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { configDir, directory, inside, loadConfig, lock, pair, saveConfig } from "./config.ts";
-import { runNode } from "./connection.ts";
 import { detectHarnesses } from "./spawn.ts";
 
 const help = `alter-node pair --server <url> --token <token> [--name <名称>] [--root <目录> ...]
 alter-node run
 alter-node status
-alter-node roots list | add <目录> | remove <目录>`;
+alter-node roots list | add <目录> | remove <目录>
+alter-node install-service | uninstall-service`;
 
 async function main([cmd, ...args]: string[]) {
   const dir = configDir();
@@ -50,6 +50,12 @@ async function main([cmd, ...args]: string[]) {
     return;
   }
   if (args.length) throw new Error(help);
+  if (cmd === "install-service" || cmd === "uninstall-service") {
+    const { configureService } = await import("./service.ts");
+    configureService(cmd === "install-service");
+    console.log(cmd === "install-service" ? "已设置登录自启" : "已移除登录自启");
+    return;
+  }
   const c = loadConfig(dir);
   if (cmd === "status") {
     let state = "已停止";
@@ -60,6 +66,7 @@ async function main([cmd, ...args]: string[]) {
     console.log(JSON.stringify({ nodeId: c.nodeId, name: c.name, server: c.server, roots: c.roots, state }, null, 2)); return;
   }
   if (cmd !== "run") throw new Error(help);
+  const { runNode } = await import("./connection.ts");
   const controller = new AbortController();
   let runtime: ReturnType<typeof runNode> | undefined;
   const stop = () => { controller.abort(); void runtime?.stop().catch(() => {}); };

@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { once } from "node:events";
+import { appendFileSync, existsSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { configDir, directory, inside, loadConfig, lock, pair, taskDirectory } from "../src/config.ts";
-import { commandCandidates, detectHarnesses } from "../src/spawn.ts";
+import { commandCandidates, detectHarnesses, spawnTree } from "../src/spawn.ts";
 import { Tasks } from "../src/tasks.ts";
 import { workspace } from "./helpers.ts";
 
@@ -25,6 +26,17 @@ test("pair/status/roots through CLI, durable identity, mode and token secrecy", 
   expect(exec(...pairArgs)).toContain(c.nodeId);
   expect(exec("status")).not.toContain("fake-token");
   if (process.platform !== "win32") expect(statSync(path.join(dir, "config.json")).mode & 0o777).toBe(0o600);
+  else {
+    const inspect = [
+      "$acl = Get-Acl -LiteralPath $env:ALTER_TEST_CONFIG",
+      "$rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])",
+      "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+      "[pscustomobject]@{ protected = $acl.AreAccessRulesProtected; count = $rules.Count; current = $rules[0].IdentityReference.Value -eq $sid; rights = $rules[0].FileSystemRights.ToString(); type = $rules[0].AccessControlType.ToString() } | ConvertTo-Json",
+    ].join("\n");
+    const acl = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", inspect],
+      { encoding: "utf8", env: { ...env, ALTER_TEST_CONFIG: path.join(dir, "config.json") } });
+    expect(JSON.parse(acl)).toEqual({ protected: true, count: 1, current: true, rights: "FullControl", type: "Allow" });
+  }
   expect(exec("roots", "list").trim().split(/\r?\n/)).toEqual(c.roots);
   exec("roots", "remove", f.root); expect(loadConfig(dir).roots).toEqual([directory(f.bin)]);
   exec("roots", "add", f.root); expect(loadConfig(dir).roots).toEqual([directory(f.bin), directory(f.root)]);
@@ -60,10 +72,22 @@ test("realpath rejects symlinks and junctions that escape the root", () => {
 
 test("probes only the supplied executables, including .cmd shims on Windows", async () => {
   const f = fixture();
-  const detected = await detectHarnesses({ PATH: f.bin });
+  if (process.platform === "win32") writeFileSync(path.join(f.bin, "claude.ps1"), "exit 1");
+  const detected = await detectHarnesses({ PATH: f.bin, PATHEXT: ".PS1;.CMD;.EXE" });
   expect(detected).toMatchObject([{ id: "claude-code", available: true, version: "1.2.3" },
     { id: "codex", available: true, version: "1.2.3" }, { id: "opencode", available: false, version: "1.2.3" }]);
   expect((await detectHarnesses({ PATH: "" })).every(h => !h.available && h.detail)).toBe(true);
+});
+
+test("the harness wrapper preserves argument boundaries and Unicode", async () => {
+  const f = fixture();
+  const args = ["中文 目录", '名称="two words"', "A & B", "C:\\有空格 的路径\\", ""];
+  const child = spawnTree(f.harnesses[0]!.executable!, ["--echo-argv", ...args], f.root);
+  let output = "";
+  child.stdout.setEncoding("utf8").on("data", chunk => { output += chunk; });
+  child.stdin.end();
+  expect((await once(child, "close"))[0]).toBe(0);
+  expect(JSON.parse(output)).toEqual(args);
 });
 
 test("journal survives a torn tail, reports an interrupted host once and preserves the terminal ack", () => {

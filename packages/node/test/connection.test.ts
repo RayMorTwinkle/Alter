@@ -10,9 +10,17 @@ import type { ApprovalRequest, HarnessId, Hello, HubMessage, NodeMessage, TaskEn
 import { runNode } from "../src/connection.ts";
 import { configDir, pair } from "../src/config.ts";
 import { workspace, until } from "./helpers.ts";
+import { killTree } from "../src/spawn.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
+function processExited(pid: number) {
+  try { process.kill(pid, 0); return false; }
+  catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ESRCH") return true;
+    throw err;
+  }
+}
 async function setup(timeoutMs?: number, retryMs = 30) {
   const f = workspace();
   const hub = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -123,11 +131,13 @@ test.each(["codex", "claude-code"] as const)("stop kills the %s process tree bef
   f.start("long", "hold", harness);
   await until(() => f.messages.find(m => m.type === "task.event" && m.text === "等待"));
   const pids: number[] = JSON.parse(readFileSync(path.join(f.root, "pids.json"), "utf8"));
+  expect(pids).toHaveLength(process.platform === "win32" ? 3 : 2);
+  for (const pid of pids) { expect(pid).toBeGreaterThan(0); process.kill(pid, 0); }
   f.send({ type: "task.stop", taskId: "long", reason: "手动停止" });
   expect(await f.end("long")).toMatchObject({ status: "interrupted", reportSource: "failure", report: { summary: "手动停止\n等待" } });
   if (process.platform !== "win32") expect(readFileSync(path.join(f.root, "trace.jsonl"), "utf8"))
     .toContain(harness === "codex" ? '"method":"turn/interrupt"' : '"subtype":"interrupt"');
-  await until(() => pids.every(pid => { try { process.kill(pid, 0); return false; } catch { return true; } }) || undefined);
+  await until(() => pids.every(processExited) || undefined);
 });
 
 test("timeout settles exactly once", async () => {
@@ -161,7 +171,7 @@ test("node shutdown interrupts a task and persists the terminal report", async (
   const entries = readFileSync(path.join(f.dir, "outbox/exit.jsonl"), "utf8").trimEnd().split("\n").map(s => JSON.parse(s));
   expect(entries.filter(e => e.type === "task.end")).toMatchObject([{ status: "interrupted", reportSource: "failure" }]);
   const pids: number[] = JSON.parse(readFileSync(path.join(f.root, "pids.json"), "utf8"));
-  await until(() => pids.every(pid => { try { process.kill(pid, 0); return false; } catch { return true; } }) || undefined);
+  await until(() => pids.every(processExited) || undefined);
 });
 
 test("silent hub triggers reconnect and rejection terminates without leaking the supplied reason", async () => {
@@ -185,12 +195,13 @@ test("silent hub triggers reconnect and rejection terminates without leaking the
   }
 });
 
-test.skipIf(process.platform === "win32")("CLI run advertises detected shims, reports live status and drains on SIGTERM", async () => {
+test("CLI run advertises detected shims, reports live status and drains on shutdown", async () => {
   const f = workspace(), cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-  const env = { ...process.env, HOME: f.base, PATH: f.bin + path.delimiter + path.dirname(process.execPath) };
+  const env = { ...process.env, HOME: f.base, USERPROFILE: f.base, APPDATA: f.base,
+    PATH: f.bin + path.delimiter + path.dirname(process.execPath) };
   const hub = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(hub, "listening");
-  const dir = configDir(process.platform, f.base);
+  const dir = configDir(process.platform, f.base, f.base);
   pair(dir, "http://127.0.0.1:" + (hub.address() as AddressInfo).port, "user.fake-secret", "CLI", [f.root]);
   const wire: NodeMessage[] = [];
   hub.on("connection", socket => socket.on("message", raw => {
@@ -207,11 +218,17 @@ test.skipIf(process.platform === "win32")("CLI run advertises detected shims, re
     expect(wire[0]).toMatchObject({ type: "hello", harnesses: [{ available: true, version: "1.2.3" },
       { available: true, version: "1.2.3" }, { available: false, version: "1.2.3" }] });
     expect(JSON.parse(execFileSync(process.execPath, [cli, "status"], { env, encoding: "utf8" })).state).toBe("在线");
-    child.kill("SIGTERM");
-    expect((await exited)[0]).toBe(0);
+    // Windows child.kill is a hard termination. A hub rejection exercises the CLI shutdown path.
+    if (process.platform === "win32") {
+      for (const socket of hub.clients) socket.send(JSON.stringify({ type: "rejected", reason: "test" }));
+    } else child.kill("SIGTERM");
+    expect((await exited)[0]).toBe(process.platform === "win32" ? 1 : 0);
     expect(readFileSync(path.join(dir, "outbox/cli.jsonl"), "utf8")).toContain('"status":"interrupted"');
   } finally {
-    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await exited; }
+    if (child.exitCode === null && child.signalCode === null) {
+      if (process.platform === "win32") await killTree(child); else child.kill("SIGTERM");
+      await exited;
+    }
     for (const s of hub.clients) s.terminate();
     await new Promise<void>(resolve => hub.close(() => resolve())); rmSync(f.base, { recursive: true, force: true });
   }
