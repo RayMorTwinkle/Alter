@@ -199,6 +199,26 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         await activity();
       } finally { await change.apply(); }
       return;
+    } else if (method === "GET" && path === "/api/debug/traces") {
+      const query = new URL(req.url!, "http://localhost").searchParams;
+      const limit = Number(query.get("limit") ?? 50);
+      const before = query.get("before") ?? undefined;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, "Expected limit from 1 to 100");
+      if (before !== undefined && (!/^-?\d+\.[1-9]\d*$/.test(before) || !before.split(".").every(n => Number.isSafeInteger(Number(n))))) {
+        throw new HttpError(400, "Invalid trace cursor");
+      }
+      return json(res, 200, app.traces.list({ conversation: query.get("conversation") ?? "main", trigger: query.get("trigger") ?? undefined, limit, before }));
+    } else if (method === "GET" && path.startsWith("/api/debug/traces/")) {
+      const id = path.slice("/api/debug/traces/".length);
+      const trace = /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) && app.traces.detail(Number(id));
+      if (!trace) throw new HttpError(404, "Trace not found");
+      return json(res, 200, trace);
+    } else if (method === "GET" && path.startsWith("/api/debug/prompts/")) {
+      const prompt = app.traces.prompt(path.slice("/api/debug/prompts/".length));
+      if (!prompt) throw new HttpError(404, "Prompt not found");
+      return json(res, 200, prompt);
+    } else if (method === "GET" && path === "/api/debug/schedule") {
+      return json(res, 200, await app.debugSchedule());
     } else if (method === "GET" && path === "/api/state") {
       return json(res, 200, surface.snapshot());
     } else if (method === "GET" && path === "/api/events") {

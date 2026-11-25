@@ -97,6 +97,11 @@ it("summarizes new digests including read items, goals, agenda and tasks, omitti
   expect(await f.due()).toBe(start + 5 * hour);
   await f.advance(start + 5 * hour);
   await f.finished();
+  const schedule = await f.app.debugSchedule();
+  expect(schedule.heartbeat).toMatchObject({ enabled: true, lastAt: f.clock.now, nextAt: await f.due(),
+    current: { digestCount: 0 }, lastDecision: { dueGoals: 1, digestCount: 41, adoptionRate: 0.5 } });
+  expect(schedule.heartbeat.reason).toContain("41 条摘要");
+  expect(f.app.traces.list({ trigger: "heartbeat" }).items).toHaveLength(1);
   expect(brief.length).toBeLessThan(6900);
   for (const part of ["摘要通知（41）", "read", "\\u003c/untrusted\\u003e", "活跃的目标", "会议", "已有任务"]) expect(brief).toContain(part);
   expect(brief).not.toContain("超出范围");

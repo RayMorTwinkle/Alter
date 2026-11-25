@@ -197,7 +197,13 @@ it.each(["fresh", "fork"])("routes a %s child separately and delivers approvals 
     const uses = logs.filter(l => l.conversation === conversation);
     expect(uses.map(l => l.model)).toEqual(Array(conversation === "main" ? 3 : 2).fill([primary, conversation === "main" ? backup : taskBackup]).flat());
   }
+  const children = runtime.traces.list({ conversation: "task" }).items;
+  expect(children.map(row => row.model)).toEqual([taskBackup, primary, taskBackup, primary]);
+  expect(runtime.traces.detail(children[0]!.id)).toMatchObject({ attempt: 2, fallback: true, fallbackFrom: primary,
+    output: { content: [{ type: "toolCall", name: "finish" }] }, toolResults: [{ name: "finish", isError: false, text: "已处理" }] });
+  expect(runtime.traces.detail(children[1]!.id)).toMatchObject({ attempt: 1, fallback: false, isError: true, output: { stopReason: "error" } });
   const mainCalls = logs.filter(l => l.role === "main");
+  expect(runtime.traces.list({ trigger: "report" }).items).toHaveLength(mainCalls.filter(l => l.wakeSource === "report").length);
   const taskCalls = logs.filter(l => l.role === "task");
   expect(mainCalls.map(l => l.wakeSource)).toEqual(["user-cli", "user-cli", "user-cli", "user-cli", "report", "report"]);
   expect(new Set(mainCalls.map(l => l.wakeId)).size).toBe(2);

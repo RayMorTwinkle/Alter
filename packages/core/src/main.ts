@@ -1,7 +1,7 @@
 import { createFeedback } from "./feedback-service.ts";
 import { FeedbackError } from "./feedback.ts";
 import { feedbackCall } from "./feedback-model.ts";
-import { Preferences } from "./feedback-settings.ts";
+import { feedbackPaused, Preferences } from "./feedback-settings.ts";
 import { borrowForSource, SourceBorrow } from "./source-borrow.ts";
 import { arr, obj, opt, str } from "@earendil-works/pi-schema";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/models";
@@ -27,6 +27,7 @@ import { registerHeartbeat } from "./heartbeat.ts";
 import { Heartbeat, restoreActivity } from "./heartbeat-state.ts";
 import { addNotification, claim, isClaimed, digestSource, staySilentTool, deliverReply, notificationClocks, recordDeliveries, wakeNotifications, type Notification } from "./notifications.ts";
 import { createProactiveBudget } from "./usage.ts";
+import { openDebugTraces, type DebugTraces } from "./debug-traces.ts";
 import { gatewayCapabilities, auxiliaryModels, tagRequest, withUsage } from "./models.ts";
 import { createTriage } from "./triage.ts";
 import { consolidationThreshold, startConsolidation } from "./memory-consolidation.ts";
@@ -97,10 +98,15 @@ export async function openAlter(
           return { wake, inputs, reports: await queuedReports(tx, main.id, wake?.wakeId) };
         }, ctx);
         offeredReports = reports.length ? { generation: api.taskId, reports } : undefined;
-        return tagRequest([...inputs, ...reports.map(r => r.message)], { conversation: "main", ...wake });
+        return tagRequest([...inputs, ...reports.map(r => r.message)], { conversation: "main", conversationId: String(api.conversationId), ...wake });
       }
-      const identity = await api.snapshot(TaskIdentity, api.conversationId, ctx);
-      return tagRequest(messages, { conversation: "task", taskId: identity?.taskId, wakeId: identity?.wakeId,
+      const [identity, live] = await Promise.all([
+        api.snapshot(TaskIdentity, api.conversationId, ctx), api.snapshot(LiveDoc, api.conversationId, ctx),
+      ]);
+      const first = live?.run?.first;
+      const entry = first === undefined ? undefined : await api.entry(first, ctx);
+      return tagRequest(messages, { conversation: "task", conversationId: String(api.conversationId), taskId: identity?.taskId, wakeId: identity?.wakeId,
+        entryId: entry?.id, entryKind: entry?.kind,
         ...(identity?.scheduled && { role: "schedule" }),
         ...(identity?.watchWakeId && { role: "watch", watchWakeId: identity.watchWakeId }) });
     },
@@ -128,7 +134,8 @@ export async function openAlter(
   });
   const time = calendarTime(timeZone);
   const budget = createProactiveBudget(time, proactive.budget, now, dir);
-  const meteredModels = () => withUsage(currentModels(), budget, dir, now);
+  let traces: DebugTraces;
+  const meteredModels = () => withUsage(currentModels(), budget, dir, now, () => traces);
   const reports = registerReports(scheduler, () => main, now, budget, timeZone, proactive.reportTime, () => settings.heartbeat,
     digestSummary(meteredModels, taskModel, now));
   const cancellation = createTaskCancellation(() => harness);
@@ -287,25 +294,29 @@ export async function openAlter(
   let stopSchedules: (() => Promise<void>) | undefined;
   let stopEvents: (() => Promise<void>) | undefined;
   let stopFeedback: (() => Promise<void>) | undefined;
-  let stopConsolidation: (() => Promise<void>) | undefined;
+  let consolidation: Awaited<ReturnType<typeof startConsolidation>>;
   const stops: (() => Promise<void>)[] = [];
   let closing: Promise<void> | undefined;
+  let traceObserver: ReturnType<DebugTraces["observe"]> | undefined;
   async function shutdown() {
-    await stopConsolidation?.();
+    await consolidation?.stop();
     await stopEvents?.();
     await stopSchedules?.();
     await stopFeedback?.();
     const results = await Promise.allSettled(stops.reverse().map(async stop => stop()));
-    await harness.close(context);
+    try { await harness.close(context); }
+    finally { traceObserver?.detach(); traces?.close(); }
     const errors = results.filter(r => r.status === "rejected").map(r => r.reason);
     if (errors.length) throw new AggregateError(errors, "Plugin shutdown failed");
   }
   try {
     stops.push(await memory.start());
+    traces = openDebugTraces(options.dataDir ?? storageDirectories.get(storage) ?? dir, now);
+    traceObserver = traces.observe(harness);
     stopFeedback = await feedback.start();
     stops.push(await observeWakes(harness, main, now));
     for (const plugin of plugins) if (plugin !== memory && plugin.start) stops.push(await plugin.start(host));
-    stopConsolidation = await startConsolidation(main, harness, memory, meteredModels, taskModel, async (since, until) =>
+    consolidation = await startConsolidation(main, harness, memory, meteredModels, taskModel, async (since, until) =>
       (await Promise.all(plugins.flatMap(p => p.ownMessages ? [p.ownMessages(since, until)] : []))).flat(), memoryTurns, timeZone, now, options.setTimer);
     await scheduler.migrate();
     stopSchedules = await schedules.start();
@@ -338,7 +349,16 @@ export async function openAlter(
     return borrowForSource(main, harness, [extension, broker], plugin, tool, args, signal, now());
   };
   const finishPluginRegistration = () => main.commit(tx => restoreLeases(tx, () => false), context);
-  return { harness, main, settings,
+  async function debugSchedule() {
+    const [inspection, report, scheduledTasks, memory, watch, timers] = await Promise.all([
+      heartbeat.debug(), reports.schedule(), schedules.schedule(), consolidation.schedule(), watches.schedule(), scheduler.list(),
+    ]);
+    const checkin = timers.find(item => item.kind === "feedback" && item.status === "scheduled");
+    return { timeZone, heartbeat: inspection, report, scheduledTasks, memory, watch,
+      feedback: { paused: !checkin, nextAt: checkin?.at ?? null, reason: feedbackPaused ? "每周回访功能已暂停。"
+        : "通常每七天回访，连续两批全部跳过后延长到十四天。" } };
+  }
+  return { harness, main, settings, traces, debugSchedule,
     get modelCapabilities() { return gatewayCapabilities.get(currentModels()); },
     feedback, replacePlugin, finishPluginRegistration, borrowSource, demo, memory, scheduler, schedules, watches, capabilities, now, timeZone, events: host, heartbeat, reports,
     notifications: {

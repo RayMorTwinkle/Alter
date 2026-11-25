@@ -115,6 +115,7 @@ export async function startConsolidation(main: Conversation, harness: Harness, m
   let cancel: (() => void) | undefined;
   let running: Promise<void> | undefined;
   let retryAt = 0;
+  let nextAt: number | null = null;
   await main.commit(async tx => {
     await restoreMemoryInbox(tx);
     // A crash can commit the SQLite change before the harness checkpoints the inbox.
@@ -158,9 +159,12 @@ export async function startConsolidation(main: Conversation, harness: Harness, m
   }
   function arm(state: { turns: number; lastUserAt?: number }) {
     cancel?.();
+    nextAt = null;
     if (running || controller.signal.aborted || state.turns < threshold || state.lastUserAt === undefined) return;
     const delay = Math.max(0, state.lastUserAt + idle - now(), retryAt - now());
+    nextAt = now() + delay;
     const fire = () => {
+      nextAt = null;
       running = run().catch(error => {
         if (!controller.signal.aborted) console.warn("Memory consolidation deferred:", error instanceof Error ? error.message : "failed");
         retryAt = now() + idle;
@@ -177,5 +181,13 @@ export async function startConsolidation(main: Conversation, harness: Harness, m
   }
   const sub = await harness.observeDoc(MemoryInbox, main.id, { advance(change) { if (change.kind === "value") arm(change.value); }, end() {} }, context);
   if (sub) arm(sub.value);
-  return async () => { sub?.detach(); controller.abort(); cancel?.(); await running; };
+  return {
+    async schedule() {
+      const turns = (await harness.snapshot(MemoryInbox, main.id, context))?.turns ?? 0;
+      const reason = running ? "正在整理记忆。" : turns < threshold ? `已累计 ${turns} 轮用户消息，满 ${threshold} 轮后等待空闲。`
+        : retryAt > now() ? "上次整理失败，等待重试。" : "已达到轮数阈值，等待用户空闲 30 分钟。";
+      return { turns, threshold, idleMs: idle, nextAt, reason };
+    },
+    async stop() { sub?.detach(); controller.abort(); cancel?.(); await running; },
+  };
 }

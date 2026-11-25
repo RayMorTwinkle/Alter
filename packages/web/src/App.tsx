@@ -1,4 +1,4 @@
-import { Bell, Binoculars, GearSix, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
+import { Bell, Binoculars, Bug, GearSix, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
 import { useCallback, useEffect, useReducer, useState } from "react";
 import { api, connect, Unauthorized } from "./api.ts";
 import { AgendaPanel } from "./components/Agenda.tsx";
@@ -9,6 +9,7 @@ import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx
 import { NotificationsSheet, TaskSheet } from "./components/Sheets.tsx";
 import { clock } from "./format.ts";
 import { StatsSheet } from "./components/Stats.tsx";
+import { DebugSheet } from "./components/Debug.tsx";
 import { SettingsSheet } from "./components/Settings.tsx";
 import { FeedbackSheet } from "./components/Feedback.tsx";
 import { HeartbeatSheet } from "./components/Heartbeat.tsx";
@@ -53,6 +54,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [side, setSide] = useState<Exclude<Tab, "chat">>("tasks");
   const [openTask, setOpenTask] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [showHeartbeat, setShowHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const awaiting = state.extPlugins.find(p => p.pending);
@@ -167,6 +169,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
             <Bell />{unread.length > 0 && <span className="badge">{unread.length}</span>}
           </button>
           <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.stats.title} aria-label={t.stats.title}><ChartBar /></button>
+          <button className="icon-btn ghost" onClick={() => setShowDebug(true)} title={t.debug.title} aria-label={t.debug.title}><Bug /></button>
           <button className="icon-btn ghost" onClick={() => setShowSettings(true)} title={t.settings.title} aria-label={t.settings.title}><GearSix /></button>
           <button className="icon-btn ghost" onClick={onLogout} title={t.logout} aria-label={t.logout}><SignOut /></button>
         </div>
@@ -217,6 +220,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       {showFeedback && <FeedbackSheet view={state.feedback} onClose={() => setShowFeedback(false)} />}
       {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} onToggleLocale={onToggleLocale} extPlugins={state.extPlugins} />}
       {showHeartbeat && <HeartbeatSheet view={heartbeat} onClose={() => setShowHeartbeat(false)} onChange={() => setHeartbeatTick(n => n + 1)} />}
+      {showDebug && <DebugSheet onClose={() => setShowDebug(false)} />}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>
   );

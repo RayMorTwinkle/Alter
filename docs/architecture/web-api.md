@@ -1,4 +1,4 @@
-# Web API 契约（v1.25）
+# Web API 契约（v1.26）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -528,3 +528,22 @@ type AdapterView = Definition & {
 `GET /api/state` 和 `timeline` SSE 共用条目 ID。已发送的最终正文为 `kind: "message"`，客户端按 ID 替换先前的流式草稿。主会话调用 `stay_silent({ reason? })` 后，本轮各段正文显示为 `kind: "assistant", silent: true`，提供原因时带 `reason`。静默回合的派单带 `originSilent: true`，其报告仍由主会话决定是否发送。
 
 `GET /api/stats` 的 `silent` 取代 `unreplied`。空正文不自动计为静默，重复调用按一轮统计，账本停止新增未回复记录。
+
+## v1.26 调试模式（#132）
+
+四个只读接口使用现有登录 Cookie，未登录返回 401，响应带有 `Cache-Control: no-store`。时间戳为 Unix 毫秒。读取调度说明不会触发模型调用或刷新用户活跃时间。
+
+| GET 路径 | 返回值 |
+|---|---|
+| `/api/debug/traces?conversation=main&trigger=heartbeat&limit=50&before=<cursor>` | `{ items: DebugTraceSummary[], nextCursor: string 或 null }`。默认主会话，省略 trigger 包含全部来源。conversation 可取 main、task（所有任务）或具体 conversationId。按调用时间、ID 倒序，下一页原样传回游标并保留筛选条件。limit 范围 1–100，默认 50，非法游标或数量返回 400 |
+| `/api/debug/traces/:id` | `DebugTrace`，包含摘要、完整有序的 messages、systemPrompt、tools、请求 options、output、toolResults、promptHash 和 toolsHash。不存在或已清理返回 404 |
+| `/api/debug/prompts/:hash` | `{ hash, kind, content }`。system 的 content 是提示词字符串，tools 的 content 是工具定义数组，含 name、description、parameters。未知哈希返回 404 |
+| `/api/debug/schedule` | `DebugSchedule`，字段有 timeZone、heartbeat、report、scheduledTasks、memory、watch 和 feedback，各机制提供中文 reason |
+
+**调用与输入。** 每次尝试独占一个数字 ID。摘要含会话类别及 ID、可取得的任务 ID、wakeId、wakeAt、触发条目的 entryId 与 entryKind。trigger 沿用唤醒来源，包括 `user-web`、`user-feishu`、`user-cli`、`heartbeat`、`schedule`、`report-due`（近况报告）、`report`（任务回投）、`watch`、`triage` 和 `approval`。主会话整理上下文的调用标为 `compaction`。网关的 `format=gateway` 保存请求体里的消息顺序与工具参数 schema，包含提供方的格式转换。其他模型或尚未构造出请求体的失败尝试用 `format=transcript` 表示 SDK 的请求上下文。
+
+**结果与用量。** outcome 为 pending、ok 或 error。pending 表示尚未记录终态，进程中断也可留下此状态。output 的 content 保留 SDK 返回的 thinking、text、toolCall 块。工具执行提交后，toolResults 以 toolCallId 关联输出，text 限 20,000 个 UTF-16 码元，超过时 truncated 为 true。模型失败或任一工具执行失败均使 isError 为 true。tokens.input 是未缓存输入，cacheRead 与 cacheWrite 分列，reasoning 是 output 的子集。缺失用量表示模型未报告。latencyMs、firstTokenMs 单位均为毫秒，后者取首次输出流事件。attempt 从 1 开始，切换模型时 fallback 为 true，同模型重试可通过 attempt 和 fallbackFrom 识别。
+
+**调度。** heartbeat.configured 对应设置开关，enabled 表示实际已排程。start、end 使用 timeZone 的本地时间。lastAt 是上次实际巡检时间，nextAt 是调度器选定的下次时间。intervalMs 是当前采用的间隔。lastDecision 保存选定间隔时的输入、demand、factor、rawMs、上下限与 clamped，首次或旧版记录可为 null。current 用最新信号试算，摘要被消费、收到新消息或更新反馈后，两者可能不同。report 返回间隔天数、检查时间、最近七天活跃天数、暂停状态、上次检查和下次时间。scheduledTasks 包含各项的触发规则，memory 给出累计轮数、阈值和空闲等待，watch 给出补拉与合批周期及活动盯梢的截止时间，feedback 给出回访状态。nextAt 为 null 表示当前没有下一次排程。
+
+前端调用 `api.debugTraces(query?)`、`api.debugTrace(id)`、`api.debugPrompt(hash)` 和 `api.debugSchedule()`。调试数据随本机保留策略清理，默认保留 14 天。见 [ADR-0024](../adr/0024-debug-traces.md)。

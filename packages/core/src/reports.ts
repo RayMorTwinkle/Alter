@@ -4,7 +4,7 @@ import type { DigestSummary } from "./digest-summary.ts";
 import { Interaction, Preferences } from "./feedback-settings.ts";
 import { dataLine, reportDigests } from "./notifications.ts";
 import { context, ROOT_CONVERSATION_ID as root, type Conversation, type Cursor, type Harness, type Tx } from "./runtime.ts";
-import type { createScheduler } from "./scheduler.ts";
+import { Schedules, type createScheduler } from "./scheduler.ts";
 import { Reports } from "./report-state.ts";
 import { Ledger, Tasks } from "./state.ts";
 import { submitWake } from "./timeline.ts";
@@ -128,5 +128,14 @@ export function registerReports(scheduler: ReturnType<typeof createScheduler>, m
     const prefs = await harness.observeDoc(Preferences, root, { advance: changed, end() {} }, context);
     return async () => { activity?.detach(); prefs?.detach(); await pending; };
   }
-  return { start, sync };
+  const schedule = () => main().commit(async tx => {
+    const state = await tx.doc(Reports, root);
+    const view = state.view!;
+    const cancelled = (await tx.doc(Schedules, root)).byId["adaptive-report"]?.item.status === "cancelled";
+    const reason = cancelled ? "近况报告计划已取消。" : view.paused ? "连续七天没有用户互动，近况报告暂停。"
+      : view.nextAt === null ? "下一次检查前将达到七天未互动的暂停条件。"
+      : `近七天活跃 ${view.activeDays} 天，每 ${view.intervalDays} 天在 ${view.time} 检查，累计至少两个新完成的任务才发报告。`;
+    return { ...view, paused: cancelled || view.paused, nextAt: cancelled ? null : view.nextAt, lastCheck: state.lastCheck ?? null, reason };
+  }, context);
+  return { start, sync, schedule };
 }

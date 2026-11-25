@@ -5,6 +5,7 @@ import { withClientIdentity } from "@earendil-works/pi-ai/utils/identity";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { clampThinkingLevel, getSupportedThinkingLevels, createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
+import type { DebugTraces } from "./debug-traces.ts";
 import { gatewayCompat, openModelCapabilities } from "./model-capabilities.ts";
 import type { gatewayConfig } from "./config.ts";
 import { appendUsage, budgetExhausted, splitUsage, type ProactiveBudget, type UsageLine } from "./usage.ts";
@@ -15,15 +16,15 @@ export const gatewayCapabilities = new WeakMap<Models, ReturnType<typeof openMod
 const completions = openAICompletionsApi();
 
 // The gateway reports each fallback attempt. Other providers expose one terminal usage record.
-const attemptContext = new AsyncLocalStorage<{ record(line: UsageLine): Promise<void>; now(): number }>();
-type Attribution = Pick<UsageLine, "watchWakeId" | "wakeId" | "wakeAt" | "wakeSource" | "taskId" | "role"> & { conversation: Conversation; thinking?: "low" | "medium" | "high" | "max" };
+const attemptContext = new AsyncLocalStorage<{ record(line: UsageLine, message?: AssistantMessage): Promise<void>; now(): number }>();
+type Attribution = Pick<UsageLine, "watchWakeId" | "wakeId" | "wakeAt" | "wakeSource" | "taskId" | "role"> & { conversation: Conversation; conversationId: string; entryId?: number; entryKind?: string; thinking?: "low" | "medium" | "high" | "max" };
 const requests = new WeakMap<Message, Attribution>();
 
 // pi-durable copies the message array before streamSimple. Give this request a private identity
 // without changing its contents, the provider session/cache key, or provider-facing metadata.
 export function tagRequest(messages: readonly Message[], attribution: Attribution) {
   const last = messages.at(-1);
-  if (!last) return;
+  if (!last) return { messages: [] };
   const tagged = { ...last };
   requests.set(tagged, attribution);
   return { messages: [...messages.slice(0, -1), tagged] };
@@ -38,8 +39,9 @@ function calledTools(message: AssistantMessage) {
   return message.content.flatMap(part => part.type === "toolCall" ? [part.name] : []);
 }
 
-export function withUsage(models: Models, budget: ProactiveBudget, dir: string | undefined, now: () => number): Models {
+export function withUsage(models: Models, budget: ProactiveBudget, dir: string | undefined, now: () => number, debug?: () => DebugTraces): Models {
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
+    const traces = debug?.();
     const last = context.messages.at(-1);
     const attribution = last && requests.get(last);
     const heartbeat = attribution?.wakeSource === "heartbeat" || options?.sessionId?.startsWith("heartbeat-");
@@ -51,7 +53,7 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
       const level = clampThinkingLevel(model, attribution.thinking);
       options = { ...options, reasoning: level === "off" ? undefined : level };
     }
-    if (!proactive && !(attribution && dir)) return models.streamSimple(model, context, options);
+    if (!proactive && !(attribution && (dir || traces))) return models.streamSimple(model, context, options);
     async function* run() {
       const permit = proactive ? await budget.acquire(options?.signal) : undefined;
       if (proactive && !permit) throw new Error(budgetExhausted);
@@ -62,32 +64,51 @@ export function withUsage(models: Models, budget: ProactiveBudget, dir: string |
         let recorded = false;
         const started = performance.now();
         const elapsed = () => Math.round(performance.now() - started);
-        async function record(line: UsageLine) {
+        const { conversationId, entryId, entryKind, ...owner }: Partial<Attribution> = attribution ?? {};
+        const trace = conversationId && traces ? traces.request({ conversation, conversationId, entryKind, entryId, taskId: owner.taskId,
+          wakeId: owner.wakeId, wakeAt: owner.wakeAt, trigger: owner.wakeSource ?? proactiveRole ?? entryKind?.replace(/^alter\./, "") ?? conversation },
+          context, options?.reasoning) : undefined;
+        if (trace && gatewayCapabilities.has(models)) {
+          const onPayload = options?.onPayload;
+          options = { ...options, onPayload: async (body, target) => {
+            const replaced = await onPayload?.(body, target);
+            trace.capture(target.id, replaced ?? body);
+            return replaced;
+          } };
+        } else trace?.capture(model.id);
+        async function record(line: UsageLine, message?: AssistantMessage) {
           recorded = true;
-          const row = { ...attribution, ...line, conversation, role: proactiveRole ?? line.role ?? conversation,
+          trace?.complete(line, message);
+          const row = { ...owner, ...line, conversation, role: proactiveRole ?? line.role ?? conversation,
             thinking: options?.reasoning ?? "off", ...(proactive && { proactive: true as const }) };
           if (permit) await permit.record(row);
           else if (dir) await appendUsage(dir, row);
         }
-        const stream = attemptContext.run({ record, now: permit ? () => permit.at : now }, () => models.streamSimple(model, context, options));
-        let firstTokenMs: number | undefined;
-        for await (const event of stream) {
-          if (event.type === "done" || event.type === "error") {
-            if (!recorded) {
-              const msg = event.type === "done" ? event.message : event.error;
-              await record({ at, model: msg.model, attempt: 1, outcome: event.type === "done" ? "ok" : "error",
-                ...(event.type === "error" && { errorKind: event.reason }), latencyMs: elapsed(), firstTokenMs,
-                ...reported(msg), tools: calledTools(msg), ...(!proactive && { statsOnly: true }) });
-            }
-          } else if (event.type !== "start") firstTokenMs ??= elapsed();
-          yield event;
+        try {
+          const stream = attemptContext.run({ record, now: permit ? () => permit.at : now }, () => models.streamSimple(model, context, options));
+          let firstTokenMs: number | undefined;
+          for await (const event of stream) {
+            if (event.type === "done" || event.type === "error") {
+              if (!recorded) {
+                const msg = event.type === "done" ? event.message : event.error;
+                await record({ at, model: msg.model, attempt: 1, outcome: event.type === "done" ? "ok" : "error",
+                  ...(event.type === "error" && { errorKind: event.reason }), latencyMs: elapsed(), firstTokenMs,
+                  ...reported(msg), tools: calledTools(msg), ...(!proactive && { statsOnly: true }) }, msg);
+              }
+            } else if (event.type !== "start") firstTokenMs ??= elapsed();
+            yield event;
+          }
+        } catch (error) {
+          if (!recorded) trace?.complete({ at, model: model.id, attempt: 1, outcome: "error", latencyMs: elapsed() },
+            undefined, error instanceof Error ? error.message : String(error));
+          throw error;
         }
       } finally { permit?.release(); }
     }
     return lazyStream(model, async () => run(), undefined, options?.signal);
   };
   return { ...withClientIdentity(models, {}), streamSimple,
-    completeSimple: (model, context, options) => options?.sessionId?.startsWith("proactive-")
+    completeSimple: (model, context, options) => options?.sessionId?.startsWith("proactive-") || requests.has(context.messages.at(-1)!)
       ? streamSimple(model, context, options).result() : models.completeSimple(model, context, options) };
 }
 
@@ -208,7 +229,7 @@ function chainStreams(config: Config, conversation: Conversation, catalog: Map<s
               fallback: index > 0 && id !== chain[index - 1], retry: index > 0 && id === chain[index - 1] ? 1 : 0,
               outcome: kind ? "error" : "ok", errorKind: kind, latencyMs: elapsed(), firstTokenMs,
               ...reported(message), tools: calledTools(message),
-            });
+            }, message);
           }
           if (kind && retryable.has(kind) && firstTokenMs === undefined && index + 1 < chain.length) break;
           if (event.type === "done" && firstTokenMs === undefined && start) yield start;

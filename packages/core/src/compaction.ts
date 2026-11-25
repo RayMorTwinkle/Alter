@@ -3,6 +3,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import { CompactionTask, hook, type CompactionHooks, type ModelRef } from "@earendil-works/pi-durable";
 import { arr, compile, obj, opt, str } from "@earendil-works/pi-schema";
 import { entryType, nonempty } from "./memory-store.ts";
+import { tagRequest } from "./models.ts";
 import { ownUserMessage } from "./memory-inbox.ts";
 import type { createMemory } from "./memory.ts";
 
@@ -47,7 +48,9 @@ export function mainCompaction(memory: ReturnType<typeof createMemory>, ref: Mod
     const model = client.getModel(ref.provider, ref.modelId);
     if (!model) throw new Error("Unknown main compaction model");
     const ask = async (systemPrompt: string, content: string) => {
-      const answer = await client.completeSimple(model, { systemPrompt, messages: [{ role: "user", content, timestamp: api.now() }] },
+      const request = tagRequest([{ role: "user", content, timestamp: api.now() }],
+        { conversation: "main", conversationId: String(api.conversationId), wakeSource: "compaction" });
+      const answer = await client.completeSimple(model, { systemPrompt, ...request },
         { signal: ctx.abortSignal, cacheRetention: "none", reasoning: "low", maxRetries: 0 });
       ctx.abortSignal?.throwIfAborted();
       const text = contentText(answer.content).trim();

@@ -1,4 +1,4 @@
-// Mirrors docs/architecture/web-api.md (v1.25).
+// Mirrors docs/architecture/web-api.md (v1.26).
 
 export type TimelineItem = {
   id: string;
@@ -330,3 +330,38 @@ export type FeedbackStats = FeedbackCounts & {
 
 export type { AdapterConfig, AdapterCreate, AdapterEffect, AdapterKind, AdapterPatch, AdapterStatus, AdapterTool, AdapterToolView, AdapterView,
   CliConfig, HttpConfig, McpConfig } from "../../server/src/adapters/types.ts";
+
+export type DebugTraceQuery = { conversation?: string; trigger?: string; before?: string; limit?: number };
+export type DebugTraceSummary = {
+  id: number; at: number; conversation: "main" | "task"; conversationId: string; trigger: string;
+  entryId?: number; entryKind?: string; taskId?: string; wakeId?: string; wakeAt?: number; model: string; attempt: number; fallback: boolean; fallbackFrom?: string;
+  tokens: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; reasoning?: number };
+  outcome: "pending" | "ok" | "error"; latencyMs: number | null; firstTokenMs?: number; toolCallCount: number; isError: boolean; error?: string;
+};
+export type DebugTracePage = { items: DebugTraceSummary[]; nextCursor: string | null };
+export type DebugTool = { name: string; description: string; parameters: Record<string, unknown>; strict?: boolean };
+export type DebugPrompt = { hash: string; kind: "system"; content: string } | { hash: string; kind: "tools"; content: DebugTool[] };
+export type DebugOutputPart =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; redacted?: boolean; thinkingSignature?: string }
+  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; argumentsError?: string };
+export type DebugTrace = DebugTraceSummary & {
+  format: "gateway" | "transcript"; promptHash: string; toolsHash: string; systemPrompt: string; tools: DebugTool[];
+  messages: ({ role: string; content?: unknown } & Record<string, unknown>)[]; options: Record<string, unknown>;
+  output: ({ role: "assistant"; content: DebugOutputPart[]; stopReason: string; errorMessage?: string } & Record<string, unknown>) | null;
+  toolResults: { toolCallId: string; name: string; at: number; text: string; isError: boolean; truncated: boolean }[];
+};
+export type DebugInterval = {
+  adoptionRate: number; dueGoals: number; digestCount: number; userMessages: number; bias: number; demand: number;
+  factor: number; baseMs: number; rawMs: number; minMs: number; maxMs: number; clamped: "min" | "max" | null; intervalMs: number; reason: string;
+};
+export type DebugSchedule = {
+  timeZone: string;
+  heartbeat: HeartbeatSettings & { configured: boolean; lastAt: number | null; nextAt: number | null; intervalMs: number;
+    lastDecision: DebugInterval | null; current: DebugInterval; reason: string };
+  report: ReportView & { lastCheck: number | null; reason: string };
+  scheduledTasks: (Pick<ScheduledTask, "id" | "brief" | "type" | "trigger" | "paused" | "nextAt"> & { reason: string })[];
+  memory: { turns: number; threshold: number; idleMs: number; nextAt: number | null; reason: string };
+  watch: { pollMs: number; batchMs: number; active: { id: string; until: number; nextPollAt: number | null; batchDueAt: number | null }[]; reason: string };
+  feedback: { paused: boolean; nextAt: number | null; reason: string };
+};

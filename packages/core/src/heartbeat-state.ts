@@ -10,6 +10,8 @@ type State = {
   adoptionRate: number; inspections: number; userMessages: number[];
   chat?: { id: string; text: string }[]; lastRunId?: string;
   initialized?: true; lastActivity?: number; lastInspection?: number; exploring?: true; fingerprint?: string; deferredFrom?: number;
+  lastTick?: { at: number; nextAt: number; skipReason: import("./heartbeat-runs.ts").HeartbeatReason | null };
+  lastDecision?: ReturnType<typeof import("./heartbeat.ts").intervalDecision>;
   history: { at: number; intervalMs: number }[];
 };
 export const Heartbeat = conversationDoc<State>("heartbeat", () => ({
