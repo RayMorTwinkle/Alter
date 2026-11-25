@@ -1,3 +1,4 @@
+import { attachNodeSockets } from "./node-sockets.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -201,6 +202,24 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (token) sessions.delete(token);
       for (const [client, owner] of clients) if (owner === token) { clients.delete(client); client.end(); }
       res.setHeader("Set-Cookie", `${cookieName}=; Max-Age=0; ${cookieOptions}`);
+    } else if (method === "GET" && path === "/api/nodes") {
+      return json(res, 200, await app.nodes.all());
+    } else if (method === "POST" && path === "/api/nodes") {
+      const { name } = await body(req);
+      if (typeof name !== "string" || !name.trim() || name.length > 128 || /[\x00-\x1f\x7f]/.test(name)) throw new HttpError(400, "Invalid node name");
+      const origin = URL.parse(req.headers.origin ?? `http://${req.headers.host}`);
+      if (!origin || !["https:", "http:"].includes(origin.protocol)) throw new HttpError(400, "Invalid server origin");
+      const created = await app.nodes.create(name.trim());
+      if (!created) throw new HttpError(409, "Node name already exists");
+      const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+      const cli = "node packages/node/src/cli.ts";
+      const pair = (literal: (s: string) => string) =>
+        `${cli} pair --server ${literal(origin.origin)} --token ${literal(created.token)} --name ${literal(name.trim())}`;
+      return mutation(201, { ...created, installCommand: "pnpm install --frozen-lockfile", pairCommand: pair(quote),
+        pairCommandPowerShell: pair(s => "'" + s.replace(/['‘’‚‛]/g, c => "'" + c) + "'"),
+        rootCommand: cli + ' roots add "项目目录的绝对路径"', runCommand: cli + " run" });
+    } else if (method === "DELETE" && /^\/api\/nodes\/[^/]+$/.test(path)) {
+      if (!await app.nodes.revoke(path.split("/")[3]!)) throw new HttpError(404, "Unknown node");
     } else if (method === "GET" && path === "/api/service") {
       return json(res, 200, service.state());
     } else if (method === "PUT" && path === "/api/service") {
@@ -449,6 +468,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       else json(res, 500, { error: "Internal server error" });
     });
   });
+  const closeNodes = attachNodeSockets(server, app.nodes);
   function dispose() {
     service.close();
     clearInterval(ping);
@@ -461,9 +481,10 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     for (const res of clients.keys()) res.end();
     clients.clear();
   }
-  server.once("close", dispose);
+  server.once("close", () => { dispose(); void closeNodes(); });
   return { server, async close() {
     dispose();
+    await closeNodes();
     await deliveries;
     if (server.listening) await new Promise<void>((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());

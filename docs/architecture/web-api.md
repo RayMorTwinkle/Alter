@@ -1,6 +1,6 @@
-# Web API 契约（v1.27）
+# Web API 契约（v1.28）
 
-Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
+Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。HTTP 服务使用 `node:http`，网页推送用 SSE，节点连接使用 WebSocket（`ws`）。
 
 ## 运行
 
@@ -14,6 +14,7 @@ Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口
 | `ALTER_APPROVAL_TIMEOUT_MINUTES` | `1440` | 最终到期时间，修改只影响新请求 |
 | `ALTER_APPROVAL_DEFAULT_MS` | `60000` | 任务审批的默认等待时间（毫秒） |
 | `ALTER_APPROVAL_MODEL` | `on` | 首次启动使用的审批模式，已保存的 settings.json 优先 |
+| `ALTER_USER_ID` | `admin` | 实例所属用户，也是节点 token 的路由前缀 |
 | `ALTER_WEB_PASSWORD` | 无（必填） | 单用户登录密码 |
 | `ALTER_FEISHU_APP_ID` / `ALTER_FEISHU_APP_SECRET` | 无 | 飞书凭证的环境变量后备值 |
 | `ALTER_FEISHU_REDIRECT_URI` | 当前 Web 访问地址下的 `/api/feishu/oauth/callback` | 与开放平台登记值完全一致 |
@@ -64,10 +65,14 @@ type TimelineItem = {
   isError?: boolean;          // tool：结果返回后写入
   silent?: true;              // assistant：本回合已静默
   reason?: string;            // stay_silent 提供的原因
+  runner?: NodeRunner;
+  status?: "queued";          // 离线派发的工具结果
   taskId?: string;            // report / permission 关联的任务，或 dispatch_task 成功返回的任务 ID
   source?: string;            // v1.4：user 项带来源；web / feishu，旧记录返回 web
   model?: string;             // assistant / thinking / message：产生该条目的模型
 };
+
+type NodeRunner = { node: string; harness: "claude-code" | "codex" | "opencode" }; // node 为配对记录 ID
 
 type Task = {
   taskId: string;
@@ -80,7 +85,9 @@ type Task = {
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permission: "restricted" | "auto" | "full";
   allow: string[];            // 兼容旧客户端，恒为空数组
-  status: "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "interrupted";
+  runner?: NodeRunner; cwd?: string; nativeSessionId?: string;
+  reportSource?: "finish" | "last_message" | "failure";
   failure?: string;           // 取消任务在此接口返回 status="failed"、failure="cancelled"
   conversationId: string;
   createdAt: number;
@@ -154,7 +161,7 @@ type ScheduledTask = {
 type LedgerEntry = { taskId: string; summary: string; refs: { kind: string; ref: string }[]; at: number };
 
 type TranscriptItem =
-  | { kind: "user" | "assistant"; text: string; at: number }
+  | { kind: "user" | "assistant" | "thinking" | "status"; text: string; at: number }
   | { kind: "tool_call"; tool: string; arguments: unknown; at: number }
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 ```
@@ -565,3 +572,20 @@ type AdapterView = Definition & {
 `auth: "token"` 要求提供非空 `token`，服务端将其存为该转接器的加密密钥 `GITHUB_TOKEN`。视图中的 Authorization 为 `Bearer {{secret:GITHUB_TOKEN}}`。`auth: "gh"` 使用 `Bearer {{gh-token}}`。服务端每次连接、刷新或重连时按需执行一次 `gh auth token`，超时 10 秒，凭据只保存在本次连接的内存中。获取失败时返回已创建的转接器，`status.state` 为 `error`，`status.detail` 为「本机 gh 未登录或不可用，请运行 gh auth login」。
 
 手动配置也可在固定参数、环境变量、请求头和 URL 中使用 `{{gh-token}}`。MCP 的 `config.readOnly` 只设置默认工具效果，显式的逐工具 `effects` 覆写始终优先。GitHub 只读预设通过所选远程端点限制工具集。
+
+## v1.28 我的电脑（#149）
+
+节点管理沿用网页鉴权，响应禁止缓存。时间戳为 Unix 毫秒。
+
+| 方法 | 路径 | 请求与响应 |
+|---|---|---|
+| GET | `/api/nodes` | 配对记录数组，每项含 `id, name, createdAt, online, platform, harnesses, roots, lastSeen`。首次连接前平台及最近在线时间为 `null`，两个列表为空。代理项沿用节点协议的 `Harness`，用 `available` 判断可用性。 |
+| POST | `/api/nodes` | 提交 `{name}`，成功返回 201 和 `{id, token, installCommand, pairCommand, pairCommandPowerShell, rootCommand, runCommand}`。名称重复返回 409。token 只在这次响应中提供。 |
+| DELETE | `/api/nodes/:id` | 204，立即吊销 token 并关闭连接，未结束的任务生成失败报告。未知 ID 返回 404。 |
+| WS | `/api/node/connect` | 使用 `Authorization: Bearer <userId>.<secret>`，校验通过后通过 hello / welcome 建立会话。无效 token 收到 rejected 后断开。 |
+
+安装、配对和启动命令在含节点程序的 Alter 源码根目录执行，使用 Node 24 和仓库的 pnpm。POSIX shell 使用 `pairCommand`，PowerShell 使用 `pairCommandPowerShell`。首次配对后，将 `rootCommand` 的路径占位符替换为允许代理操作的项目目录，执行后再运行 `runCommand`。网页创建配对时使用浏览器的 Origin 生成服务地址。hub 在实例的持久化数据库里保存 secret 的 SHA-256 哈希，首次 hello 绑定节点本地的设备 ID。节点管理接口和任务 runner 使用稳定的配对记录 ID，在首次上线前也可以排队。
+
+离线派单在 `/api/state`、SSE tasks 和 `task_status` 中显示为 `queued`。节点任务的 transcript 包含正文、思考、工具调用、工具结果及状态。报告沿用 Ledger 和主会话的报告唤醒；`interrupted` 表示中断。节点审批能力名为 `node:<harness>`。断线期间仍可处理审批，节点重连后收到已有决定。
+
+WebSocket 消息结构以 `packages/node-protocol/src/index.ts` 为准。任务开始消息只携带 brief 和执行参数，需要节点读取的背景须写入 brief；接续任务使用上次的原生会话 ID。

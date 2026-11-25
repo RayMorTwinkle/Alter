@@ -47,6 +47,8 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
   const detach = () => subscriptions.forEach(sub => sub.detach());
 
   function add(item: TimelineItem, publish = true) {
+    const runner = item.taskId && records[item.taskId]?.runner;
+    if (runner) item = { ...item, runner };
     const timeline = state.timeline;
     const index = timeline.findIndex(old => old.id === item.id);
     if (index >= 0) {
@@ -115,7 +117,6 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
       cursor = page.next;
     } while (cursor && recent.length < limit);
     if (segment.length) readTurn();
-    for (const item of recent.reverse()) add(item, false);
     await watch(Tasks, value => {
       records = value.byId;
       updateTasks();
@@ -125,6 +126,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
         emit({ event: "watches", data: watches });
       }
     });
+    for (const item of recent.reverse()) add(item, false);
     // A parked auto action is user-visible even after the request is answered. The
     // append-only audit supplies its original time and a stable ID after restart.
     let auditLength = 0;

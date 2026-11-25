@@ -1,4 +1,4 @@
-import type { DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
+import type { Node, CreatedNode, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
 import type { Action } from "./store.ts";
 import type { AdapterCreate, AdapterPatch, AdapterPreset, AdapterPresetCreate, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
@@ -21,6 +21,9 @@ async function request<T>(path: string, init?: { method?: string; body?: unknown
 }
 
 export const api = {
+  nodes: () => request<Node[]>("/api/nodes"),
+  createNode: (name: string) => request<CreatedNode>("/api/nodes", { body: { name } }),
+  deleteNode: (id: string) => request<void>(`/api/nodes/${encodeURIComponent(id)}`, { method: "DELETE", body: {} }),
   debugTraces: (query: DebugTraceQuery = {}) => {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));

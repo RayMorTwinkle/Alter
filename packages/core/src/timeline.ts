@@ -1,3 +1,4 @@
+import type { NodeRunner } from "./node-state.ts";
 import { isInlineTaskReport } from "./wake.ts";
 import { interacted } from "./feedback-settings.ts";
 import { randomUUID } from "node:crypto";
@@ -20,11 +21,13 @@ export type TimelineItem = {
   silent?: true;
   reason?: string;
   taskId?: string;
+  runner?: NodeRunner;
+  status?: "queued";
   model?: string;
   source?: string;
 };
 export type TranscriptItem =
-  | { kind: "user" | "assistant"; text: string; at: number }
+  | { kind: "user" | "assistant" | "thinking" | "status"; text: string; at: number }
   | { kind: "tool_call"; tool: string; arguments: unknown; at: number }
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
@@ -180,7 +183,7 @@ function inputItem(entry: InputEntry | undefined, text: string, id: string, at: 
       id: `schedule-${data.scheduleId}-${data.dueAt}`, at: typeof data.at === "number" ? data.at : at };
   }
   if (entry?.kind === "alter.task-report" && typeof data?.taskId === "string" && typeof data.at === "number") {
-    return { kind: "report", id: `report-${data.taskId}`, taskId: data.taskId, text: surfaceText(entry, text), at: data.at };
+    return { kind: "report", id: `report-${data.taskId}`, taskId: data.taskId, ...(data.runner && { runner: data.runner as NodeRunner }), text: surfaceText(entry, text), at: data.at };
   }
   if (entry?.kind === inputKind || entry?.kind === "alter.cli-input") {
     const source = typeof data?.source === "string" ? data.source : "web";
@@ -250,8 +253,8 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
       if (!call || call.item.tool !== msg.toolName) continue;
       turn.calls?.delete(msg.toolCallId);
       const result = !msg.isError && msg.toolName === "dispatch_task" ? contentText(msg.content) : "";
-      const taskId = /^task-\d+$/.test(result) ? result : undefined;
-      items.push({ ...call.item, isError: msg.isError, ...(taskId && { taskId }) });
+      const taskId = /^(task-\d+)(?: 已排队，电脑上线后开始)?$/.exec(result)?.[1];
+      items.push({ ...call.item, isError: msg.isError, ...(taskId && { taskId }), ...(taskId && result.endsWith("已排队，电脑上线后开始") && { status: "queued" }) });
       if (!msg.isError && call.message !== undefined) {
         items.push({ id: `${call.item.id}-message`, kind: "message", text: call.message, at: Math.max(at, call.item.at) });
       }
@@ -304,6 +307,7 @@ export async function readTranscript(conversation: Conversation): Promise<Transc
   do {
     const page = await conversation.entries({ order: "ascending" }, 200, cursor, context);
     for (const entry of page.items) {
+      if (entry.kind === "alter.node-event") items.push(entry.data as TranscriptItem);
       for (const msg of entry.model ?? []) {
         const at = msg.timestamp;
         if (msg.role === "system") continue;

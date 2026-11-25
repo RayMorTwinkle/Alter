@@ -1,3 +1,5 @@
+import type { ApprovalAnswer, ApprovalRequest } from "@alter/node-protocol";
+import { NodeRuns } from "./node-state.ts";
 import { activeWake } from "./wake.ts";
 import { activeLease, holdsLease, LeaseHistory, Leases } from "./leases.ts";
 import { interacted } from "./feedback-settings.ts";
@@ -7,7 +9,7 @@ import { AllowedCapabilities, type ApprovalMode } from "./settings.ts";
 import { normalizeEffect, permitsBorrow, type CapabilityRegistry, type Effect, type ToolAction } from "./capabilities.ts";
 import {
   context, conversationDoc, defineExtension, defineSignal, defineTask, hook, reply, ToolTask,
-  type Conversation, type ConversationId, type TaskId, type Tx,
+  type Context, type ToolExecutionApi, type Conversation, type ConversationId, type TaskId, type Tx,
 } from "./runtime.ts";
 import { recentUserText } from "./timeline.ts";
 import { Ledger, ScopeDoc, TaskIdentity, Tasks, type PermissionItem, type TaskRecord } from "./state.ts";
@@ -76,6 +78,15 @@ async function rememberOnce(tx: Tx, caller: ConversationId, tool: string, clicke
 async function currentCaller(tx: Tx, main: Conversation, taskId: string, task?: TaskRecord) {
   if (taskId === "main") return main.id;
   if (task && (await tx.doc(TaskIdentity, task.conversationId)).taskId === taskId) return task.conversationId;
+}
+
+export async function withdrawNodeRequests(tx: Tx, mainId: ConversationId, taskId: string) {
+  const { pending } = await tx.doc(Requests, mainId);
+  for (const req of Object.values(pending)) {
+    if (req.taskId !== taskId) continue;
+    if (!req.deferred) await tx.signal(req.toolTask, Decision, req.wakeKey ?? req.id, { allow: false });
+    delete pending[req.id];
+  }
 }
 
 export function answerUserPermission(main: Conversation, answer: Answer, onDelivered?: (tx: Tx) => Promise<void>) {
@@ -206,7 +217,8 @@ async function expire(tx: Tx, main: Conversation, req: Request, at: number) {
 }
 
 export function createBroker(getMain: () => Conversation, registry: CapabilityRegistry, timeout: number, defaultMs: number,
-  mainControl: (name: string) => boolean, mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }, context?: ApprovalContext) => Promise<Judgment>) {
+  mainControl: (name: string) => boolean, mode: () => ApprovalMode, judge: (statement: PermissionItem[], call: ApprovalCall, owner: { taskId?: string; wakeId?: string }, context?: ApprovalContext) => Promise<Judgment>,
+  sendAnswer: (node: string, answer: ApprovalAnswer) => void) {
   const review = defineTask<{ id: string; conversationId?: ConversationId; taskId?: string; wakeId?: string; toolTask: TaskId; statement: PermissionItem[]; tool: string; argumentsJson: string },
     { phase: "review" }, null>({
     name: "alter.approval-review", version: 1, initial: () => ({ phase: "review" }),
@@ -238,152 +250,181 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
     }, ctx) },
     abort: (_, api, ctx) => api.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
   });
-  return defineExtension({
-    name: "alter.broker", tasks: [review, expiry],
+  type Remote = Pick<ApprovalRequest, "taskId" | "requestId" | "effect" | "summary" | "tool"> & {
+    capability: string; node: string; argumentsJson: string;
+  };
+  async function evaluate(call: { id: string; parent?: { callId: string }; name: string; arguments: unknown },
+    api: Pick<ToolExecutionApi, "now" | "conversationId" | "taskId" | "readSignal" | "snapshot">, ctx: Context, remote?: Remote) {
+    const main = getMain();
+    const isMain = api.conversationId === main.id;
+    const control = !remote && (call.name === "finish" || call.name === "sleep");
+    const descriptor: ToolAction | undefined = remote ? { capability: remote.capability, action: call.name, effect: remote.effect }
+      : control ? { capability: "task", action: call.name, effect: "write" }
+      : isMain && call.name === "stay_silent" ? { capability: "notifications", action: "stay_silent", effect: "write" }
+      : isMain && call.name === "digest_source" ? { capability: "notifications", action: "digest_source", effect: "read" }
+      : registry.toolActions.get(call.name);
+    const borrowed = call.parent && /^ext:([a-z0-9-]+):([^:]+):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
+    const borrower = borrowed?.[1];
+    if (isMain && !descriptor && !borrower && mainControl(call.name)) return;
+    const identity = isMain ? undefined : await api.snapshot(TaskIdentity, api.conversationId, ctx);
+    const taskId = remote?.taskId ?? (isMain ? "main" : identity?.taskId ?? "");
+    const id = `permission-${api.taskId}`;
+    const signal = await api.readSignal(Decision, id, ctx);
+    const { capability, action } = descriptor ?? { capability: "unknown", action: call.name };
+    const effect = normalizeEffect(descriptor?.effect);
+    return main.commit(async tx => {
+      const task = (await tx.doc(Tasks, main.id)).byId[taskId];
+      const leasedCall = isMain && registry.toolActions.has(call.name) && capability !== "memory" && capability !== "schedule";
+      const leases = leasedCall ? await tx.doc(Leases, main.id) : undefined;
+      const key = leases && activeLease(leases.lastUsed, capability, action);
+      if (leases && !key) return { block: "No active lease" };
+      const leaseId = key && leases?.records?.[key];
+      const history = leaseId ? await tx.doc(LeaseHistory, main.id) : undefined;
+      const lease = leaseId ? history?.byId[leaseId] : undefined;
+      const wake = lease ? await activeWake(tx, main.id, api.now()) : undefined;
+      const audit = await tx.doc(Audit, main.id);
+      const { pending } = await tx.doc(Requests, main.id);
+      const at = api.now();
+      function record(decision: AuditEntry["decision"]) {
+        if (audit.last[id] === decision) return;
+        audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at, ...(borrower && { borrower }),
+          ...(decision === "park" && { audience: "user" as const }) });
+        audit.last[id] = decision;
+        if (decision === "allow" && key && leases) {
+          leases.lastUsed[key] = leases.turns + 1;
+          if (lease && leaseId && history) {
+            lease.calls++;
+            if (wake && !lease.useWakeIds.includes(wake.wakeId)) lease.useWakeIds.push(wake.wakeId);
+            history.inFlight[id] = leaseId;
+          }
+        }
+      }
+      function block(message: string) { record("deny"); return { block: message }; }
+      if (!isMain && task?.status !== "running") return block("Inactive task");
+      if (remote && (await tx.doc(NodeRuns, api.conversationId)).byId[taskId]?.stopping) return block("Task is stopping");
+      if (borrowed && (!descriptor || !permitsBorrow(borrowed[2]!, effect))) return block("Borrow exceeds calling effect");
+      if (identity?.sourcePlugin && effect !== "read") return block("Message sources can only borrow read tools");
+      if (task?.proactive && !control && (effect !== "read" || capability !== "browser")) return block("Proactive research is read-only");
+      const { byId } = await tx.doc(Reviews, main.id);
+      const result = byId[id];
+      if (result?.ended) return block(result.ended === "expired" ? expiredMessage : deferredMessage);
+      let req = pending[id];
+      const legacy = req && signal && "value" in signal ? signal.value : undefined;
+      const user = result?.user ?? (legacy && (legacy.allow ? "once" : "deny"));
+      if (user) {
+        delete pending[id];
+        if (user === "deny") {
+          if (legacy && !isMain) {
+            audit.refused ??= {};
+            audit.refused[`${taskId} ${call.name}`] = true;
+          }
+          return block(`The user declined this ${call.name} call. ${result?.note ?? legacy?.note ?? ""} Do not retry it; finish and report that it was declined.`);
+        }
+        record("allow");
+        return;
+      }
+      // The main session's own notes, schedules and notifications are bookkeeping, not actions on the outside world.
+      const internal = control || (isMain && !leasedCall && (call.name === "stay_silent" || capability === "memory" || capability === "schedule"));
+      const needsApproval = effect !== "read" && !internal &&
+        !(effect === "irreversible" && task?.permission === "full");
+      if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
+      const scope = await tx.doc(ScopeDoc, api.conversationId);
+      const always = await tx.doc(AllowedCapabilities, main.id);
+      const granted = always.capabilities.includes(capability) || (leases
+        ? holdsLease(leases, capability, leases.grants?.[capability])
+        : scope.capabilities?.includes(capability));
+      if (!granted && !isMain && audit.refused?.[`${taskId} ${call.name}`]) {
+        delete pending[id];
+        return block(`The user already declined ${call.name} in this task. Do not retry it; finish and report that the user declined.`);
+      }
+      if (!needsApproval || granted || audit.last[id] === "allow" ||
+          scope.late.some(item => item.tool === call.name && item.expiresAt > at)) {
+        delete pending[id];
+        record("allow");
+        return;
+      }
+      const setting = mode();
+      if (!req) {
+        const argumentsJson = JSON.stringify(call.arguments, (_, value) =>
+          value && typeof value === "object" && !Array.isArray(value)
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+        if (Object.values(pending).some(r => r.taskId === taskId && r.deferred && r.tool === call.name &&
+          r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
+        const items = isMain ? (await recentUserText(tx, main.id, at) ?? []).map(purpose => ({ tool: "", target: "", purpose })) : scope.items;
+        const checking = effect === "write" && setting === "on" && items.length > 0;
+        const reason = remote?.summary || task?.brief || "Main session tool call";
+        pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
+          argumentsJson, ...(key && { leaseId: leaseId ?? key }), reason: (borrower ? "插件 " + borrower + " 借用：" : "") + reason, expiresAt: at + timeout,
+          statement: items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
+          defaultAt: at + Math.min(defaultMs, timeout), ...(checking && { checking: true }) };
+        req = pending[id]!;
+        if (checking) {
+          byId[id] = { taskId, tool: call.name, itemCount: items.length };
+          await tx.createTask(review, { id, taskId, ...(!remote && { conversationId: api.conversationId }), ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement: items,
+            tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
+        }
+      }
+      if (setting === "on" && req.checking && effect === "write") {
+        if (byId[id]?.itemCount !== undefined && !result?.judgment) {
+          req.wakeKey = id + "-review";
+          return { sleep: { until: req.expiresAt, signals: [Reviewed.key(id), Decision.key(req.wakeKey)] } };
+        }
+        if (result?.judgment?.inScope && result.itemCount) {
+          result.judgeAllowedAt = at;
+          delete pending[id];
+          record("allow");
+          (await tx.doc(Ledger, main.id)).entries.push({ taskId, at, summary: `审批模型放行：${call.name}（${result.judgment.reason}）`,
+            refs: [{ kind: "approval", ref: id }] });
+          return;
+        }
+      }
+      if (req.checking) {
+        delete req.checking;
+        req.defaultAt = Math.min(at + defaultMs, req.expiresAt);
+      }
+      if (audit.last[id] !== "park") {
+        scope.shown = req.statement?.length ?? 0;
+        record("park");
+      }
+      const defaultReached = req.defaultAt !== undefined && at >= req.defaultAt;
+      if (defaultReached) {
+        if (!req.deferred) {
+          req.deferred = true;
+          byId[id] = { ...byId[id], taskId, tool: call.name, ended: "deferred", timeoutAt: at };
+          await tx.createTask(expiry, { id }, { ownership: { kind: "conversation" }, background: true });
+        }
+        return block(deferredMessage);
+      }
+      delete req.wakeKey;
+      return { sleep: { until: req.defaultAt ?? req.expiresAt, signals: [Decision.key(id)] } };
+    }, ctx);
+  }
+  const nodeApproval = defineTask<Remote, { phase: "check" }, null>({
+    name: "alter.node-approval", version: 1, initial: () => ({ phase: "check" }),
+    phases: { async check({ input }, api, ctx) {
+      const result = await evaluate({ id: input.requestId, name: input.tool, arguments: JSON.parse(input.argumentsJson) }, api, ctx, input);
+      if (result?.sleep) {
+        await api.commit(() => ({ status: "sleeping", checkpoint: { phase: "check" }, ...result.sleep }), ctx);
+        return;
+      }
+      let answer: ApprovalAnswer | undefined;
+      await api.commit(async tx => {
+        const run = (await tx.doc(NodeRuns, api.conversationId)).byId[input.taskId]!;
+        const review = (await tx.doc(Reviews, getMain().id)).byId[`permission-${api.taskId}`];
+        answer = { type: "approval.answer", requestId: input.requestId, taskId: input.taskId,
+          decision: result?.block ? "deny" : review?.user ?? "once",
+          ...(result?.block && { note: review?.note || result.block }) };
+        run.approvals["request-" + input.requestId]!.answer = answer;
+        return { status: "terminal", outcome: { status: "completed", result: null } };
+      }, ctx);
+      if (answer) sendAnswer(input.node, answer);
+    } },
+    abort: (_, api, ctx) => api.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), ctx),
+  });
+  const extension = defineExtension({
+    name: "alter.broker", tasks: [review, expiry, nodeApproval],
     hooks: [hook(ToolTask, {
-      async beforeTool(call, api, ctx) {
-        const main = getMain();
-        const isMain = api.conversationId === main.id;
-        const control = call.name === "finish" || call.name === "sleep";
-        const descriptor: ToolAction | undefined = control ? { capability: "task", action: call.name, effect: "write" }
-          : isMain && call.name === "stay_silent" ? { capability: "notifications", action: "stay_silent", effect: "write" }
-          : isMain && call.name === "digest_source" ? { capability: "notifications", action: "digest_source", effect: "read" }
-          : registry.toolActions.get(call.name);
-        const borrowed = call.parent && /^ext:([a-z0-9-]+):([^:]+):\d+$/.exec(call.id.slice(call.parent.callId.length + 1));
-        const borrower = borrowed?.[1];
-        if (isMain && !descriptor && !borrower && mainControl(call.name)) return;
-        const identity = isMain ? undefined : await api.snapshot(TaskIdentity, api.conversationId, ctx);
-        const taskId = isMain ? "main" : identity?.taskId ?? "";
-        const id = `permission-${api.taskId}`;
-        const signal = await api.readSignal(Decision, id, ctx);
-        const { capability, action } = descriptor ?? { capability: "unknown", action: call.name };
-        const effect = normalizeEffect(descriptor?.effect);
-        return main.commit(async tx => {
-          const task = (await tx.doc(Tasks, main.id)).byId[taskId];
-          const leasedCall = isMain && registry.toolActions.has(call.name) && capability !== "memory" && capability !== "schedule";
-          const leases = leasedCall ? await tx.doc(Leases, main.id) : undefined;
-          const key = leases && activeLease(leases.lastUsed, capability, action);
-          if (leases && !key) return { block: "No active lease" };
-          const leaseId = key && leases?.records?.[key];
-          const history = leaseId ? await tx.doc(LeaseHistory, main.id) : undefined;
-          const lease = leaseId ? history?.byId[leaseId] : undefined;
-          const wake = lease ? await activeWake(tx, main.id, api.now()) : undefined;
-          const audit = await tx.doc(Audit, main.id);
-          const { pending } = await tx.doc(Requests, main.id);
-          const at = api.now();
-          function record(decision: AuditEntry["decision"]) {
-            if (audit.last[id] === decision) return;
-            audit.entries.push({ taskId, tool: call.name, capability, action, effect, decision, at, ...(borrower && { borrower }),
-              ...(decision === "park" && { audience: "user" as const }) });
-            audit.last[id] = decision;
-            if (decision === "allow" && key && leases) {
-              leases.lastUsed[key] = leases.turns + 1;
-              if (lease && leaseId && history) {
-                lease.calls++;
-                if (wake && !lease.useWakeIds.includes(wake.wakeId)) lease.useWakeIds.push(wake.wakeId);
-                history.inFlight[id] = leaseId;
-              }
-            }
-          }
-          function block(message: string) { record("deny"); return { block: message }; }
-          if (!isMain && task?.status !== "running") return block("Inactive task");
-          if (borrowed && (!descriptor || !permitsBorrow(borrowed[2]!, effect))) return block("Borrow exceeds calling effect");
-          if (identity?.sourcePlugin && effect !== "read") return block("Message sources can only borrow read tools");
-          if (task?.proactive && !control && (effect !== "read" || capability !== "browser")) return block("Proactive research is read-only");
-          const { byId } = await tx.doc(Reviews, main.id);
-          const result = byId[id];
-          if (result?.ended) return block(result.ended === "expired" ? expiredMessage : deferredMessage);
-          let req = pending[id];
-          const legacy = req && signal && "value" in signal ? signal.value : undefined;
-          const user = result?.user ?? (legacy && (legacy.allow ? "once" : "deny"));
-          if (user) {
-            delete pending[id];
-            if (user === "deny") {
-              if (legacy && !isMain) {
-                audit.refused ??= {};
-                audit.refused[`${taskId} ${call.name}`] = true;
-              }
-              return block(`The user declined this ${call.name} call. ${result?.note ?? legacy?.note ?? ""} Do not retry it; finish and report that it was declined.`);
-            }
-            record("allow");
-            return;
-          }
-          // The main session's own notes, schedules and notifications are bookkeeping, not actions on the outside world.
-          const internal = control || (isMain && !leasedCall && (call.name === "stay_silent" || capability === "memory" || capability === "schedule"));
-          const needsApproval = effect !== "read" && !internal &&
-            !(effect === "irreversible" && task?.permission === "full");
-          if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
-          const scope = await tx.doc(ScopeDoc, api.conversationId);
-          const always = await tx.doc(AllowedCapabilities, main.id);
-          const granted = always.capabilities.includes(capability) || (leases
-            ? holdsLease(leases, capability, leases.grants?.[capability])
-            : scope.capabilities?.includes(capability));
-          if (!granted && !isMain && audit.refused?.[`${taskId} ${call.name}`]) {
-            delete pending[id];
-            return block(`The user already declined ${call.name} in this task. Do not retry it; finish and report that the user declined.`);
-          }
-          if (!needsApproval || granted || audit.last[id] === "allow" ||
-              scope.late.some(item => item.tool === call.name && item.expiresAt > at)) {
-            delete pending[id];
-            record("allow");
-            return;
-          }
-          const setting = mode();
-          if (!req) {
-            const argumentsJson = JSON.stringify(call.arguments, (_, value) =>
-              value && typeof value === "object" && !Array.isArray(value)
-                ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
-            if (Object.values(pending).some(r => r.taskId === taskId && r.deferred && r.tool === call.name &&
-              r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
-            const items = isMain ? (await recentUserText(tx, main.id, at) ?? []).map(purpose => ({ tool: "", target: "", purpose })) : scope.items;
-            const checking = effect === "write" && setting === "on" && items.length > 0;
-            const reason = task?.brief ?? "Main session tool call";
-            pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
-              argumentsJson, ...(key && { leaseId: leaseId ?? key }), reason: (borrower ? "插件 " + borrower + " 借用：" : "") + reason, expiresAt: at + timeout,
-              statement: items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
-              defaultAt: at + Math.min(defaultMs, timeout), ...(checking && { checking: true }) };
-            req = pending[id]!;
-            if (checking) {
-              byId[id] = { taskId, tool: call.name, itemCount: items.length };
-              await tx.createTask(review, { id, taskId, conversationId: api.conversationId, ...(task?.wakeId && { wakeId: task.wakeId }), toolTask: api.taskId, statement: items,
-                tool: call.name, argumentsJson }, { ownership: { kind: "conversation" }, background: true });
-            }
-          }
-          if (setting === "on" && req.checking && effect === "write") {
-            if (byId[id]?.itemCount !== undefined && !result?.judgment) {
-              req.wakeKey = id + "-review";
-              return { sleep: { until: req.expiresAt, signals: [Reviewed.key(id), Decision.key(req.wakeKey)] } };
-            }
-            if (result?.judgment?.inScope && result.itemCount) {
-              result.judgeAllowedAt = at;
-              delete pending[id];
-              record("allow");
-              (await tx.doc(Ledger, main.id)).entries.push({ taskId, at, summary: `审批模型放行：${call.name}（${result.judgment.reason}）`,
-                refs: [{ kind: "approval", ref: id }] });
-              return;
-            }
-          }
-          if (req.checking) {
-            delete req.checking;
-            req.defaultAt = Math.min(at + defaultMs, req.expiresAt);
-          }
-          if (audit.last[id] !== "park") {
-            scope.shown = req.statement?.length ?? 0;
-            record("park");
-          }
-          const defaultReached = req.defaultAt !== undefined && at >= req.defaultAt;
-          if (defaultReached) {
-            if (!req.deferred) {
-              req.deferred = true;
-              byId[id] = { ...byId[id], taskId, tool: call.name, ended: "deferred", timeoutAt: at };
-              await tx.createTask(expiry, { id }, { ownership: { kind: "conversation" }, background: true });
-            }
-            return block(deferredMessage);
-          }
-          delete req.wakeKey;
-          return { sleep: { until: req.defaultAt ?? req.expiresAt, signals: [Decision.key(id)] } };
-        }, ctx);
-      },
+      beforeTool: (call, api, ctx) => evaluate(call, api, ctx),
       async afterTool(call, result, api, ctx) {
         const action = registry.toolActions.get(call.name);
         const main = getMain();
@@ -404,4 +445,12 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
       },
     })],
   });
+  async function request(tx: Tx, task: TaskRecord, message: ApprovalRequest) {
+    const { requestId, taskId, tool, effect, summary } = message;
+    const runner = task.runner!;
+    await tx.createTask(nodeApproval, { taskId, requestId, effect, summary, tool, node: runner.node,
+      capability: "node:" + runner.harness, argumentsJson: JSON.stringify(message.args) ?? "null" },
+    { conversationId: task.conversationId, ownership: { kind: "conversation" }, background: true });
+  }
+  return { extension, request };
 }

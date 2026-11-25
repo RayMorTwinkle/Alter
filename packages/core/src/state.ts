@@ -1,3 +1,5 @@
+import type { TaskEnd } from "@alter/node-protocol";
+import type { NodeRunner } from "./node-state.ts";
 import { conversationDoc, type ConversationId, type EntryId, type ModelThinkingLevel, type TaskId } from "./runtime.ts";
 
 import type { WatchWhere } from "./capabilities.ts";
@@ -19,7 +21,11 @@ export type TaskRecord = {
   wakeId?: string;
   originSilent?: true;
   permission: Permission;
-  status: "running" | "completed" | "failed" | "cancelled";
+  runner?: NodeRunner;
+  cwd?: string;
+  nativeSessionId?: string;
+  reportSource?: TaskEnd["reportSource"];
+  status: "queued" | "interrupted" | "running" | "completed" | "failed" | "cancelled";
   failure?: string;
   triggerSource?: "scheduled";
   proactive?: true;
