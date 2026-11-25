@@ -205,7 +205,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       const cli = "node packages/node/src/cli.ts";
       const pair = (literal: (s: string) => string) =>
         `${cli} pair --server ${literal(origin.origin)} --token ${literal(created.token)} --name ${literal(name.trim())}`;
-      return mutation(201, { ...created, installCommand: "pnpm install --frozen-lockfile", pairCommand: pair(quote),
+      return mutation(201, { ...created, installCommand: "git clone https://github.com/RayMorTwinkle/Alter.git\ncd Alter\npnpm install --frozen-lockfile", pairCommand: pair(quote),
         pairCommandPowerShell: pair(s => "'" + s.replace(/['‘’‚‛]/g, c => "'" + c) + "'"),
         rootCommand: cli + ' roots add "项目目录的绝对路径"', runCommand: cli + " run" });
     } else if (method === "DELETE" && /^\/api\/nodes\/[^/]+$/.test(path)) {

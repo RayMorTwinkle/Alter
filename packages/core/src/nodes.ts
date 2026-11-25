@@ -45,7 +45,7 @@ export class NodeHub {
     const nodes = await this.list(tx);
     if (!nodes.length) return "";
     const inventory = nodes.map(n => ({ name: n.name, online: n.online, harnesses: n.harnesses.filter(h => h.available).map(h => h.id), roots: n.roots }));
-    return "\n我的电脑（节点资料）" + JSON.stringify(inventory) + "。用户提到自己的电脑或要写代码、改文件时，可以用 dispatch_task 的 runner 派给节点上的代理。";
+    return "\n我的电脑（节点资料）" + JSON.stringify(inventory) + "。用户提到自己的电脑或要写代码、改文件时，可以用 dispatch_task 的 runner 派给节点上的代理。节点离线时任务会排队；结束后报告自动送回，不用轮询 task_status。";
   }
 
   create(name: string) {

@@ -294,8 +294,10 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
   const [plugins, setPlugins] = useState<PluginView[] | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [stats, setStats] = useState<ApprovalStats | null>(null);
+  const [restricted, setRestricted] = useState<string[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
+    api.service().then(state => setRestricted(state.restrictedCapabilities ?? []), () => {});
     api.plugins().then(setPlugins, err => setError(String(err.message ?? err)));
     api.settings().then(setSettings, () => {});
     api.approvalStats().then(setStats, () => {});
@@ -310,8 +312,8 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
     <Sheet title={t.title} onClose={onClose}>
       {error && <p className="form-error">{error}</p>}
 
-      <Adapters />
-      <ExtPlugins plugins={extPlugins} />
+      {!restricted.includes("adapters") && <Adapters />}
+      {!restricted.includes("ext-plugins") && <ExtPlugins plugins={extPlugins} />}
 
       <section className="settings-block">
         <h3>{t.plugins}</h3>
@@ -355,7 +357,7 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
       </>}
 
       <AlwaysAllowed />
-      <Service />
+      {!restricted.includes("service") && <Service />}
 
       <section className="settings-block">
         <h3>{t.language}</h3>

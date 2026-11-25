@@ -10,6 +10,8 @@ export type Platform = Hello["platform"];
 export type Config = { nodeId: string; name: string; server: string; token: string; roots: string[] };
 
 export function configDir(platform = process.platform, home = homedir(), appData = process.env.APPDATA) {
+  // Lets one computer run a second node (or a smoke test) without touching the real pairing.
+  if (process.env.ALTER_NODE_HOME) return path.resolve(process.env.ALTER_NODE_HOME);
   if (platform === "win32") return path.win32.join(appData || path.win32.join(home, "AppData", "Roaming"), "alter-node");
   if (platform === "darwin") return path.posix.join(home, "Library/Application Support/alter-node");
   if (platform === "linux") return path.posix.join(home, ".config/alter-node");
