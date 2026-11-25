@@ -47,6 +47,7 @@ export function TaskSheet({ task, taskId, onClose }: { task?: Task; taskId: stri
           <h3>{t.brief}</h3>
           <Markdown text={task.brief} />
           <div className="row-meta">
+            {task.runner && <span>{t.nodes.harnessNames[task.runner.harness] ?? task.runner.harness} @ {task.runner.node}</span>}
             <span>{t[task.permission]}</span>
             <span>{t[task.context]}</span>
             {task.allow.length > 0 && <span>{t.allowed}: {task.allow.join(", ")}</span>}

@@ -69,6 +69,7 @@ export function TasksPanel({ tasks, leases, watches, onOpen, onCancelWatch }: {
                 <div className="row-title"><Inline text={task.brief} /></div>
                 <div className="row-meta">
                   <StatusChip status={task.status} />
+                  {task.runner && <span>{t.nodes.harnessNames[task.runner.harness] ?? task.runner.harness} @ {task.runner.node}</span>}
                   <span>{t[task.permission]}</span>
                   <span>{t[task.context]}</span>
                   {task.pending.some(p => p.audience === "user") && <span className="badge">{t.needsYou}</span>}

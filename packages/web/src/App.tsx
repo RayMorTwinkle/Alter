@@ -1,9 +1,12 @@
-import { Bell, Binoculars, Bug, GearSix, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
+import { Bell, Binoculars, Bug, Desktop, GearSix, UsersThree, Brain, CalendarBlank, ChartBar, ChatCircle, ListChecks, Notebook, SealCheck, SignOut } from "@phosphor-icons/react";
 import { useCallback, useEffect, useReducer, useState } from "react";
-import { api, connect, Unauthorized } from "./api.ts";
+import { api, connect, gatewayApi, Unauthorized } from "./api.ts";
 import { AgendaPanel } from "./components/Agenda.tsx";
 import { Chat } from "./components/Chat.tsx";
 import { Login } from "./components/Login.tsx";
+import { GatewayLogin } from "./components/GatewayLogin.tsx";
+import { AdminSheet } from "./components/Admin.tsx";
+import { NodesSheet } from "./components/Nodes.tsx";
 import { MemoryPanel } from "./components/Memory.tsx";
 import { ApprovalsPanel, LedgerPanel, TasksPanel } from "./components/Panels.tsx";
 import { NotificationsSheet, TaskSheet } from "./components/Sheets.tsx";
@@ -15,15 +18,17 @@ import { FeedbackSheet } from "./components/Feedback.tsx";
 import { HeartbeatSheet } from "./components/Heartbeat.tsx";
 import { I18n, useT } from "./i18n.tsx";
 import { initialState, reduce, userPending } from "./store.ts";
-import type { ApprovalDecision, FeishuPairing, HeartbeatView } from "./types.ts";
+import type { ApprovalDecision, FeishuPairing, GatewayUser, HeartbeatView } from "./types.ts";
 import { defaultLocale, strings, type Locale } from "./strings.ts";
 
-type Auth = "checking" | "out" | "in";
+// "gateway-out" means a multi-user gateway sits in front and wants a username; "out" is the single-owner password page.
+type Auth = "checking" | "out" | "gateway-out" | "in";
 type Tab = "chat" | "tasks" | "approvals" | "agenda" | "memory" | "ledger";
 
 export function App() {
   const [locale, setLocale] = useState<Locale>(defaultLocale);
   const [auth, setAuth] = useState<Auth>("checking");
+  const [user, setUser] = useState<GatewayUser | null>(null);
   const t = strings[locale];
 
   useEffect(() => {
@@ -31,23 +36,30 @@ export function App() {
     try { localStorage.setItem("alter.locale", locale); } catch { /* storage unavailable */ }
   }, [locale]);
 
+  // Without a gateway, /gateway/me falls through to the page itself and fails to parse, which reads as "no gateway".
   useEffect(() => {
-    api.state().then(() => setAuth("in"), err => setAuth(err instanceof Unauthorized ? "out" : "in"));
+    api.state().then(
+      () => gatewayApi.me().then(setUser, () => setUser(null)).finally(() => setAuth("in")),
+      err => err instanceof Unauthorized
+        ? gatewayApi.me().then(me => { setUser(me); setAuth("in"); }, gwErr => setAuth(gwErr instanceof Unauthorized ? "gateway-out" : "out"))
+        : setAuth("in"));
   }, []);
+  const onSignedOut = useCallback(() => setAuth(user ? "gateway-out" : "out"), [user]);
 
   return (
     <I18n.Provider value={t}>
       {auth === "checking" && <div className="splash"><span className="wordmark large">Alter</span></div>}
       {auth === "out" && <Login onDone={() => setAuth("in")} />}
+      {auth === "gateway-out" && <GatewayLogin onDone={me => { setUser(me); setAuth("in"); }} />}
       {auth === "in" && (
-        <Workspace onSignedOut={() => setAuth("out")}
+        <Workspace user={user} onSignedOut={onSignedOut}
           onToggleLocale={() => setLocale(locale === "hant" ? "hans" : "hant")} />
       )}
     </I18n.Provider>
   );
 }
 
-function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; onToggleLocale: () => void }) {
+function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | null; onSignedOut: () => void; onToggleLocale: () => void }) {
   const t = useT();
   const [state, dispatch] = useReducer(reduce, initialState);
   const [tab, setTab] = useState<Tab>("chat");
@@ -55,6 +67,8 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const [openTask, setOpenTask] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [showNodes, setShowNodes] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [showHeartbeat, setShowHeartbeat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const awaiting = state.extPlugins.find(p => p.pending);
@@ -108,7 +122,7 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
   const onSend = (text: string) => guard(() => api.send(text));
   const onAnswer = (id: string, decision: ApprovalDecision, note?: string) => guard(() => api.answer(id, decision, note));
   const onStop = () => void guard(() => api.stop()).catch(() => {});
-  const onLogout = () => void api.logout().finally(onSignedOut);
+  const onLogout = () => void (user ? gatewayApi.logout() : api.logout()).finally(onSignedOut);
   const notices = state.notifications ?? [];
   const unread = notices.filter(item => item.status === "unread");
   // Opening the list counts as reading it; this is the funnel's "opened" step.
@@ -168,6 +182,10 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
           <button className="icon-btn ghost bell" onClick={openNotices} title={t.notifications} aria-label={t.notifications}>
             <Bell />{unread.length > 0 && <span className="badge">{unread.length}</span>}
           </button>
+          <button className="icon-btn ghost" onClick={() => setShowNodes(true)} title={t.nodes.title} aria-label={t.nodes.title}><Desktop /></button>
+          {user?.role === "admin" && (
+            <button className="icon-btn ghost" onClick={() => setShowAdmin(true)} title={t.gw.admin} aria-label={t.gw.admin}><UsersThree /></button>
+          )}
           <button className="icon-btn ghost" onClick={() => setShowUsage(true)} title={t.stats.title} aria-label={t.stats.title}><ChartBar /></button>
           <button className="icon-btn ghost" onClick={() => setShowDebug(true)} title={t.debug.title} aria-label={t.debug.title}><Bug /></button>
           <button className="icon-btn ghost" onClick={() => setShowSettings(true)} title={t.settings.title} aria-label={t.settings.title}><GearSix /></button>
@@ -221,6 +239,8 @@ function Workspace({ onSignedOut, onToggleLocale }: { onSignedOut: () => void; o
       {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} onToggleLocale={onToggleLocale} extPlugins={state.extPlugins} />}
       {showHeartbeat && <HeartbeatSheet view={heartbeat} onClose={() => setShowHeartbeat(false)} onChange={() => setHeartbeatTick(n => n + 1)} />}
       {showDebug && <DebugSheet onClose={() => setShowDebug(false)} />}
+      {showNodes && <NodesSheet onClose={() => setShowNodes(false)} />}
+      {showAdmin && user && <AdminSheet selfId={user.id} onClose={() => setShowAdmin(false)} />}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>
   );
