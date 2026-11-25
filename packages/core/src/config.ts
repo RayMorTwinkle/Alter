@@ -30,7 +30,7 @@ export function dataDirectory(env = process.env) {
 }
 
 export function proactiveConfig(env = process.env) {
-  const budget = Number(env.ALTER_PROACTIVE_DAILY_TOKENS ?? 200_000);
+  const budget = Number(env.ALTER_PROACTIVE_DAILY_TOKENS ?? 3_000_000);
   if (!Number.isSafeInteger(budget) || budget < 0) throw new Error("ALTER_PROACTIVE_DAILY_TOKENS must be a nonnegative integer");
   const reportTime = env.ALTER_REPORT_TIME?.trim() || "21:00";
   dailyMinutes(reportTime);
