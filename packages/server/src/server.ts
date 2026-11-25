@@ -16,7 +16,12 @@ import { redirectUri, settingsWriter } from "./settings-api.ts";
 import { openService, type ServiceOptions } from "./service.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
 
-const cookieName = "alter_session";
+// Cookies ignore ports, so instances sharing a host (production and a smoke run) need their own name.
+const legacyCookie = "alter_session";
+const cookieFor = (req: IncomingMessage) => `${legacyCookie}_${req.socket.localPort}`;
+function readCookie(req: IncomingMessage, name: string) {
+  return req.headers.cookie?.split(";").map(c => c.trim()).find(c => c.startsWith(name + "="))?.slice(name.length + 1);
+}
 const cookieOptions = "Path=/; HttpOnly; SameSite=Strict";
 const sessionMs = 365 * 24 * 3600_000;
 const defaultDist = fileURLToPath(new URL("../../web/dist/", import.meta.url));
@@ -167,10 +172,16 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         .end(`<!doctype html><meta charset="utf-8"><title>飞书授权失败</title><p>${message}</p><a href="/">返回 Alter</a>`);
       return;
     }
-    const token = req.headers.cookie?.split(";").map(c => c.trim()).find(c => c.startsWith(cookieName + "="))?.slice(cookieName.length + 1);
+    const cookieName = cookieFor(req);
+    const current = readCookie(req, cookieName);
+    const legacy = current ? undefined : readCookie(req, legacyCookie);
+    const token = current ?? legacy;
     const login = method === "POST" && path === "/api/login";
     const logout = method === "POST" && path === "/api/logout";
     if (!login && !logout && !(token && sessions.has(token))) throw new HttpError(401, "Login required");
+    // Move a still valid pre-port session to the per-port name without asking for the password again.
+    if (legacy && !logout && sessions.has(legacy)) res.setHeader("Set-Cookie", [
+      `${cookieName}=${legacy}; Max-Age=${sessionMs / 1000}; ${cookieOptions}`, `${legacyCookie}=; Max-Age=0; ${cookieOptions}`]);
     if (method !== "GET" && method !== "HEAD" && req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw new HttpError(415, "Content-Type must be application/json");
     }
