@@ -328,7 +328,7 @@ export type FeedbackStats = FeedbackCounts & {
   weekly: FeedbackWeek[];
 };
 
-export type { AdapterConfig, AdapterCreate, AdapterEffect, AdapterKind, AdapterPatch, AdapterStatus, AdapterTool, AdapterToolView, AdapterView,
+export type { AdapterConfig, AdapterCreate, AdapterEffect, AdapterKind, AdapterPatch, AdapterPreset, AdapterPresetAuth, AdapterPresetCreate, AdapterPresetVariant, AdapterStatus, AdapterTool, AdapterToolView, AdapterView,
   CliConfig, HttpConfig, McpConfig } from "../../server/src/adapters/types.ts";
 
 export type DebugTraceQuery = { conversation?: string; trigger?: string; before?: string; limit?: number };

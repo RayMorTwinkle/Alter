@@ -519,6 +519,8 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .adapter-tools span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .adapter .form-actions { align-items: center; }
 .toggle-inline { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; margin-right: auto; }
+.adapter.preset input { width: 100%; }
+.preset-options { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .adapter-add { margin-top: 10px; }
 .adapter-add > summary { cursor: pointer; font-size: 14px; color: var(--ink-2); }
 .adapter-form { display: grid; gap: 8px; margin-top: 8px; }

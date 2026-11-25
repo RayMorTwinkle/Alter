@@ -9,8 +9,9 @@ export function fields(obj: Record<string, unknown>, allowed: string) {
 }
 export function definition(kind: unknown, config: unknown): AdapterDefinition {
   check(record(config), "Expected adapter config");
+  if (kind === "mcp") check(config.readOnly === undefined || typeof config.readOnly === "boolean", "Expected readOnly flag");
   if (kind === "cli" || (kind === "mcp" && config.transport === "stdio")) {
-    fields(config, kind === "cli" ? "command args env cwd help timeoutMs" : "transport command args env");
+    fields(config, kind === "cli" ? "command args env cwd help timeoutMs" : "transport command args env readOnly");
     check(typeof config.command === "string" && config.command.trim(), "Expected command");
     check(config.args === undefined || Array.isArray(config.args) && config.args.every(v => typeof v === "string"), "Expected string args");
     check(config.env === undefined || strings(config.env), "Expected string env values");
@@ -19,7 +20,7 @@ export function definition(kind: unknown, config: unknown): AdapterDefinition {
     const ms = config.timeoutMs;
     check(ms === undefined || typeof ms === "number" && Number.isSafeInteger(ms) && ms > 0 && ms <= 600_000, "timeoutMs must be 1..600000");
   } else if (kind === "http" || (kind === "mcp" && config.transport === "http")) {
-    fields(config, kind === "http" ? "spec baseUrl headers" : "transport url headers");
+    fields(config, kind === "http" ? "spec baseUrl headers" : "transport url headers readOnly");
     if (kind === "http") {
       check(record(config.spec) || typeof config.spec === "string" && config.spec.trim(), "Expected OpenAPI document or URL");
       check(config.baseUrl === undefined || typeof config.baseUrl === "string", "Expected baseUrl");
@@ -27,7 +28,7 @@ export function definition(kind: unknown, config: unknown): AdapterDefinition {
     check(config.headers === undefined || strings(config.headers), "Expected string headers");
   } else throw new HttpError(400, "Unknown adapter kind or transport");
   const credentialKey = /(?:authorization|cookie|password|secret|token|api[-_]?key)$/i;
-  const placeholder = /\{\{secret:[A-Za-z0-9_-]+\}\}/;
+  const placeholder = /\{\{(?:secret:[A-Za-z0-9_-]+|gh-token)\}\}/;
   function credential(value: string) {
     check(!value || placeholder.test(value), "Use a secret placeholder for credential settings");
   }

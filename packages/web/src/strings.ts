@@ -272,6 +272,8 @@ const hant = {
     spec: "OpenAPI 文檔（地址或 JSON）", baseUrl: "接口根地址（可選）",
     secrets: "密鑰（每行 名稱=值）", secretsHelp: "加密保存，不會回顯。在參數、環境變量、地址或請求頭裡用 {{secret:名稱}} 引用。",
     create: "接入", connecting: "連接中…",
+    auth: "認證方式", auths: { gh: "本機 gh 登錄", token: "Token" }, variant: "權限", variants: { readonly: "只讀", full: "完整（含寫入）" },
+    tokenPlaceholder: "GitHub token", ghHint: "每次連接時讀取本機 gh auth token，不保存。",
   },
   alwaysAllowed: {
     title: "始終允許的能力",
@@ -681,6 +683,8 @@ const hans: Strings = {
     spec: "OpenAPI 文档（地址或 JSON）", baseUrl: "接口根地址（可选）",
     secrets: "密钥（每行 名称=值）", secretsHelp: "加密保存，不會回顯。在參數、环境变量、地址或请求头裡用 {{secret:名称}} 引用。",
     create: "接入", connecting: "连接中…",
+    auth: "认证方式", auths: { gh: "本机 gh 登录", token: "Token" }, variant: "权限", variants: { readonly: "只读", full: "完整（含写入）" },
+    tokenPlaceholder: "GitHub token", ghHint: "每次连接时读取本机 gh auth token，不保存。",
   },
   alwaysAllowed: {
     title: "始终允许的能力",

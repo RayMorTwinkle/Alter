@@ -1,4 +1,4 @@
-# Web API 契约（v1.26）
+# Web API 契约（v1.27）
 
 Web 前端（`packages/web`）与服务端（`packages/server`）之间的接口。服务端只用 Node 内置模块（`node:http`），推送用 SSE。
 
@@ -499,8 +499,8 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 type Effect = "read" | "write" | "irreversible";
 type Strings = Record<string, string>;
 type Definition =
-  | { kind: "mcp"; config: { transport: "stdio"; command: string; args?: string[]; env?: Strings }
-                         | { transport: "http"; url: string; headers?: Strings } }
+  | { kind: "mcp"; config: { transport: "stdio"; command: string; args?: string[]; env?: Strings; readOnly?: boolean }
+                         | { transport: "http"; url: string; headers?: Strings; readOnly?: boolean } }
   | { kind: "cli"; config: { command: string; args?: string[]; env?: Strings; cwd?: string; help?: string; timeoutMs?: number } }
   | { kind: "http"; config: { spec: string | Record<string, unknown>; baseUrl?: string; headers?: Strings } };
 type AdapterView = Definition & {
@@ -547,3 +547,21 @@ type AdapterView = Definition & {
 **调度。** heartbeat.configured 对应设置开关，enabled 表示实际已排程。start、end 使用 timeZone 的本地时间。lastAt 是上次实际巡检时间，nextAt 是调度器选定的下次时间。intervalMs 是当前采用的间隔。lastDecision 保存选定间隔时的输入、demand、factor、rawMs、上下限与 clamped，首次或旧版记录可为 null。current 用最新信号试算，摘要被消费、收到新消息或更新反馈后，两者可能不同。report 返回间隔天数、检查时间、最近七天活跃天数、暂停状态、上次检查和下次时间。scheduledTasks 包含各项的触发规则，memory 给出累计轮数、阈值和空闲等待，watch 给出补拉与合批周期及活动盯梢的截止时间，feedback 给出回访状态。nextAt 为 null 表示当前没有下一次排程。
 
 前端调用 `api.debugTraces(query?)`、`api.debugTrace(id)`、`api.debugPrompt(hash)` 和 `api.debugSchedule()`。调试数据随本机保留策略清理，默认保留 14 天。见 [ADR-0024](../adr/0024-debug-traces.md)。
+
+## v1.27 GitHub 转接器预设（#142）
+
+| 方法与路径 | 请求体 | 成功响应 |
+|---|---|---|
+| `GET /api/adapters/presets` | — | `200 AdapterPreset[]`，每项包含 `id`、`name`、`description`、`authMethods` 和 `variants` |
+| `POST /api/adapters/presets/:id` | `{ auth, token?, variant?, id?, name? }` | `201 AdapterView`，保存配置并立即尝试连接 |
+
+路径中的 `id` 标识预设，目前为 `github`。请求体中的 `id` 和 `name` 标识新建的转接器，默认分别为 `github` 和 `GitHub`。网页通过 `api.adapterPresets()` 列出选项，通过 `api.createAdapterFromPreset("github", { auth: "gh" })` 使用本机登录。两个接口均需登录。创建沿用普通转接器的校验和冲突处理，预设不存在返回 404。
+
+| `variant` | MCP URL | 发现工具时的默认效果 |
+|---|---|---|
+| `readonly`（默认） | `https://api.githubcopilot.com/mcp/readonly` | 配置设置 `readOnly: true`，所有工具默认为 `read` |
+| `full` | `https://api.githubcopilot.com/mcp/` | 仅 `readOnlyHint: true` 默认为 `read`，其余为 `write` |
+
+`auth: "token"` 要求提供非空 `token`，服务端将其存为该转接器的加密密钥 `GITHUB_TOKEN`。视图中的 Authorization 为 `Bearer {{secret:GITHUB_TOKEN}}`。`auth: "gh"` 使用 `Bearer {{gh-token}}`。服务端每次连接、刷新或重连时按需执行一次 `gh auth token`，超时 10 秒，凭据只保存在本次连接的内存中。获取失败时返回已创建的转接器，`status.state` 为 `error`，`status.detail` 为「本机 gh 未登录或不可用，请运行 gh auth login」。
+
+手动配置也可在固定参数、环境变量、请求头和 URL 中使用 `{{gh-token}}`。MCP 的 `config.readOnly` 只设置默认工具效果，显式的逐工具 `effects` 覆写始终优先。GitHub 只读预设通过所选远程端点限制工具集。

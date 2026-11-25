@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -218,4 +218,126 @@ it("keeps overrides bound to their source tool across collisions, refresh failur
   const raw = { spec: { openapi: "3.1.0", paths: {} }, baseUrl: "http://localhost/?api_key=literal" };
   expect((await web.change("PATCH", "/" + id, { config: raw })).status).toBe(400);
   expect((await web.change("PATCH", "/" + id, { config: { ...raw, baseUrl: "http://localhost", headers: { Authorization: "Bearer literal" } } })).status).toBe(400);
+});
+
+async function localGithubMcp() {
+  const received: { path: string; authorization?: string }[] = [];
+  const http = createServer(async (req, res) => {
+    if (req.method !== "POST") { res.writeHead(405).end(); return; }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const msg = JSON.parse(Buffer.concat(chunks).toString());
+    if (!("id" in msg)) { res.writeHead(202).end(); return; }
+    const authorization = req.headers.authorization;
+    received.push({ path: req.url!, authorization });
+    const inputSchema = { type: "object", properties: req.url === "/echo-schema" ? { [authorization!]: { type: "string" } } : {} };
+    let result;
+    switch (msg.method) {
+      case "initialize": result = { protocolVersion: msg.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } }; break;
+      case "tools/list": result = { tools: [{ name: "lookup", inputSchema, annotations: { readOnlyHint: true } },
+        { name: "unmarked", inputSchema }, { name: "explicit", inputSchema, annotations: { readOnlyHint: false } }] }; break;
+      case "tools/call": result = { content: [{ type: "text", text: authorization }] }; break;
+      default: res.writeHead(400).end(); return;
+    }
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+  });
+  http.listen(0, "127.0.0.1"); await once(http, "listening");
+  const base = "http://127.0.0.1:" + (http.address() as AddressInfo).port;
+  const original = globalThis.fetch;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === "https://api.githubcopilot.com") return original(new URL(url.pathname, base), init);
+    if (url.hostname !== "127.0.0.1") throw new Error("Unexpected external fetch in fixture");
+    return original(input, init);
+  });
+  cleanup.push(async () => { spy.mockRestore(); http.close(); http.closeAllConnections(); await once(http, "close"); });
+  return received;
+}
+
+it("lists presets and creates a readonly GitHub adapter with an encrypted token", async () => {
+  const received = await localGithubMcp();
+  const web = await fixture();
+  const presets = root + "/presets", path = presets + "/github";
+  expect((await web.read(presets)).status).toBe(401);
+  expect((await web.post(path, { auth: "gh" })).status).toBe(401);
+  await web.login();
+  expect(await (await web.read(presets)).json()).toMatchObject([{ id: "github", name: "GitHub", description: expect.any(String),
+    authMethods: ["gh", "token"], variants: ["readonly", "full"] }]);
+  expect((await web.post(presets + "/unknown", {})).status).toBe(404);
+  for (const input of [{}, { auth: "token", token: " " }, { auth: "gh", variant: "typo" }, { auth: "gh", token: "unused" }]) {
+    expect((await web.post(path, input)).status).toBe(400);
+  }
+  const token = "fixture-github-token-271";
+  const response = await web.post(path, { auth: "token", token });
+  expect(response.status).toBe(201);
+  const adapter: AdapterView = await response.json();
+  expect(adapter).toMatchObject({ id: "github", name: "GitHub", kind: "mcp", secretNames: ["GITHUB_TOKEN"], status: { state: "ok" },
+    config: { transport: "http", readOnly: true, url: "https://api.githubcopilot.com/mcp/readonly", headers: { Authorization: "Bearer {{secret:GITHUB_TOKEN}}" } } });
+  expect(adapter.tools.map(t => [t.name, t.defaultEffect, t.effect])).toEqual([
+    ["lookup", "read", "read"], ["unmarked", "read", "read"], ["explicit", "read", "read"],
+  ]);
+  expect(web.app.capabilities.toolActions.get("mcp-github_unmarked")?.effect).toBe("read");
+  expect(received).toContainEqual({ path: "/mcp/readonly", authorization: "Bearer " + token });
+  expect(await web.call("mcp-github", "lookup")).toMatchObject({ text: "Bearer [redacted]" });
+  expect(JSON.stringify(adapter)).not.toContain(token);
+  expect(readFileSync(join(web.dir, "adapters.json"), "utf8")).not.toContain(token);
+  expect(readFileSync(join(web.dir, "secrets.json"), "utf8")).not.toContain(token);
+  expect(openSecrets(web.dir).get("adapter:github:GITHUB_TOKEN")).toBe(token);
+  expect((await web.post(path, { auth: "gh" })).status).toBe(409);
+  const reflected = await (await web.change("PATCH", "/github", { config: { ...adapter.config,
+    url: "https://api.githubcopilot.com/echo-schema" } })).json();
+  expect(reflected.status).toEqual({ state: "error", detail: "Discovered tool metadata contains a configured secret" });
+  expect(JSON.stringify(reflected)).not.toContain(token);
+  expect(readFileSync(join(web.dir, "adapters.json"), "utf8")).not.toContain(token);
+});
+
+it("reports gh login failure and obtains fresh credentials on reconnect and refresh", async () => {
+  const received = await localGithubMcp();
+  cleanup.push(() => { vi.unstubAllEnvs(); });
+  const web = await fixture(); await web.login();
+  const gh = join(web.dir, "gh");
+  writeFileSync(gh, '#!/bin/sh\necho private-diagnostic >&2\nexit 1\n', { mode: 0o700 });
+  vi.stubEnv("PATH", web.dir);
+  const response = await web.post(root + "/presets/github", { auth: "gh", variant: "full", id: "github-work", name: "Work" });
+  expect(response.status).toBe(201);
+  expect(await response.json()).toMatchObject({ id: "github-work", name: "Work", secretNames: [], config: { url: "https://api.githubcopilot.com/mcp/",
+    headers: { Authorization: "Bearer {{gh-token}}" } }, status: { state: "error", detail: "本机 gh 未登录或不可用，请运行 gh auth login" } });
+  expect(received).toEqual([]);
+  const setGh = (token: string) => writeFileSync(gh, `#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = auth ] && [ "$2" = token ] || exit 1\necho '${token}'\n`);
+  setGh("fixture-gh-first");
+  const list = async (): Promise<AdapterView[]> => (await web.read(root)).json();
+  await expect.poll(async () => (await list())[0]?.status.state, { timeout: 5000 }).toBe("ok");
+  expect(received).toContainEqual({ path: "/mcp/", authorization: "Bearer fixture-gh-first" });
+  setGh("fixture-gh-second");
+  const refreshed: AdapterView = await (await web.post(root + "/github-work/refresh", {})).json();
+  expect(refreshed.status.state).toBe("ok");
+  expect(refreshed.tools.map(t => t.defaultEffect)).toEqual(["read", "write", "write"]);
+  expect(received.at(-1)).toEqual({ path: "/mcp/", authorization: "Bearer fixture-gh-second" });
+  expect(await web.call("mcp-github-work", "lookup")).toMatchObject({ text: "Bearer [redacted]" });
+  expect(JSON.stringify(refreshed)).not.toContain("fixture-gh-");
+  expect(readFileSync(join(web.dir, "adapters.json"), "utf8")).not.toContain("fixture-gh-");
+  expect(openSecrets(web.dir).names("adapter:github-work:")).toEqual([]);
+}, 10_000);
+
+it("shares one gh lookup across configured arguments, environment, headers and URL during discovery", async () => {
+  const received = await localGithubMcp();
+  cleanup.push(() => { vi.unstubAllEnvs(); });
+  const web = await fixture(); await web.login();
+  vi.stubEnv("PATH", web.dir);
+  const calls = join(web.dir, "gh-calls");
+  vi.stubEnv("GH_FIXTURE_CALLS", calls);
+  writeFileSync(join(web.dir, "gh"), '#!/bin/sh\necho called >> "$GH_FIXTURE_CALLS"\necho fixture-gh-shared\n', { mode: 0o700 });
+  const cli: AdapterView = await (await web.post(root, { id: "cli-test", kind: "cli", name: "CLI", config: {
+    command: process.execPath, env: { API_TOKEN: "{{gh-token}}" }, args: ["-e",
+      'if (process.argv[1] !== process.env.API_TOKEN) throw Error(); console.log(process.argv[1])',
+      "--", "{{gh-token}}"],
+  } })).json();
+  expect(cli.tools[0]?.description).toBe("CLI\n[redacted]\n");
+  expect(readFileSync(calls, "utf8")).toBe("called\n");
+  const mcp: AdapterView = await (await web.post(root, { id: "mcp-test", kind: "mcp", name: "MCP", config: {
+    transport: "http", url: "https://api.githubcopilot.com/mcp/{{gh-token}}", headers: { Authorization: "Bearer {{gh-token}}" },
+  } })).json();
+  expect(mcp.status.state).toBe("ok");
+  expect(received.at(-1)).toEqual({ path: "/mcp/fixture-gh-shared", authorization: "Bearer fixture-gh-shared" });
+  expect(readFileSync(calls, "utf8")).toBe("called\ncalled\n");
 });
