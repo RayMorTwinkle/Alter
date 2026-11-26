@@ -1,3 +1,5 @@
+import { nodeAdapterRoute } from "./node-adapters.ts";
+import { RESTRICTED_HOST_CAPABILITIES, hostPolicy } from "./role-policy.ts";
 import { attachNodeSockets } from "./node-sockets.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -11,7 +13,7 @@ import {
 } from "@alter/core";
 import { legacyPluginWeb, type LegacyPluginOptions } from "./legacy-plugin-options.ts";
 import { PluginError } from "@alter/plugin-runtime";
-import { adapterPresets, presetConfig } from "./adapters/presets.ts";
+import { AdapterError, adapterPresets, presetConfig } from "@alter/adapters";
 import type { WebPluginManager } from "./plugins.ts";
 import { settingsWriter } from "./settings-api.ts";
 import { openService, type ServiceOptions } from "./service.ts";
@@ -46,7 +48,7 @@ type WebOptions = LegacyPluginOptions & {
 
 export async function createWebServer(app: AlterApp, options: WebOptions) {
   const gatewayMode = process.env.ALTER_AUTH === "gateway";
-  const restricted = process.env.ALTER_ROLE === "user";
+  const { restricted, allowsRoute } = hostPolicy();
   if (!gatewayMode && !options.password) throw new Error("Missing ALTER_WEB_PASSWORD");
   const passwordHash = digest(options.password);
   const sessions = gatewayMode ? undefined : openSessions(join(options.dataDir, "web-sessions.json"), passwordHash);
@@ -78,7 +80,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     if (event === "notifications" && clients.size) webDelivery(data);
   });
   const { plugins } = options;
-  const fallback = legacyPluginWeb(options, !plugins);
+  const fallback = legacyPluginWeb(options, !plugins, !restricted);
   const extensions = () => [...plugins?.web() ?? [], ...fallback];
   const hasExternalChannel = () => extensions().some(web => web.externalDelivery);
   function broadcast(event: string, data: unknown) {
@@ -105,6 +107,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     }
   }
   bindFeeds();
+  const stopNodeUpdates = app.nodes.adapters.subscribe(() => {
+    if (clients.size) void app.nodes.all().then(nodes => broadcast("nodes", nodes)).catch(() => {});
+  });
   const stopPlugins = plugins?.subscribe(() => {
     bindFeeds();
     if (clients.size) broadcast("plugins", plugins.list());
@@ -158,9 +163,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     // Move a still valid pre-port session to the per-port name without asking for the password again.
     if (legacy && !logout && !trusted && sessions?.has(legacy)) res.setHeader("Set-Cookie", [
       `${cookieName}=${legacy}; Max-Age=${sessionMs / 1000}; ${cookieOptions}`, `${legacyCookie}=; Max-Age=0; ${cookieOptions}`]);
-    if (restricted && (/^\/api\/(adapters|ext-plugins|feishu)(\/|$)/.test(path) ||
-        /^\/api\/plugins\/(browser|feishu|(?:ext|cli|mcp|api)-[^/]+)(\/|$)/.test(path) ||
-        (path === "/api/service" && method !== "GET"))) throw new HttpError(403, "Administrator instance required");
+    if (!allowsRoute(path, method)) throw new HttpError(403, "Administrator instance required");
     if (trusted && method === "GET" && path === "/api/gateway/instance") {
       return json(res, 200, { rss: process.memoryUsage.rss() });
     }
@@ -179,6 +182,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       res.setHeader("Set-Cookie", `${cookieName}=; Max-Age=0; ${cookieOptions}`);
     } else if (method === "GET" && path === "/api/nodes") {
       return json(res, 200, await app.nodes.all());
+    } else if (path === "/api/nodes/adapter-presets" || /^\/api\/nodes\/[^/]+\/adapters(\/|$)/.test(path)) {
+      const { status, data } = await nodeAdapterRoute(app.nodes, path, req);
+      return method === "GET" ? json(res, status, data) : mutation(status, data);
     } else if (method === "GET" && /^\/api\/nodes\/[^/]+\/sessions$/.test(path)) {
       const query = new URL(req.url!, "http://localhost").searchParams;
       const harness = query.get("harness");
@@ -201,7 +207,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (!await app.nodes.revoke(path.split("/")[3]!)) throw new HttpError(404, "Unknown node");
     } else if (method === "GET" && path === "/api/service") {
       return json(res, 200, service?.state() ?? { supported: false, managed: false, autostart: false, keepAlive: false,
-        preventSleep: false, restrictedCapabilities: ["browser", "adapters", "ext-plugins", "cli", "feishu", "service"] });
+        preventSleep: false, restrictedCapabilities: RESTRICTED_HOST_CAPABILITIES });
     } else if (method === "PUT" && path === "/api/service") {
       const change = service!.update(await body(req));
       json(res, 200, change.state);
@@ -419,7 +425,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     shouldUpgradeCallback: req => server.listenerCount("upgrade") > 0 && (!gatewayMode || trustedGateway(req)),
   }, (req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof FeedbackError || cause instanceof PluginHttpError || cause instanceof PluginError || cause instanceof NodeSessionsError ? new HttpError(cause.status, cause.message)
+      const error = cause instanceof AdapterError || cause instanceof FeedbackError || cause instanceof PluginHttpError || cause instanceof PluginError || cause instanceof NodeSessionsError ? new HttpError(cause.status, cause.message)
         : cause instanceof MemoryConflict ? new HttpError(409, cause.message)
         : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);
@@ -434,6 +440,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     clearInterval(ping);
     stopHeartbeat();
     stopPlugins?.();
+    stopNodeUpdates();
     stopExt?.();
     for (const binding of feeds.values()) binding.stop();
     feeds.clear();

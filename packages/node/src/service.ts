@@ -50,8 +50,8 @@ WantedBy=default.target
 `;
 }
 
-export function configureService(install: boolean) {
-  if (process.platform === "win32") {
+export function configureService(install: boolean, platform = process.platform) {
+  if (platform === "win32") {
     const sid = windowsUserSid();
     const task = "Alter Node " + sid;
     const scheduler = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "schtasks.exe");
@@ -71,7 +71,7 @@ export function configureService(install: boolean) {
     return;
   }
   const searchPath = (process.env.PATH ?? "").split(":").filter(p => path.posix.isAbsolute(p)).join(":");
-  if (process.platform === "darwin") {
+  if (platform === "darwin") {
     const file = path.join(homedir(), "Library/LaunchAgents", label + ".plist");
     if (install) {
       mkdirSync(path.dirname(file), { recursive: true });
@@ -79,7 +79,7 @@ export function configureService(install: boolean) {
     } else rmSync(file, { force: true });
     return;
   }
-  if (process.platform !== "linux") throw new Error("不支持此操作系统");
+  if (platform !== "linux") throw new Error("不支持此操作系统");
   const file = path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "systemd/user", unit);
   if (install) {
     mkdirSync(path.dirname(file), { recursive: true });

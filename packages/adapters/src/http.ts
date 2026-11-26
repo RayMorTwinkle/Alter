@@ -1,6 +1,6 @@
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { reply } from "@alter/core";
+import { reply } from "./types.ts";
 import { expandMap, record, type Connection, type DiscoveredTool, type Expand, type HttpConfig } from "./types.ts";
 
 type Obj = Record<string, unknown>;
@@ -147,12 +147,28 @@ function operation(doc: Obj, path: string, item: Obj, method: string, op: Obj, b
   };
 }
 
+// A downloaded specification controls its own redirects and servers. Only the
+// configured origin (or an explicit baseUrl) is authorized to receive headers.
+async function fetchSpec(address: string, headers: Record<string, string>, signal: AbortSignal) {
+  const origin = new URL(address).origin;
+  let url = new URL(address);
+  for (let redirects = 0; redirects <= 20; redirects++) {
+    const res = await fetch(url, { headers: url.origin === origin ? headers : {}, signal, redirect: "manual" });
+    const location = res.headers.get("location");
+    if (![301, 302, 303, 307, 308].includes(res.status) || !location) return res;
+    await res.body?.cancel();
+    url = httpUrl(location, url.href);
+  }
+  throw new Error("Too many OpenAPI redirects");
+}
+
 export async function discoverHttp(config: HttpConfig, expand: Expand, signal: AbortSignal): Promise<Connection> {
   const headers = await expandMap(config.headers, expand);
-  let doc: Obj, specUrl: string | undefined;
+  let doc: Obj, specUrl: string | undefined, configuredOrigin: string | undefined;
   if (typeof config.spec === "string" && (!config.spec.trimStart().startsWith("{") || config.spec.trimStart().startsWith("{{"))) {
     specUrl = httpUrl(await expand(config.spec)).href;
-    const res = await fetch(specUrl, { headers, signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) });
+    configuredOrigin = new URL(specUrl).origin;
+    const res = await fetchSpec(specUrl, headers, AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
     if (!res.ok) { await res.body?.cancel(); throw new Error("OpenAPI document returned HTTP " + res.status); }
     specUrl = res.url;
     doc = object(JSON.parse(await limitedText(res.body, 10_000_000, false)));
@@ -165,13 +181,15 @@ export async function discoverHttp(config: HttpConfig, expand: Expand, signal: A
     const variable = variables[key];
     return record(variable) && typeof variable.default === "string" ? variable.default : match;
   });
-  if (specUrl && config.baseUrl === undefined && address.includes("{{gh-token}}")) throw new Error("Remote OpenAPI servers cannot request a gh token");
+  if (specUrl && config.baseUrl === undefined && /\{\{(?:gh-token|secret:)/.test(address))
+    throw new Error("Remote OpenAPI servers cannot request local credentials");
   const base = httpUrl(await expand(address), specUrl);
+  const operationHeaders = configuredOrigin && !config.baseUrl && base.origin !== configuredOrigin ? {} : headers;
   const tools: DiscoveredTool[] = [];
   for (const [path, value] of Object.entries(object(doc.paths))) {
     const item = resolve(doc, value);
     for (const [method, op] of Object.entries(item)) if (methods.has(method)) {
-      tools.push(operation(doc, path, item, method, object(op), base, headers));
+      tools.push(operation(doc, path, item, method, object(op), base, operationHeaders));
     }
   }
   return { tools };
