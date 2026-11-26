@@ -4,7 +4,7 @@ import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { containsCredential, withholdCredentials } from "./credentials.ts";
 import { createProxy } from "./http.ts";
-import { check, fields, matches, record, type Effect } from "./manifest.ts";
+import { check, fields, matches, record, validateToolInput, type Effect } from "./manifest.ts";
 import { createWorkerHost, WorkerReset, type run, type HostCall, type Invoke } from "./process.ts";
 import { openStore, freshProgress, type Version } from "./store.ts";
 
@@ -135,7 +135,13 @@ export function openRuntime(data: string, host: Host, adapters: { run?: typeof r
     const m = version.manifest, id = m.id, sha = version.sha, source = call.kind === "sources";
     const tool = m.tools.find(t => t.name === call.name);
     const spec = m.sources.find(s => s.name === call.name);
-    check(source ? spec && !version.sources[call.name]?.paused : tool && matches(tool.inputSchema, call.args), "Undeclared call or invalid arguments");
+    if (source) {
+      check(spec, "Unknown source " + JSON.stringify(call.name) + " in plugin " + JSON.stringify(id));
+      check(!version.sources[call.name]?.paused, "Source is paused");
+    } else {
+      check(tool, "Unknown tool " + JSON.stringify(call.name) + " in plugin " + JSON.stringify(id));
+      validateToolInput(tool, call.args);
+    }
     check(!source || !session.polls.has(call.name), "Source poll already in progress");
     const controller = new AbortController();
     const signal = AbortSignal.any([session.stop.signal, controller.signal, ...(caller?.signal ? [caller.signal] : [])]);

@@ -17,7 +17,7 @@ import { createMailPlugin } from "../../plugin-mail/src/index.ts";
 import { config as mailConfig, fakeMail, messageId, outgoing } from "../../plugin-mail/test/fake.ts";
 import type { AlterPlugin } from "../src/capabilities.ts";
 import { Events, openAlter } from "../src/main.ts";
-import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, type Storage } from "../src/runtime.ts";
+import { context, defineTool, LiveDoc, MemoryStorage, reply, openNodeSqliteStorage, ToolResultEntry, type Storage } from "../src/runtime.ts";
 import { stats } from "../src/stats.ts";
 import { Ledger, Tasks, type Permission } from "../src/state.ts";
 import { observeSurface, stopMainTurn } from "../src/observe.ts";
@@ -756,6 +756,63 @@ function externalPlugin() {
   };
   return { plugin, execute };
 }
+
+it("rejects invalid arguments for controls, memory and dynamically installed tools before execution or approval", async () => {
+  const cases = [
+    ["dispatch_task", { brief: "new task" }, /missing required arguments "context" and "permission"/],
+    ["dispatch_task", { brief: "new task", context: "fresh" }, /missing required argument "permission"/],
+    ["dispatch_task", { brief: "new task", context: null, permission: "restricted" }, /"context".*null/],
+    ["dispatch_task", { brief: "new task", cwd: "/tmp/project" }, /missing required arguments "context" and "permission"/],
+    ["dispatch_task", { brief: "new task", context: "fresh", permission: "restricted", cwd: "/tmp/project" }, /provide "runner" with "cwd"/],
+    ["schedule_set", { id: "example" }, /at least one updatable field.*"trigger".*"status"/],
+    ["schedule_set", { id: "example", changes: {} }, /unknown argument "changes".*"trigger".*"status"/],
+    ["schedule_set", { id: "example", status: "deleted", brief: "ignored" }, /omit "trigger", "brief" and "thinking".*"deleted"/],
+    ["schedule_create", { brief: "test", type: "reminder", trigger: { kind: "every", minutes: 5 }, continue_from: "task-1" }, /"continue_from".*"type".*"task"/],
+    ["feedback_answer", { issueId: "test", options: [], other: "  " }, /selection in "options" or non-empty text in "other"/],
+    ["memory_read", {}, /exactly one of "id" or "ids"/],
+    ["memory_read", { id: "x", ids: ["x"] }, /exactly one of "id" or "ids"/],
+    ["memory_read", { ids: [] }, /"ids".*at least 1/],
+    ["memory_write", { body: "test" }, /missing required arguments "title" and "type".*"add"/],
+    ["memory_write", { op: "modify", body: "test" }, /missing required argument "id".*"modify"/],
+    ["memory_write", { op: "modify", id: "x" }, /at least one.*"body".*"modify"/],
+    ["memory_write", { op: "supersede", title: "A title" }, /missing required arguments "id" and "type" and "body".*"supersede"/],
+    ["memory_delete", {}, /missing required argument "id"/],
+    ["remote_write", { q: "foo", pageToken: "2" }, /unknown argument "pageToken".*allowed properties: "q", "page_token"/],
+    ["remote_write", { q: null }, /"q": expected string, got null/],
+  ] as const;
+  const execute = vi.fn(async () => reply("executed"));
+  const describe = vi.fn(() => undefined);
+  const app = await open((text, last) => {
+    if (last.role !== "user") return say("done");
+    if (text === "lease remote") return call("enable_tool", { capability: "remote" });
+    const index = /^invalid (\d+)$/.exec(text);
+    if (!index) return say("done");
+    const [name, args] = cases[Number(index[1])]!;
+    return call(name, structuredClone(args) as Parameters<typeof fauxToolCall>[1]);
+  }, new MemoryStorage(), [], 2_000);
+  // Simulate an adapter or external plugin publishing a raw JSON Schema at runtime.
+  await app.replacePlugin("remote", {
+    capability: { id: "remote", actions: [{ name: "write", effect: "write" }] }, describe,
+    tools: [{ name: "remote_write", description: "Write remotely", execute,
+      parameters: { type: "object", required: ["q"], properties: { q: { type: "string" }, page_token: { type: "string" } } } }],
+  });
+  await input(app, "lease remote");
+  for (const index of cases.keys()) await input(app, "invalid " + index);
+  const page = await app.main.entries({ order: "ascending" }, 200, undefined, context);
+  const errors = page.items.filter(ToolResultEntry.is).filter(entry => entry.data.diagnostics.some(diagnostic => diagnostic.code === "invalid_arguments"));
+  expect(errors).toHaveLength(cases.length);
+  for (const [index, entry] of errors.entries()) {
+    const [name, , feedback] = cases[index]!;
+    const text = contentText(entry.model![0]!.content);
+    expect(text).toContain('Invalid arguments for tool "' + name + '"');
+    expect(text).toMatch(feedback);
+    expect(text).not.toMatch(/\brequires?\b[^\n]*permission/i);
+  }
+  expect(execute).not.toHaveBeenCalled();
+  expect(describe).not.toHaveBeenCalled();
+  expect((await app.harness.snapshot(Requests, app.main.id, context))?.pending).toEqual({});
+  expect((await app.harness.snapshot(Tasks, app.main.id, context))?.byId).toEqual({});
+});
 
 it.each(["send", "delete", "run"])("requires user approval for a restricted task's remote_%s", async action => {
   const { plugin, execute } = externalPlugin();

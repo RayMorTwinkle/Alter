@@ -19,6 +19,7 @@
     "@earendil-works/pi-schema": "1.6.0"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./tool-validation": "./src/tool-validation.ts"
   }
 }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { defineTool, reply, schema, type AlterPlugin, type ScheduleEvents } from "@alter/core";
+import { defineTool, reply, schema, withStrictToolArguments, type AlterPlugin, type ScheduleEvents } from "@alter/core";
 import { calendarTime } from "./time.ts";
 
 const { bool, obj, opt, str } = schema;
@@ -153,9 +153,11 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
         } }),
       defineTool({ name: "calendar_create", description: "Create a calendar event. Default duration is one hour or one local date for all-day events. All-day end dates are exclusive.",
         parameters: obj({ title, start: date, ...fields }), execute: async args => save(args) }),
-      defineTool({ name: "calendar_update", description: "Edit the supplied fields of an event by ID. To move it to a new interval, supply both start and end.",
+      withStrictToolArguments(defineTool({ name: "calendar_update", description: "Edit at least one field of an event by ID. Set both start and end to replace the interval.",
         parameters: obj({ id, title: opt(title), start: opt(date), ...fields }),
         execute: async ({ id, ...args }) => save(args, id) }),
+      ({ id: _, ...args }) => Object.values(args).some(value => value !== undefined) ? undefined
+        : 'provide at least one updatable field: "title", "start", "end", "allDay", "location" or "notes"'),
       defineTool({ name: "calendar_delete", description: "Soft-delete an event by ID.",
         parameters: obj({ id }), execute: async ({ id }) => setDeleted(id, true) }),
       defineTool({ name: "calendar_restore", description: "Restore a soft-deleted event by ID.",

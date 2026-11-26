@@ -148,6 +148,9 @@ importers:
 
   packages/plugin-runtime:
     dependencies:
+      '@alter/core':
+        specifier: workspace:*
+        version: link:../core
       '@alter/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk

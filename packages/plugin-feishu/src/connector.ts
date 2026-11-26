@@ -1,4 +1,4 @@
-import { defineTool, reply, schema, type AlterPlugin } from "@alter/core";
+import { defineTool, reply, schema, withStrictToolArguments, type AlterPlugin } from "@alter/core";
 import { openAccount } from "./account.ts";
 import type { FeishuUserConfig } from "./config.ts";
 import { saveResource } from "./download.ts";
@@ -97,15 +97,16 @@ export function createFeishuConnector(options: { config: FeishuUserConfig; dataD
       defineTool({ name: "feishu_reply", description: "Reply to a specific message as the connected Feishu user. Set in_thread to reply in its topic.",
         parameters: obj({ message_id: id, text: id, in_thread: opt(bool()) }),
         execute: args => write(token => api.reply(token, args.message_id, args.text, args.in_thread)) }),
-      defineTool({ name: "feishu_send", description: "Send text as the connected user. Provide exactly one chat_id or open_id. Optional receive_id_type must match the supplied ID.",
+      withStrictToolArguments(defineTool({ name: "feishu_send", description: "Send text as the connected user. Provide exactly one chat_id or open_id. Optional receive_id_type must match the supplied ID.",
         parameters: obj({ chat_id: opt(id), open_id: opt(id), receive_id_type: opt(oneOf(["chat_id", "open_id"])), text: id }),
         execute: args => write(token => {
           const type = args.chat_id ? "chat_id" : "open_id";
-          if (!!args.chat_id === !!args.open_id || (args.receive_id_type && args.receive_id_type !== type)) {
-            throw new Error("请提供 chat_id 或 open_id 其中之一，receive_id_type 须与之对应");
-          }
           return api.send(token, (args.chat_id ?? args.open_id)!, args.text, type);
-        }) }),
+        }) }), ({ chat_id, open_id, receive_id_type }) => {
+          if ((chat_id === undefined) === (open_id === undefined)) return 'provide exactly one of "chat_id" or "open_id"';
+          const target = chat_id === undefined ? "open_id" : "chat_id";
+          if (receive_id_type !== undefined && receive_id_type !== target) return '"receive_id_type" must match the supplied "' + target + '"';
+        }),
     ],
   };
   const { start, callback, status, disconnect } = account;

@@ -19,6 +19,7 @@ export type TimelineItem = {
   tool?: string;
   args?: string;
   isError?: boolean;
+  errorDetail?: string;
   silent?: true;
   reason?: string;
   taskId?: string;
@@ -257,7 +258,12 @@ export function timelineEntries(entry: EntryRecord, turn: Turn): TimelineItem[] 
       // Older receipts are a bare id; newer ones add the queue state and an auto-report note.
       const receipt = /^(task-\d+)(?:$| (已排队，电脑上线后开始|已开始)。)/.exec(result);
       const taskId = receipt?.[1];
-      items.push({ ...call.item, isError: msg.isError, ...(taskId && { taskId }), ...(receipt?.[2]?.startsWith("已排队") && { status: "queued" }) });
+      const detail = msg.isError ? contentText(msg.content).trim()
+        .replace(/(?:^|\n)<harness>\s*\[error\]\s*([\s\S]*?)\s*<\/harness>$/, "\n$1")
+        .trim().replace(/^\[error\]\s*/, "").trim() : "";
+      const errorDetail = detail.length <= 500 ? detail : detail.slice(0, 499).replace(/[\uD800-\uDBFF]$/, "").trimEnd() + "…";
+      items.push({ ...call.item, isError: msg.isError, ...(errorDetail && { errorDetail }),
+        ...(taskId && { taskId }), ...(receipt?.[2]?.startsWith("已排队") && { status: "queued" }) });
       if (!msg.isError && call.message !== undefined) {
         items.push({ id: `${call.item.id}-message`, kind: "message", text: call.message, at: Math.max(at, call.item.at) });
       }

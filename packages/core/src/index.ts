@@ -12,6 +12,7 @@ export { Events, Leases, openAlter } from "./main.ts";
 export { MemoryInputError, MemoryConflict, type MemoryChange, type MemoryEntry, type MemoryItem } from "./memory.ts";
 export { createGatewayModels } from "./models.ts";
 export { context, conversationDoc, defineTool, reply, openNodeSqliteStorage, type ToolRegistration } from "./runtime.ts";
+export { withStrictToolArguments } from "./tool-validation.ts";
 export * as schema from "@earendil-works/pi-schema";
 export { Ledger, Tasks, type LedgerEntry, type Permission, type PermissionItem, type TaskRecord } from "./state.ts";
 export { appendUsage, readUsage, usageSummary, usageTotals, type UsageLine } from "./usage.ts";
