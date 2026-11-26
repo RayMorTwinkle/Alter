@@ -1,3 +1,4 @@
+import { isUserChannel } from "./user-channels.ts";
 import { FeedbackOutcomes, interacted, triageScope } from "./feedback-settings.ts";
 import { defineDocFamily } from "@earendil-works/pi-durable";
 import { arr, obj, opt, str } from "@earendil-works/pi-schema";
@@ -10,7 +11,7 @@ import { recordAdoption } from "./heartbeat-state.ts";
 import { context, InboxDoc, type EntryId, defineTool, reply, conversationDoc, ROOT_CONVERSATION_ID, type Conversation, type Tx } from "./runtime.ts";
 
 export type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web" | "cli" | "feishu"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: string; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; category?: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -123,7 +124,7 @@ export async function deliverReply(tx: Tx, first: EntryId, answer: EntryId, at: 
   if (heartbeat) await recordHeartbeatReply(tx, heartbeat.heartbeatId);
   const title = Array.from(text.split(/\r?\n/, 1)[0]!).slice(0, 60).join("");
   await addNotification(tx, { id: `message-answer-${answer}`, at, kind: "message", level: "now", title, body: text,
-    status: "unread", source: report ? "report" : "alter", ...((channel === "web" || channel === "cli" || channel === "feishu") && { channel }),
+    status: "unread", source: report ? "report" : "alter", ...((typeof channel === "string" && isUserChannel(origin)) && { channel }),
     ...heartbeat });
   await tx.appendEntry(root, { kind: "alter.reply", data: { answer } });
 }

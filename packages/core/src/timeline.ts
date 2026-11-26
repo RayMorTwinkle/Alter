@@ -1,3 +1,4 @@
+import { isUserChannel, userChannelLabel } from "./user-channels.ts";
 import type { NodeRunner } from "./node-state.ts";
 import { isInlineTaskReport } from "./wake.ts";
 import { interacted } from "./feedback-settings.ts";
@@ -25,6 +26,7 @@ export type TimelineItem = {
   status?: "queued";
   model?: string;
   source?: string;
+  sourceLabel?: string;
 };
 export type TranscriptItem =
   | { kind: "user" | "assistant" | "thinking" | "status"; text: string; at: number }
@@ -32,9 +34,6 @@ export type TranscriptItem =
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
 const inputKind = "alter.user-input";
-const userSources = new Set(["web", "feishu", "cli"]);
-
-const sourceLabels: Record<string, string> = { web: "网页", feishu: "飞书", cli: "命令行" };
 const wakeLabels: Record<string, string> = { "alter.task-report": "任务报告", "alter.heartbeat": "巡检",
   "alter.schedule": "定时安排", "alter.report-due": "近况报告", "alter.triage": "消息分诊" };
 const defaultClock = inputClock();
@@ -49,7 +48,7 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
   // Every model input opens with who is speaking, so the user's words never blend into framework wakes.
   const { time } = (mainInputContext.get(main.id) ?? defaultClock)(input.at);
   const source = String(input.data.source ?? "");
-  const label = input.user ? `用户消息 · ${sourceLabels[source] ?? source}` : `系统消息 · ${wakeLabels[input.kind] ?? input.kind}`;
+  const label = input.user ? `用户消息 · ${input.data.sourceLabel ?? source}` : `系统消息 · ${wakeLabels[input.kind] ?? input.kind}`;
   const header = `[${label} · ${time}]`;
   let content = input.content;
   if (!input.user) content += "\n" + (input.kind === "alter.task-report" && input.data.originSilent ? silentTaskHint : silentHint);
@@ -76,11 +75,13 @@ export async function submitWake(tx: Tx, main: ConversationHandle, input: {
     onAbort: input.kind === "alter.task-report" ? "keep" : undefined, entry: { kind: input.kind, data: input.data } });
 }
 
-export async function submitMessage(main: Conversation, text: string, source = "web", requestId?: string) {
+export async function submitMessage(main: Conversation, text: string, source = "web", requestId?: string, label?: string) {
   const id = requestId ?? randomUUID();
   const { at } = (mainInputContext.get(main.id) ?? defaultClock)();
+  const channel = userChannelLabel(main, source);
+  const sourceLabel = channel === undefined ? undefined : label ?? channel;
   await main.commit(tx => submitWake(tx, main, { id, at, kind: inputKind, content: text,
-    user: userSources.has(source), data: { id, at, text, source } }), context);
+    user: sourceLabel !== undefined, data: { id, at, text, source, userChannel: sourceLabel !== undefined, ...(sourceLabel !== undefined && { sourceLabel }) } }), context);
   return id;
 }
 
@@ -100,7 +101,7 @@ export async function recentUserText(tx: Tx, conversationId: ConversationId, now
     for (const entry of page.items) {
       if (entry.kind !== inputKind) continue;
       const data = entryData(entry);
-      if (!userSources.has(String(data?.source)) || typeof data?.text !== "string" || !data.text.trim()) continue;
+      if (!isUserChannel(data) || typeof data?.text !== "string" || !data.text.trim()) continue;
       if (typeof data.at !== "number" || data.at > now) continue;
       if (data.at < now - 2 * 60 * 60_000) return messages.reverse();
       // A truncated instruction could omit a restriction. Ask the user if it cannot fit.
@@ -120,8 +121,7 @@ export async function hasUserInput(tx: Tx, id: ConversationId) {
   for (const input of run?.inputs ?? []) {
     const placed = (await tx.submission(input))?.entry;
     const entry = placed === undefined ? undefined : await tx.entry(placed);
-    const source = entryData(entry)?.source;
-    if (entry?.kind === inputKind && typeof source === "string" && userSources.has(source)) return true;
+    if (entry?.kind === inputKind && isUserChannel(entryData(entry))) return true;
   }
   return false;
 }
@@ -187,10 +187,11 @@ function inputItem(entry: InputEntry | undefined, text: string, id: string, at: 
   }
   if (entry?.kind === inputKind || entry?.kind === "alter.cli-input") {
     const source = typeof data?.source === "string" ? data.source : "web";
+    const label = source !== "web" && typeof data?.sourceLabel === "string" ? { sourceLabel: data.sourceLabel } : {};
     if (typeof data?.id === "string" && typeof data.at === "number") {
-      return { kind: "user", source, id: data.id, at: data.at, text: surfaceText(entry, text) };
+      return { kind: "user", source, ...label, id: data.id, at: data.at, text: surfaceText(entry, text) };
     }
-    return { kind: "user", source, text, id, at };
+    return { kind: "user", source, ...label, text, id, at };
   }
   if (entry?.kind === "alter.schedule") return { kind: "notice", id, text: surfaceText(entry, text), at };
   // Older task and broker submissions have no entry metadata. Only untagged framework

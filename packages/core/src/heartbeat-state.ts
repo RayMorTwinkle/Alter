@@ -1,3 +1,4 @@
+import { isUserChannel } from "./user-channels.ts";
 import { FeedbackOutcomes } from "./feedback-settings.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { defineDocFamily } from "@earendil-works/pi-durable";
@@ -39,7 +40,7 @@ export async function restoreActivity(tx: Tx, at: number) {
       const data = entry.data;
       const meta = data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
       const userInput = (entry.kind === "alter.user-input" || entry.kind === "alter.cli-input") &&
-        (typeof meta?.source !== "string" || ["web", "feishu", "cli"].includes(meta.source));
+        ((meta?.userChannel === undefined && typeof meta?.source !== "string") || isUserChannel(meta));
       for (const msg of entry.model ?? []) {
         if (needTimes && (msg.role === "assistant" || msg.role === "user")) state.lastActivity ??= Math.min(at, msg.timestamp);
         if (msg.role !== "user") continue;

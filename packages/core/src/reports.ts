@@ -1,3 +1,4 @@
+import { isUserChannel } from "./user-channels.ts";
 import { calendarTime } from "./calendar-time.ts";
 import { day, lastInteraction } from "./feedback.ts";
 import type { DigestSummary } from "./digest-summary.ts";
@@ -32,7 +33,7 @@ export function registerReports(scheduler: ReturnType<typeof createScheduler>, m
       for (const entry of page.items) {
         const m = entry.data;
         if (entry.kind !== "alter.user-input" || !m || typeof m !== "object" || Array.isArray(m) ||
-          !["web", "cli", "feishu"].includes(String(m.source)) || typeof m.at !== "number") continue;
+          !isUserChannel(m) || typeof m.at !== "number") continue;
         state.lastUser ??= m.at;
         if (m.at < time.midnight(at, -6)) { state.days = [...days]; return; }
         days.add(time.midnight(m.at));

@@ -68,11 +68,11 @@ type Event<T> = SurfaceEvent | import("../../web/src/types.ts").ExtPluginsEvent
   | { event: "heartbeat"; data: HeartbeatEvent } | { event: "snapshot"; data: SurfaceState }
   | { event: "calendar"; data: unknown } | { event: "memory"; data: T };
 
-export async function stream<T = MemoryItem[]>(read: (path: string) => Promise<Response>) {
+export async function stream<T = MemoryItem[], Extra extends { event: string; data: unknown } = never>(read: (path: string) => Promise<Response>) {
   const response = await read("/api/events");
   expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/);
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  const events: Event<T>[] = [];
+  const events: (Event<T> | Extra)[] = [];
   const ended = (async () => {
     let buffer = "";
     for (;;) {
@@ -90,7 +90,7 @@ export async function stream<T = MemoryItem[]>(read: (path: string) => Promise<R
     }
   })();
   cleanup.push(async () => { await reader.cancel(); await ended; });
-  const seen = async (match: (e: Event<T>) => boolean) => { await expect.poll(() => events.some(match)).toBe(true); };
+  const seen = async (match: (e: Event<T> | Extra) => boolean) => { await expect.poll(() => events.some(match)).toBe(true); };
   await seen(e => e.event === "snapshot");
   expect(events[0]?.event).toBe("snapshot");
   return { events, seen, ended };

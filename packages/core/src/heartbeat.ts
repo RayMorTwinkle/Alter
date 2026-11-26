@@ -53,7 +53,7 @@ function section(label: string, lines: string[], count = lines.length) {
 }
 
 export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>, main: () => Conversation,
-  memory: ReturnType<typeof createMemory>, calendar: () => AlterPlugin | undefined, explorationSources: () => string[], budget: ProactiveBudget,
+  memory: ReturnType<typeof createMemory>, agendaProvider: () => AlterPlugin | undefined, explorationSources: () => string[], budget: ProactiveBudget,
   timeZone: string, settings: () => { enabled: boolean; start: string; end: string }, now: () => number,
   dispatch: ReturnType<typeof createDispatcher>, cancel: ReturnType<typeof createTaskCancellation>["cancel"]) {
   const time = calendarTime(timeZone);
@@ -115,7 +115,7 @@ export function registerHeartbeat(scheduler: ReturnType<typeof createScheduler>,
     const facts = items.filter(item => item.kind === "fact").slice(0, 8);
     const memories = Array.from({ length: Math.max(prefs.length, facts.length) }, (_, i) => [prefs[i], facts[i]])
       .flat().filter(item => item !== undefined);
-    const agenda = (calendar()?.agenda?.(3) ?? []).filter(e => e.end > at && e.start < at + 24 * hour);
+    const agenda = (agendaProvider()?.agenda?.(3) ?? []).filter(e => e.end > at && e.start < at + 24 * hour);
     const tasks = Object.entries((await tx.doc(Tasks, ROOT_CONVERSATION_ID)).byId).filter(([, t]) => t.status === "running");
     const chat = state.chat ?? [];
     const counts = { goals: goals.length, memories: memories.length, chat: chat.length, agenda: agenda.length,

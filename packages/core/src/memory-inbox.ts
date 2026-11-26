@@ -1,3 +1,4 @@
+import { isUserChannel } from "./user-channels.ts";
 import { conversationDoc, ROOT_CONVERSATION_ID, type Cursor, type EntryRecord, type Tx } from "./runtime.ts";
 import type { ExternalEvent } from "./capabilities.ts";
 
@@ -26,7 +27,7 @@ export async function recordOwnEvent(tx: Tx, event: ExternalEvent) {
 export function ownUserMessage(entry: EntryRecord): OwnMessage | undefined {
   const d = entry.data;
   if (entry.kind !== "alter.user-input" || !d || typeof d !== "object" || Array.isArray(d)) return;
-  if (typeof d.source !== "string" || !["web", "cli", "feishu"].includes(d.source) ||
+  if (!isUserChannel(d) ||
     typeof d.id !== "string" || typeof d.text !== "string" || typeof d.at !== "number") return;
   return { id: d.id, at: d.at, text: d.text };
 }

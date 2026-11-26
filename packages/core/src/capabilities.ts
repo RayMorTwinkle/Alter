@@ -17,25 +17,26 @@ type ActionPolicy = { effect: Effect };
 export type ToolAction = ActionPolicy & { capability: string; action: string };
 export type Capability = {
   id: string;
+  summary?: string;
   /** Legacy manifest field. Enabled plugin actions are leasable (ADR-0012). */
   mainLeasable?: boolean;
   actions: (ActionPolicy & { name: string })[];
 };
 
 export const demoManifests: Capability[] = [
-  { id: "calendar", mainLeasable: true, actions: [
+  { id: "calendar", summary: "calendar（示例日历，仅标题）", mainLeasable: true, actions: [
     { name: "list", effect: "read" }, { name: "create", effect: "write" },
     { name: "update", effect: "write" },
   ] },
-  { id: "notes", mainLeasable: true, actions: [{ name: "read", effect: "read" }] },
-  { id: "outbox", mainLeasable: true, actions: [{ name: "send", effect: "write" }] },
+  { id: "notes", summary: "notes（示例笔记 welcome）", mainLeasable: true, actions: [{ name: "read", effect: "read" }] },
+  { id: "outbox", summary: "outbox（模拟发送）", mainLeasable: true, actions: [{ name: "send", effect: "write" }] },
 ];
 
 export type ExternalEvent = {
   source: string; kind: string; summary: string; ref: string; at: number; untrusted: true;
   author?: "external" | "user"; chatId?: string; contact?: string; contactName?: string; text?: string;
 };
-export type WatchWhere = { channel: "feishu" | "mail"; chatId?: string; contact?: string };
+export type WatchWhere = { channel: string; chatId?: string; contact?: string };
 export type WatchSource = {
   authorize(where: WatchWhere): Promise<void>;
   poll(where: WatchWhere, since: number, until: number): Promise<ExternalEvent[]>;
@@ -45,6 +46,10 @@ export type DescribeState = {
   conversationId: ConversationId;
   snapshot<T extends JsonObject>(doc: ConversationDocToken<T>): Promise<Readonly<T> | undefined>;
 };
+export type ScheduleEvents = {
+  get(id: string): { start: number; end: number } | undefined;
+  subscribe(listener: (id: string) => void): () => void;
+};
 export type AlterPlugin = {
   capability: Capability;
   tools: ToolRegistration[];
@@ -53,10 +58,9 @@ export type AlterPlugin = {
   ownMessages?(since: number, until: number): Promise<{ id: string; text: string; at: number }[]>;
   watchSource?: WatchSource;
   agenda?(days?: number): { id: string; title: string; start: number; end: number }[];
-  calendarEvents?: {
-    get(id: string): { start: number; end: number } | undefined;
-    subscribe(listener: (id: string) => void): () => void;
-  };
+  scheduleEvents?: ScheduleEvents;
+  /** @deprecated Use scheduleEvents. */
+  calendarEvents?: ScheduleEvents;
   onTaskEnd?(conversation: Pick<Conversation, "id" | "commit">): Promise<void>;
   start?(host: PluginHost): Promise<() => Promise<void>>;
 };

@@ -249,3 +249,20 @@ it("migrates action-only rows and edits paused reminders without spending model 
   expect(await g.app.schedules.list()).toMatchObject([{ id: legacy }]);
   expect(f.faux.state.callCount).toBe(0);
 });
+
+it("keeps event schedules bound to their provider across removal, a colliding ID and a legacy adapter", async () => {
+  const { app, event } = await setup();
+  const { event: meeting } = await event("create", { title: "周会", start: new Date(initial + 900_000).toISOString() });
+  const create = () => app.schedules.create({ type: "reminder", brief: "提醒",
+    trigger: { kind: "event", eventId: meeting.id, anchor: "start", offsetMinutes: 0 } });
+  const id = await create();
+  const other = { capability: { id: "other", actions: [] }, tools: [], calendarEvents: {
+    get: () => ({ start: initial + 2, end: initial + 3 }), subscribe: () => () => {},
+  } };
+  await app.replacePlugin("other", other);
+  await expect(create()).rejects.toThrow("Ambiguous schedule event ID");
+  await app.replacePlugin("calendar");
+  expect(await app.schedules.schedule()).toMatchObject([{ id, nextAt: null }]);
+  await create();
+  expect(await app.schedules.list()).toMatchObject([{ id, nextAt: initial + 900_000 }, { nextAt: initial + 2 }]);
+});

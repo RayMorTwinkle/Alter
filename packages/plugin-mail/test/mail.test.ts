@@ -5,7 +5,7 @@ import { type ExternalEvent, type ToolRegistration } from "@alter/core";
 import { expect, it, vi } from "vitest";
 import { mailConfigFromEnv } from "../src/index.ts";
 import { folderPath, withImap } from "../src/client.ts";
-import { watchInbox } from "../src/watch.ts";
+import { mailWatchSource, watchInbox } from "../src/watch.ts";
 import { config, fakeMail, messageId, outgoing, setup } from "./fake.ts";
 
 it("disables mail without an address and validates credentials and endpoints", () => {
@@ -19,6 +19,15 @@ it("disables mail without an address and validates credentials and endpoints", (
   }
   expect(() => mailConfigFromEnv({ ...env, ALTER_MAIL_AUTH_CODE: "" })).toThrow("AUTH_CODE");
   expect(() => mailConfigFromEnv({ ...env, ALTER_MAIL_ADDRESS: "bad" })).toThrow("ADDRESS");
+});
+
+it("rejects chatId before opening IMAP for both watch authorization and polling", async () => {
+  const { clients, sessions } = fakeMail();
+  const source = mailWatchSource(config, clients);
+  const where = { channel: "mail", chatId: "unsupported" };
+  await expect(source.authorize(where)).rejects.toThrow("邮件盯梢不支持 chatId，请使用 contact");
+  await expect(source.poll(where, 0, 1000)).rejects.toThrow("邮件盯梢不支持 chatId，请使用 contact");
+  expect(sessions).toHaveLength(0);
 });
 
 it("sends RFC 2971 ID during a real ImapFlow handshake over an in-memory transport", async () => {

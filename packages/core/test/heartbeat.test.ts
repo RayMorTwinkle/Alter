@@ -80,7 +80,7 @@ it("summarizes new digests including read items, goals, agenda and tasks, omitti
     { id: "today", title: "会议", start: start + 26 * hour, end: start + 27 * hour },
     { id: "later", title: "超出范围", start: start + 100 * hour, end: start + 101 * hour },
   ]);
-  const f = await setup([{ capability: { id: "calendar", actions: [], mainLeasable: true }, agenda, tools: [] }]);
+  const f = await setup([{ capability: { id: "team-agenda", actions: [], mainLeasable: true }, agenda, tools: [] }]);
   f.app.memory.save({ kind: "goal", text: "活跃的目标", due: start + 24 * hour });
   await f.app.main.commit(async tx => {
     const state = await tx.doc(Tasks, f.app.main.id);

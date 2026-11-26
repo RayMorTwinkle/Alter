@@ -1,3 +1,4 @@
+import { isUserChannel } from "./user-channels.ts";
 import { context, conversationDoc, InboxDoc, LiveDoc, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Harness, type LiveState, type Tx } from "./runtime.ts";
 
 export type Wake = { wakeId: string; wakeSource: string; wakeAt: number; entryId?: number; entryKind?: string; thinking?: "low" | "medium" | "high" | "max" };
@@ -29,7 +30,7 @@ async function recordWake(tx: Tx, id: ConversationId, run: NonNullable<LiveState
   const meta = data && typeof data === "object" && !Array.isArray(data) ? data : undefined;
   let wakeSource = "unknown";
   if (entry?.kind === "alter.user-input" && typeof meta?.source === "string") {
-    wakeSource = ["web", "feishu", "cli"].includes(meta.source) ? "user-" + meta.source : meta.source;
+    wakeSource = isUserChannel(meta) ? "user-" + meta.source : meta.source;
   } else if (entry?.kind === "alter.task-report") wakeSource = meta?.wakeSource === "watch" ? "watch" : "report";
   else if (entry?.kind === "alter.triage") wakeSource = "triage";
   else if (entry?.kind === "alter.report-due") wakeSource = "report-due";

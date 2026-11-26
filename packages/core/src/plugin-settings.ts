@@ -10,3 +10,6 @@ export type PluginStatus = { state: "off" | "needs-config" | "connecting" | "ok"
 export type PluginView = PluginDescription & {
   enabled: boolean; values: Record<string, string | boolean | null | { set: boolean }>; status: PluginStatus;
 };
+
+/** A configuration error whose message is safe to display in settings. */
+export class PluginConfigError extends Error {}

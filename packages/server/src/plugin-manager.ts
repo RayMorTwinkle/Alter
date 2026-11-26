@@ -1,17 +1,14 @@
-import { reply, type AlterApp, type AlterPlugin, type AlterSurface, type PluginDescription, type PluginStatus, type PluginView } from "@alter/core";
-import type { FeishuAccount, FeishuPairing } from "@alter/plugin-feishu";
-import type { Adapters } from "./adapters.ts";
-import type { ExternalPlugins } from "./ext-plugins.ts";
-import type { Sources } from "@alter/plugin-sources";
-import type { Agenda } from "./server.ts";
+import { PluginConfigError, reply, startSurface, type PluginWebExtensions, type AlterApp, type AlterPlugin, type AlterSurface, type PluginDescription, type PluginStatus, type PluginView } from "@alter/core";
 import { openSecrets } from "./secrets.ts";
 import { HttpError } from "./static.ts";
 
-type Instance = {
-  plugin: AlterPlugin; status(probe: boolean): PluginStatus | Promise<PluginStatus>; calendar?: Agenda;
-  surface?: AlterSurface & { pairing(): FeishuPairing }; account?: FeishuAccount;
+type Instance = PluginWebExtensions & {
+  plugin: AlterPlugin; surface?: AlterSurface;
+  status(probe: boolean): PluginStatus | Promise<PluginStatus>;
 };
 export type PluginDefinition = { description: PluginDescription; enabled?: boolean;
+  /** Settings and setup endpoints may be used before the connection is configured. */
+  setupWeb?(view: () => PluginView): PluginWebExtensions;
   open(env: NodeJS.ProcessEnv, changed: () => void): Instance };
 
 function pluginChanges({ id, settings }: PluginDescription, input: Record<string, unknown>) {
@@ -41,10 +38,11 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
   const notify = () => { for (const listener of listeners) listener(); };
   let closed = false;
 
-  function manage({ description, enabled = true, open }: PluginDefinition) {
+  function manage({ description, enabled = true, open, setupWeb }: PluginDefinition) {
     const { id, settings } = description;
     let status: PluginStatus = { state: "connecting" };
     let current: Instance | undefined;
+    let activeWeb: PluginWebExtensions | undefined;
     let stop: (() => Promise<void>) | undefined;
     let pending = Promise.resolve();
     function ordered<T>(fn: () => Promise<T>) {
@@ -80,6 +78,8 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
     async function unload() {
       if (!stop) return;
       current = undefined;
+      activeWeb = undefined;
+      notify();
       await stop();
       stop = undefined;
     }
@@ -128,7 +128,7 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
         };
         stage = "启动连接";
         if (plugin.start) stops.push(await plugin.start(app.events));
-        if (instance.surface) stops.push(await instance.surface.start(app));
+        if (instance.surface) stops.push(await startSurface(app, instance.surface));
         current = instance;
         registered = true;
         const source = plugin.watchSource;
@@ -144,16 +144,21 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
             return track(Promise.resolve(tool.execute(...args)));
           } })),
         });
+        activeWeb = { externalDelivery: instance.externalDelivery, sse: instance.sse, routes: instance.routes?.map(route => ({ ...route,
+          handle: ctx => track(Promise.resolve(route.handle(ctx))),
+        })) };
+        notify();
         if (backgroundCheck) void ordered(async () => { if (current === instance) await refresh(true); });
         else await refresh(true);
       } catch (error) {
-        const reason = error instanceof Error && /^(Invalid ALTER_MAIL_ADDRESS|ALTER_MAIL_(IMAP|SMTP) requires host:port|ALTER_FEISHU_DOMAIN requires feishu or lark)$/.test(error.message)
+        const reason = error instanceof PluginConfigError
           ? error.message : description.name + stage + "失败，请检查配置、连接和数据目录。";
         publish({ state: "error", detail: reason });
         if (stage !== "停止旧连接") await unload().catch(() => {});
       }
     }
-    return { view, get current() { return current; }, close: () => ordered(unload), start: () => ordered(() => reload(true)),
+    const setup = setupWeb?.(view);
+    return { view, web: () => [activeWeb, setup].filter(web => web !== undefined), get current() { return current; }, close: () => ordered(unload), start: () => ordered(() => reload(true)),
       check: () => ordered(async () => { if (current) await refresh(true); else await reload(); return view(); }),
       patch(input: Record<string, unknown>) {
         const changes = pluginChanges(description, input);
@@ -169,6 +174,7 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
   }
   const plugins = new Map(definitions.map(def => [def.description.id, manage(def)]));
   return {
+    web: () => [...plugins.values()].flatMap(p => p.web()),
     active: (id: string) => plugins.get(id)?.current,
     list: () => [...plugins.values()].map(p => p.view()),
     get(id: string) {
@@ -182,5 +188,5 @@ export function createPluginManager(app: AlterApp, dir: string, definitions: Plu
     async close() { closed = true; await Promise.all([...plugins.values()].map(p => p.close())); },
   };
 }
-export type PluginManager = Omit<ReturnType<typeof createPluginManager>, "get"> & { sources?: Sources; ext?: ExternalPlugins; adapters?: Adapters;
+export type PluginManager = Omit<ReturnType<typeof createPluginManager>, "get"> & {
   get(id: string): Pick<ReturnType<ReturnType<typeof createPluginManager>["get"]>, "patch" | "check"> };

@@ -12,7 +12,7 @@ import { clearRequests, finishTask, type createDispatcher, type createTaskCancel
 import { budgetExhausted, type ProactiveBudget } from "./usage.ts";
 
 const nonempty = str({ pattern: "\\S" });
-const parameters = obj({ brief: nonempty, where: obj({ channel: oneOf(["feishu", "mail"]), chatId: opt(nonempty), contact: opt(nonempty) }),
+const parameters = obj({ brief: nonempty, where: obj({ channel: nonempty, chatId: opt(nonempty), contact: opt(nonempty) }),
   until: union([str(), num({ exclusiveMinimum: 0 })]), keywords: opt(arr(nonempty)), thinking: opt(oneOf(["low", "medium", "high", "max"])) });
 type Input = { brief: string; where: WatchWhere; until: string | number; keywords?: string[]; thinking?: "low" | "medium" | "high" | "max" };
 const minute = 60_000;
@@ -213,8 +213,10 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
     const existing = await main().commit(async tx => Object.hasOwn((await tx.doc(Tasks, root)).byId, id), context);
     if (existing) return id;
     const adapter = source(args.where);
-    if (!adapter) throw new Error(args.where.channel === "mail" ? "邮件账号未配置，请先配置 IMAP 授权" : "飞书用户账号未连接，请在 Web 设置中连接");
-    if (args.where.channel === "mail" && args.where.chatId) throw new Error("邮件盯梢不支持 chatId，请使用 contact");
+    if (!adapter) {
+      const available = getPlugins().filter(p => p.watchSource).map(p => p.capability.id);
+      throw new Error(`盯梢渠道 ${args.where.channel} 未配置。当前可用渠道：${available.join("、") || "无"}`);
+    }
     await adapter.authorize(args.where);
     return main().commit(async tx => {
       const tasks = (await tx.doc(Tasks, root)).byId;
@@ -248,7 +250,7 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
       return { pollMs: minute, batchMs, active, reason: `每分钟补拉一次，命中消息后合并 ${batchMs / 1000} 秒再唤醒，到期收尾。` };
     }, context),
     message: (event: ExternalEvent) => main().commit(tx => receive(tx, event), context), tools: [
-    defineTool({ name: "watch", description: "Watch incoming messages until an ISO time or a duration in minutes. contact is a Feishu sender ID or email address.",
+    defineTool({ name: "watch", description: "Watch incoming messages until an ISO time or a duration in minutes. Use the watch source plugin ID as channel, with optional chatId or contact supported by that source.",
       parameters, replay: "safe", async execute(args, api) {
         try { return reply(await create(args, `watch-${api.taskId}`)); }
         catch (error) { return reply(error instanceof Error ? error.message : "创建盯梢失败", true); }

@@ -24,3 +24,10 @@ export async function body(req: IncomingMessage, optional = false): Promise<Reco
   } catch { /* Invalid JSON uses the same error as an invalid top-level value. */ }
   throw new HttpError(400, "Expected a JSON object");
 }
+
+export function requestOrigin(req: IncomingMessage) {
+  const protocol = "encrypted" in req.socket && req.socket.encrypted ? "https" : "http";
+  const host = req.headers.host;
+  if (!host || !/^(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])(?::\d{1,5})?$/.test(host)) throw new HttpError(400, "Invalid Host");
+  return protocol + "://" + host;
+}

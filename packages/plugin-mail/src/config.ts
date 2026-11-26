@@ -1,3 +1,4 @@
+import { PluginConfigError } from "@alter/core";
 import { isIP } from "node:net";
 
 type Endpoint = { host: string; port: number };
@@ -19,14 +20,14 @@ function endpoint(value: string, key: string): Endpoint {
   const host = match?.[1] ?? match?.[2] ?? "";
   const port = Number(match?.[3]);
   const validHost = match?.[1] ? isIP(host) === 6 : validHostname(host);
-  if (!validHost || !port || port > 65535) throw new Error(`${key} requires host:port`);
+  if (!validHost || !port || port > 65535) throw new PluginConfigError(`${key} requires host:port`);
   return { host, port };
 }
 
 export function mailConfigFromEnv(env: NodeJS.ProcessEnv): MailConfig | undefined {
   const address = env.ALTER_MAIL_ADDRESS?.trim();
   if (!address) return undefined;
-  if (!validAddress(address)) throw new Error("Invalid ALTER_MAIL_ADDRESS");
+  if (!validAddress(address)) throw new PluginConfigError("Invalid ALTER_MAIL_ADDRESS");
   const authCode = env.ALTER_MAIL_AUTH_CODE?.trim();
   if (!authCode) throw new Error("Missing ALTER_MAIL_AUTH_CODE");
   return {
