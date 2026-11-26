@@ -71,7 +71,7 @@ async function setup(routes: Record<string, Route> = {}) {
   const { plugin, account } = open();
   async function call(name: string, args: object) {
     const tool = plugin.tools.find(tool => tool.name === name)!;
-    const result = await tool.execute(args, {} as Parameters<ToolRegistration["execute"]>[1], context);
+    const result = await tool.execute(tool.prepareArguments?.(args) ?? args, {} as Parameters<ToolRegistration["execute"]>[1], context);
     if (!("output" in result) || result.output?.[0]?.type !== "text") throw new Error("Missing tool output");
     return { text: result.output[0].text, details: result.details, isError: result.isError };
   }
@@ -385,8 +385,13 @@ it("replies in a thread and accepts exactly one matching DM or chat recipient", 
     expect(f.calls.at(-1)?.body.receive_id).toBe("ou_1");
   }
   const count = f.calls.length;
-  for (const target of [{}, { chat_id: chatId, open_id: "ou_1" }, { chat_id: chatId, receive_id_type: "open_id" }]) {
-    expect(await f.call("feishu_send", { ...target, text: "hi" })).toMatchObject({ isError: true });
+  for (const [args, expected] of [
+    [{ text: "hi" }, /exactly one of "chat_id" or "open_id"/],
+    [{ chat_id: chatId, open_id: "ou_1", text: "hi" }, /exactly one of "chat_id" or "open_id"/],
+    [{ chat_id: chatId, receive_id_type: "open_id", text: "hi" }, /"receive_id_type".*"chat_id"/],
+    [{ chat_id: chatId, text: null }, /"text": expected string, got null/],
+  ] as const) {
+    await expect(f.call("feishu_send", args)).rejects.toThrow(expected);
   }
   expect(f.calls).toHaveLength(count);
 });

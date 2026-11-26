@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { dataDirectory, defineTool, reply, schema, type AlterPlugin } from "@alter/core";
+import { dataDirectory, defineTool, reply, schema, withStrictToolArguments, type AlterPlugin } from "@alter/core";
 import { saveAttachment } from "./attachment.ts";
 import { append, compose, defaultClients, folderPath, withImap, type MailClients } from "./client.ts";
 import { validAddress, type MailConfig } from "./config.ts";
@@ -100,14 +100,14 @@ export function createMailPlugin(config: MailConfig, clients: MailClients = defa
           () => forwardMessage(client, args), await toolAttempt(config, args.to.join(","), api, ctx,
             JSON.stringify(["forward", args.folder ?? "INBOX", args.uid, args.include_attachments ?? true]))))),
       }),
-      defineTool({
+      withStrictToolArguments(defineTool({
         name: "mail_mark", description: "Set or clear seen and/or flagged for the specified UIDs. Other flags are preserved.",
         parameters: obj({ folder, uids: ids, seen: opt(bool()), flagged: opt(bool()) }),
         execute: args => withImap(config, clients, async client => {
           await mark(client, args.folder ?? "INBOX", args.uids, args.seen, args.flagged);
           return reply("Flags updated");
         }),
-      }),
+      }), ({ seen, flagged }) => seen === undefined && flagged === undefined ? 'provide at least one of "seen" or "flagged"' : undefined),
       defineTool({
         name: "mail_move", description: "Move the specified UIDs to an existing destination mailbox. UIDs are local to each folder.",
         parameters: obj({ folder, uids: ids, destination: str({ minLength: 1 }) }),

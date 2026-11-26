@@ -1,6 +1,7 @@
 import type { TaskEnd } from "@alter/node-protocol";
 import { harnessSchema, NodeRuns, type NodeRunner } from "./node-state.ts";
 import type { NodeHub } from "./nodes.ts";
+import { hasArgument, missingArguments, withStrictToolArguments } from "./tool-validation.ts";
 import { arr, bool, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { contentText } from "@earendil-works/pi-ai";
 import { proactivePrinciple, recordAdoption } from "./heartbeat-state.ts";
@@ -262,8 +263,8 @@ function lookup<T>(byId: Record<string, T>, id: string) {
 const autoReport = "。结束后报告会自动送回并唤醒你，本轮直接回复用户即可，不要轮询 task_status。";
 
 export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, nodes: NodeHub) {
-  return defineTool({
-    name: "dispatch_task", description: "Start a task with context and permission. For a node runner, include the necessary context in brief and optionally specify cwd. Set runner.session to a sessionId from node_sessions to resume the user's conversation. Use continue_from to continue an ended Alter task.",
+  return withStrictToolArguments(defineTool({
+    name: "dispatch_task", description: "Always specify context and permission for new Alter tasks (for a node runner they default to fresh and restricted). For a node runner, include the necessary context in brief and optionally specify cwd. Set runner.session to a sessionId from node_sessions to resume the user's conversation. Use continue_from to continue an ended Alter task without setting context, permission or runner.",
     parameters: obj({
       brief: nonempty, context: opt(oneOf(["fork", "fresh"])), permission: opt(oneOf(["restricted", "auto", "full"])),
       runner: opt(obj({ node: nonempty, harness: harnessSchema, session: opt(nonempty) })), cwd: opt(nonempty),
@@ -279,7 +280,6 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, node
       if (continue_from) {
         const previous = lookup(tasks, continue_from);
         if (!previous) return reply("Unknown task", true);
-        if (context || permission || runner) return reply("continue_from inherits context, permission and runner; omit those fields", true);
         target = previous.runner;
         const identity = (await api.snapshot(TaskIdentity, previous.conversationId, ctx))!;
         const latest = tasks[identity.taskId]!;
@@ -293,8 +293,7 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, node
       if (runner && !context) context = "fresh";
       // The external agent still asks before acting; restricted routes every ask to approval.
       if (runner && !permission) permission = "restricted";
-      if (!context || !permission) return reply("A new task requires context and permission", true);
-      if (cwd && !runner && !target) return reply("cwd requires a node runner", true);
+      if (cwd && continue_from && !target) return reply("Argument \"cwd\" is only valid for a task with a node runner", true);
       const result = await api.commit(async tx => {
         if (runner || target) {
           const name = (runner ?? target)!.node;
@@ -315,6 +314,14 @@ export function dispatchTool(dispatch: ReturnType<typeof createDispatcher>, node
       }
       return reply(taskId);
     },
+  }), args => {
+    if (args.continue_from !== undefined) {
+      if (hasArgument(args, ["context", "permission", "runner"])) return 'omit "context", "permission" and "runner" when "continue_from" is provided (they are inherited)';
+      return;
+    }
+    if (args.runner !== undefined) return;
+    return missingArguments(args, ["context", "permission"], 'when creating a new task without "continue_from" or "runner"')
+      ?? (args.cwd !== undefined ? 'provide "runner" with "cwd" when creating a new task' : undefined);
   });
 }
 

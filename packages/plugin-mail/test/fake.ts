@@ -109,7 +109,7 @@ export function setup(overrides: Partial<typeof config> = {}) {
     commit: (fn: (tx: unknown) => unknown) => fn({ doc: async () => docs }) };
   async function call(name: string, args: object) {
     const tool = plugin.tools.find(tool => tool.name === name)!;
-    const result = await tool.execute(args, api as unknown as Parameters<ToolRegistration["execute"]>[1], context);
+    const result = await tool.execute(tool.prepareArguments?.(args) ?? args, api as unknown as Parameters<ToolRegistration["execute"]>[1], context);
     if (!("output" in result)) throw new Error("Missing tool output");
     const first = result.output?.[0];
     if (!first || first.type !== "text") throw new Error("Expected text");
