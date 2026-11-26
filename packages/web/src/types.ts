@@ -1,11 +1,12 @@
 // Mirrors docs/architecture/web-api.md (v1.30).
 
-import type { Hello, HarnessId, TaskEnd } from "../../node-protocol/src/index.ts";
+import type { Hello, HarnessId, NodeAdapterSummary, NodeAdapterToolSummary, TaskEnd } from "../../node-protocol/src/index.ts";
 
-export type { HarnessId, NativeSession } from "../../node-protocol/src/index.ts";
+export type { HarnessId, NativeSession, NodeAdapterSummary, NodeAdapterToolSummary } from "../../node-protocol/src/index.ts";
 export type NodeRunner = { node: string; harness: HarnessId; session?: string };
 export type Node = Pick<Hello, "name" | "roots" | "harnesses"> & {
   id: string; platform: Hello["platform"] | null; online: boolean; createdAt: number; lastSeen: number | null;
+  adapters?: NodeAdapterSummary[];
 };
 export type CreatedNode = {
   id: string; token: string; installCommandPowerShell: string; installCommandUnix: string;
@@ -19,6 +20,7 @@ export type TimelineItem = {
   tool?: string;
   args?: string;
   isError?: boolean;
+  errorDetail?: string;
   silent?: true;
   reason?: string;
   taskId?: string;

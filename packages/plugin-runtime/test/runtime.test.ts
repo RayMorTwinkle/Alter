@@ -8,8 +8,9 @@ import { preparePackage } from "../src/packages.ts";
 import { openStore } from "../src/store.ts";
 import { fixture, manifest } from "./fixtures.ts";
 
-async function setup(worker: typeof run) {
+async function setup(worker: typeof run, declaration = manifest) {
   const f = fixture();
+  f.write(declaration);
   const notify = vi.fn(async () => {}), emit = vi.fn(async () => {});
   const r = openRuntime(f.data, { secrets: () => ({ token: "test-secret" }), emit, notify, changed: () => {} }, { run: worker });
   const p = await r.store.propose(f.pkg);
@@ -17,6 +18,28 @@ async function setup(worker: typeof run) {
   const poll = () => r.invoke("sample", p.sha, { kind: "sources", name: "feed", args: null });
   return { ...f, r, notify, emit, p, tool, poll, approve: () => r.store.approve("sample", p.sha) };
 }
+
+it("reports unknown tools and field-level input errors without invoking the worker", async () => {
+  const worker = vi.fn(async () => "ok");
+  const f = await setup(worker, { ...manifest, tools: [{ ...manifest.tools[0]!, inputSchema: {
+    type: "object", required: ["filters"], properties: {
+      filters: { type: "array", items: { type: "object", required: ["q"], properties: { q: { type: "string" }, page_token: { type: "integer" } } } },
+    },
+  } }] });
+  await f.approve();
+  try {
+    const invoke = (name: string, args: Parameters<typeof f.r.invoke>[2]["args"]) =>
+      f.r.invoke("sample", f.p.sha, { kind: "tools", name, args });
+    await expect(invoke("missing", {})).rejects.toThrow('Unknown tool "missing" in plugin "sample"');
+    await expect(invoke("read", {})).rejects.toThrow('missing required argument "filters"');
+    await expect(invoke("read", { filters: [{ q: null }] })).rejects.toThrow('"filters[0].q": expected string, got null');
+    await expect(invoke("read", { filters: [{ q: "x", page_token: "1" }] })).rejects.toThrow('"filters[0].page_token": expected integer, got string');
+    await expect(invoke("read", { filters: [{ q: "x", pageToken: 1 }] })).rejects.toThrow('unknown argument "filters[0].pageToken" (allowed properties: "q", "page_token")');
+    expect(worker).not.toHaveBeenCalled();
+    await expect(invoke("read", { filters: [{ q: "x", page_token: 1 }] })).resolves.toBe("ok");
+    expect(worker).toHaveBeenCalledTimes(1);
+  } finally { await f.r.close(); }
+});
 it("rejects unknown fields and malformed optional declarations", () => {
   for (const patch of [{ no: 0 }, { sources: [{ ...manifest.sources[0], extra: true }] }, { network: [{ ...manifest.network[0], methods: ["?"] }] }, { requires: [""] },
   { resources: { ...manifest.resources, workers: 5 } }, { tools: [{ ...manifest.tools[0], inputSchema: { type: "object", unknown: true } }] }])

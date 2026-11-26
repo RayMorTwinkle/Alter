@@ -8,6 +8,12 @@ import { detectHarnesses, harnessCommands } from "./spawn.ts";
 
 const help = `alter-node pair --server <url> --token <token> [--name <名称>] [--root <目录> ...]
 alter-node run
+alter-node adapter list | presets [--dir DIR]
+alter-node adapter add [--preset ID] [--file JSON_FILE|-] [--dir DIR]
+alter-node adapter enable|disable|refresh|remove ID [--dir DIR]
+alter-node adapter effect ID TOOL read|write|irreversible [--dir DIR]
+add reads a create or preset JSON object from stdin by default.
+Online commands use the running local node. Offline changes apply on next start.
 alter-node status
 alter-node roots list | add <目录> | remove <目录>
 alter-node harness model <claude-code|codex|opencode|dsh> [<值>|--clear]
@@ -17,6 +23,11 @@ alter-node install-service | uninstall-service`;
 async function main([cmd, ...args]: string[]) {
   const dir = configDir();
   if (!cmd || cmd === "--help") { console.log(help); return; }
+  if (cmd === "adapter") {
+    const { adapterCli } = await import("./adapter-cli.ts");
+    console.log(JSON.stringify(await adapterCli(args, dir), null, 2));
+    return;
+  }
   if (cmd === "pair") {
     // Accept both repeated --root and several consecutive values after --root.
     const flags: string[] = [];

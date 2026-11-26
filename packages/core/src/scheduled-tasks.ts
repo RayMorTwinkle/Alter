@@ -13,6 +13,7 @@ import { submitWake } from "./timeline.ts";
 import { TaskIdentity, Tasks } from "./state.ts";
 import type { createDispatcher } from "./tasks.ts";
 import { budgetExhausted, type ProactiveBudget } from "./usage.ts";
+import { hasArgument, withStrictToolArguments } from "./tool-validation.ts";
 
 const text = str({ pattern: "\\S" });
 const minute = 60_000;
@@ -26,6 +27,14 @@ const parameters = obj({ brief: text, trigger, type: oneOf(["reminder", "task", 
   continue_from: opt(text), thinking: opt(oneOf(["low", "medium", "high", "max"])) });
 const changes = obj({ id: text, trigger: opt(trigger), brief: opt(text),
   thinking: opt(oneOf(["low", "medium", "high", "max"])), status: opt(oneOf(["active", "paused", "deleted"])) });
+const updateFields = ["trigger", "brief", "thinking", "status"] as const;
+const noChanges = 'provide at least one updatable field: "trigger", "brief", "thinking" or "status"';
+const schedulePatchError = (input: Static<typeof changes>) => {
+  if (!hasArgument(input, updateFields)) return noChanges;
+  if (input.status === "deleted" && hasArgument(input, ["trigger", "brief", "thinking"])) return 'omit "trigger", "brief" and "thinking" when "status" is "deleted"';
+};
+const continueFromMismatch = (input: Input) => input.type !== "task" && input.continue_from !== undefined
+  ? 'provide "continue_from" only when "type" is "task"' : undefined;
 const changeSchema = compile(changes);
 const inputSchema = compile(parameters);
 type Input = Static<typeof parameters>;
@@ -163,7 +172,8 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
 
   async function create(input: Input, id: string = randomUUID()) {
     if (!inputSchema.check(input)) throw new Error("Invalid scheduled task");
-    if (input.type !== "task" && input.continue_from) throw new Error("continue_from requires type task");
+    const mismatch = continueFromMismatch(input);
+    if (mismatch) throw new Error(mismatch);
     return main().commit(async tx => {
       const { byId, removed } = await tx.doc(ScheduledTasks, root);
       if (Object.hasOwn(byId, id) || Object.hasOwn(removed, id)) return id;
@@ -182,7 +192,9 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
     return Object.values(doc?.byId ?? {}).map(row => row.item);
   }
   function set(patch: Static<typeof changes>) {
-    if (!changeSchema.check(patch) || Object.keys(patch).length === 1) throw new Error("Invalid schedule changes");
+    if (!changeSchema.check(patch)) throw new Error("Invalid schedule changes");
+    const issue = schedulePatchError(patch);
+    if (issue) throw new Error(issue);
     return main().commit(async tx => {
       const { byId, removed } = await tx.doc(ScheduledTasks, root);
       const { id, status, brief, trigger, thinking } = patch;
@@ -262,12 +274,12 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
     { name: "set", effect: "write" },
   ];
   const tools = [
-    defineTool({ name: "schedule_create", description: "Create a reminder (notify directly), task (dispatch a worker), or wake (ask main). Only task accepts continue_from. Event offsets are signed minutes.",
-      parameters, replay: "safe", execute: async (args, api) => reply(await create(args, `scheduled-${api.taskId}`)) }),
+    withStrictToolArguments(defineTool({ name: "schedule_create", description: "Create a reminder (notify directly), task (dispatch a worker), or wake (ask main). Only task accepts continue_from. Event offsets are signed minutes.",
+      parameters, replay: "safe", execute: async (args, api) => reply(await create(args, `scheduled-${api.taskId}`)) }), continueFromMismatch),
     defineTool({ name: "schedule_list", description: "List all schedules with IDs, types and next times.", parameters: obj({}), replay: "safe",
       execute: async () => reply(JSON.stringify(await list())) }),
-    defineTool({ name: "schedule_set", description: "Edit the trigger, brief or thinking, pause, resume or delete a schedule by ID.",
-      parameters: changes, replay: "safe", execute: async args => await set(args) ? reply(args.id) : reply("Unknown or finished schedule", true) }),
+    withStrictToolArguments(defineTool({ name: "schedule_set", description: "Edit the trigger, brief or thinking, pause, resume or delete a schedule by ID. Supply at least one field to change.",
+      parameters: changes, replay: "safe", execute: async args => await set(args) ? reply(args.id) : reply("Unknown or finished schedule", true) }), schedulePatchError),
   ];
   async function schedule() {
     return (await list()).map(({ id, brief, type, trigger, paused, nextAt, eventSource }) => {

@@ -27,7 +27,7 @@ export function windowsUserSid() {
   return sid;
 }
 
-function restrictWindowsFile(file: string) {
+export function restrictWindowsFile(file: string) {
   const system = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32");
   execFileSync(path.join(system, "icacls.exe"), [file, "/inheritance:r", "/grant:r", "*" + windowsUserSid() + ":F"], { windowsHide: true });
 }

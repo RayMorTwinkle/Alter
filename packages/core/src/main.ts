@@ -43,6 +43,7 @@ import { activeWake, observeWakes } from "./wake.ts";
 import { TaskIdentity, Tasks } from "./state.ts";
 import { createWatches, WatchTools, watchInstructions } from "./watch.ts";
 import { BackgroundTask, createTaskCancellation, createDispatcher, dispatchTool, taskMessage, taskStatus, workerInstructions, TaskTools } from "./tasks.ts";
+import { withStrictToolArguments } from "./tool-validation.ts";
 
 export { Events } from "./events.ts";
 export { Leases, leaseWindow } from "./leases.ts";
@@ -142,7 +143,7 @@ export async function openAlter(
       const preferences = await harness.snapshot(Preferences, main.id, context);
       return judge(auxiliaryModels(currentModels(), dir, now, "judge", owner), taskModel, statement, call, metadata, preferences?.permissionNotes[call.tool]);
     }, (id, answer) => nodes.send(id, answer));
-  const nodes: NodeHub = new NodeHub(() => main, now, request);
+  const nodes: NodeHub = new NodeHub(() => main, now, request, replacePlugin);
   const taskExtensions = [extension, TaskTools, broker];
   const dispatch = createDispatcher(taskExtensions, taskModel, clock, (requested = thinking.task ?? "high") => {
     const model = currentModels().getModel(taskModel.provider, taskModel.modelId);
@@ -184,9 +185,9 @@ export async function openAlter(
   const watches = createWatches(() => main, () => harness, () => plugins, dispatch, cancellation, budget, time, now);
   const controls: ToolRegistration[] = [
     ...scheduler.tools, staySilentTool, digestSource,
-    defineTool({
+    withStrictToolArguments(defineTool({
       name: "feedback_answer", description: "代用户提交已明确回答的反馈题。issueId 为本次出题的 id，options 使用显示的选项原文，other 为用户补充。",
-      parameters: obj({ issueId: str({ minLength: 1 }), options: arr(str()), other: opt(str()) }), replay: "safe",
+      parameters: obj({ issueId: str({ minLength: 1 }), options: arr(str({ minLength: 1 }), { uniqueItems: true }), other: opt(str({ maxLength: 2000 })) }), replay: "safe",
       async execute({ issueId, options, other }, api, ctx) {
         const fromUser = await api.commit(tx => hasUserInput(tx, api.conversationId), ctx);
         if (!fromUser) return reply("请在用户回复反馈题的对话回合提交。", true);
@@ -198,7 +199,7 @@ export async function openAlter(
           throw error;
         }
       },
-    }),
+    }), ({ options, other }) => !options.length && !other?.trim() ? 'provide a selection in "options" or non-empty text in "other"' : undefined),
     ...watches.tools,
     dispatchTool(dispatch, nodes), nodeSessionsTool(nodes), taskStatus, taskMessage(nodes), cancellation.tool,
   ];
@@ -272,7 +273,12 @@ export async function openAlter(
         afterRun: ({ first, answer }) => ({ tasks: [hookTask(FinishMainTurn, { first, answer })] }) }),
     ],
   });
-  for (const extension of [...taskExtensions, WatchTools, controlPlane]) registry.install(extension);
+  // Apply the same pre-coercion gate to every registration, including raw adapter
+  // schemas and tools installed after startup. Agent configuration stores names only.
+  const installTools = (ext: typeof extension) => registry.install({
+    ...ext, ...(ext.tools && { tools: ext.tools.map(tool => withStrictToolArguments(tool)) }),
+  });
+  for (const extension of [...taskExtensions, WatchTools, controlPlane]) installTools(extension);
   const harness = await Harness.open(storage, {
     models: typeof models === "function" ? meteredModels : meteredModels(),
     registry, now: options.now, setTimer: options.setTimer, settings: () => ({ toolExecution: "sequential", retry: { enabled: false },
@@ -356,7 +362,7 @@ export async function openAlter(
     plugins = next;
     if (rebindEvents) sources = eventSources(plugins);
     Object.assign(capabilities, updated);
-    registry.install({ ...extension, tools: tools() });
+    installTools({ ...extension, tools: tools() });
     await main.commit(tx => restoreLeases(tx, cap => cap !== id || preserveLease), context);
     if (rebindEvents) stopSchedules = await schedules.start();
   }

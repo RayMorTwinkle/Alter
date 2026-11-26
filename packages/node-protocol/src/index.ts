@@ -27,7 +27,20 @@ export type Usage = { inputTokens?: number; outputTokens?: number; cacheReadToke
 
 // ---- node → hub ----------------------------------------------------------
 
+export type NodeAdapterToolSummary = { name: string; description: string; effect: Effect; defaultEffect: Effect; inputSchema?: Record<string, unknown> };
+export type NodeAdapterSummary = {
+  id: string; name: string; kind: "mcp" | "cli" | "http"; capabilityId: string; enabled: boolean;
+  state: "off" | "connecting" | "ok" | "error"; detail?: string; tools: NodeAdapterToolSummary[]; effects: Record<string, Effect>;
+};
+export type AdapterManagement = {
+  action: "list" | "presets" | "create" | "preset.create" | "patch" | "refresh" | "remove";
+  adapterId?: string; presetId?: string; payload?: Record<string, unknown>;
+};
+export type AdapterManagementResult = { type: "adapters.manage.result"; requestId: string; ok: boolean; data?: unknown; error?: string; status?: number };
+export type ToolResult = { type: "tool.result"; callId: string; ok: boolean; content?: string; isError?: boolean; error?: string };
+
 export type Hello = {
+  adapters?: NodeAdapterSummary[];
   type: "hello"; protocol: number; nodeId: string; name: string;
   platform: "darwin" | "win32" | "linux"; nodeVersion: string; harnesses: Harness[];
   /** Workspace roots the user allowed this node to work in. */
@@ -60,11 +73,11 @@ export type Pong = { type: "pong"; at: number };
 /** Reply to sessions.list. Not sequenced: the hub times out and asks again if the connection drops. */
 export type SessionsResult = { type: "sessions.result"; requestId: string; harness: HarnessId; sessions: NativeSession[]; error?: string };
 
-export type NodeMessage = Hello | TaskEvent | ApprovalRequest | TaskEnd | Pong | SessionsResult;
+export type NodeMessage = { type: "adapters.state"; adapters: NodeAdapterSummary[] } | AdapterManagementResult | ToolResult | Hello | TaskEvent | ApprovalRequest | TaskEnd | Pong | SessionsResult;
 
 // ---- hub → node ----------------------------------------------------------
 
-export type Welcome = { type: "welcome"; protocol: number; userId: string; ackSeq: Record<string, number> };
+export type Welcome = { type: "welcome"; adapterRpc?: boolean; protocol: number; userId: string; ackSeq: Record<string, number> };
 
 export type TaskStart = {
   type: "task.start"; taskId: string; harness: HarnessId; brief: string; permission: Permission;
@@ -84,7 +97,8 @@ export type Rejected = { type: "rejected"; reason: string };
 /** Newest first; cwd filters to one directory, otherwise all of the node's roots. */
 export type SessionsList = { type: "sessions.list"; requestId: string; harness: HarnessId; cwd?: string; limit?: number };
 
-export type HubMessage = Welcome | TaskStart | TaskMessage | TaskStop | ApprovalAnswer | Ack | Ping | Rejected | SessionsList;
+export type ToolCall = { type: "tool.call"; callId: string; adapterId: string; toolName: string; args: unknown; expectedEffect?: Effect };
+export type HubMessage = ToolCall | { type: "tool.cancel"; callId: string } | (AdapterManagement & { type: "adapters.manage"; requestId: string }) | Welcome | TaskStart | TaskMessage | TaskStop | ApprovalAnswer | Ack | Ping | Rejected | SessionsList;
 
 /** Node tokens are `<userId>.<secret>`; the gateway routes by userId, the instance verifies the secret. */
 export function parseNodeToken(token: string): { userId: string; secret: string } | undefined {

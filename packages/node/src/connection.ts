@@ -1,3 +1,5 @@
+import { nodeAdapters } from "./node-adapters.ts";
+import { serveAdapterCli } from "./adapter-cli.ts";
 import path from "node:path";
 import WebSocket from "ws";
 import { connectPath, parseNodeToken, protocolVersion, type HubMessage, type NodeMessage } from "@alter/node-protocol";
@@ -14,16 +16,21 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
   const done = Promise.withResolvers<void>();
   const status = (state: string) => atomicWrite(path.join(dir, "status.json"), JSON.stringify({ state, pid: process.pid, at: Date.now() }));
   const send = (m: NodeMessage) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(m)); };
-  const listings = new Set<Promise<void>>();
+  const requests = new Set<Promise<void>>();
   const shutdown = new AbortController();
   let tasks: Tasks;
+  let adapters: ReturnType<typeof nodeAdapters>;
+  let localCli: Promise<() => void>;
+  let reportAdapters = false;
+  const report = () => { if (online && reportAdapters) send({ type: "adapters.state", adapters: adapters.list() }); };
   async function stop(error?: Error) {
     if (closing) return done.promise;
     closing = true;
     clearTimeout(retry); clearTimeout(idle);
     try {
       shutdown.abort();
-      await Promise.all([tasks.shutdown(), ...listings]);
+      await localCli?.then(close => close(), () => {});
+      await Promise.all([tasks.shutdown(), adapters.close(), ...requests]);
       status(error ? "配对被拒绝" : "已停止");
     } catch (err) {
       done.reject(err);
@@ -41,6 +48,9 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
     const ws = new WebSocket(url, { headers: { Authorization: "Bearer " + config.token }, handshakeTimeout: 15000 });
     socket = ws;
     const disconnected = new AbortController();
+    const calls = new Map<string, AbortController>();
+    // Remote management carries credentials. Advertise it only over TLS or local loopback.
+    const supportsAdapters = url.protocol === "wss:" || ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
     function heartbeat() {
       clearTimeout(idle);
       idle = setTimeout(() => ws.terminate(), options.idleMs ?? 60000);
@@ -48,7 +58,7 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
     ws.on("open", () => {
       heartbeat();
       send({ type: "hello", protocol: protocolVersion, nodeId: config.nodeId, name: config.name, platform: process.platform as Platform,
-        nodeVersion: process.version, roots: config.roots, tasks: tasks.box.tasks(),
+        ...(supportsAdapters && { adapters: adapters.list() }), nodeVersion: process.version, roots: config.roots, tasks: tasks.box.tasks(),
         harnesses: harnesses.map(({ executable: _, ...h }) => ({ ...h, model: config.models?.[h.id] })) });
     });
     ws.on("message", raw => {
@@ -64,17 +74,36 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
           !m.ackSeq || typeof m.ackSeq !== "object" || Array.isArray(m.ackSeq)) {
           void stop(new Error("welcome 的协议、用户或确认序号无效")).catch(() => {}); return;
         }
-        online = true; delay = initial; status("在线"); tasks.replay(m.ackSeq); return;
+        online = true; delay = initial; status("在线"); tasks.replay(m.ackSeq);
+        reportAdapters = supportsAdapters && m.adapterRpc === true; report(); return;
       }
       if (!online) { ws.close(1002); return; }
       switch (m.type) {
+        case "tool.cancel": calls.get(m.callId)?.abort(); break;
+        case "tool.call":
+        case "adapters.manage": {
+          if (!supportsAdapters) { ws.close(1008); return; }
+          reportAdapters = true;
+          const controller = new AbortController();
+          if (m.type === "tool.call") {
+            if (calls.has(m.callId)) { ws.close(1002); return; }
+            calls.set(m.callId, controller);
+          }
+          const signal = AbortSignal.any([shutdown.signal, disconnected.signal, controller.signal, AbortSignal.timeout(120_000)]);
+          const work = (m.type === "tool.call" ? adapters.call(m, signal) : adapters.managementResult(m, signal)).then(result => {
+            if (!closing && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(result));
+          });
+          requests.add(work);
+          void work.finally(() => { requests.delete(work); if (m.type === "tool.call") calls.delete(m.callId); }).catch(() => {});
+          break;
+        }
         case "sessions.list": {
           const signal = AbortSignal.any([shutdown.signal, disconnected.signal, AbortSignal.timeout(options.listTimeoutMs ?? 20000)]);
           const query = listSessions(dir, harnesses, m, signal).then(result => {
             if (!closing && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(result));
           });
-          listings.add(query);
-          void query.finally(() => listings.delete(query)).catch(() => {});
+          requests.add(query);
+          void query.finally(() => requests.delete(query)).catch(() => {});
           break;
         }
         case "task.start": tasks.start(m); break;
@@ -101,7 +130,12 @@ export function runNode(dir: string, harnesses: Detected[], options: { retryMs?:
   }
   try {
     tasks = new Tasks(dir, harnesses, entry => { if (online) send(entry); }, options.timeoutMs);
+    adapters = nodeAdapters(dir);
+    adapters.subscribe(report);
     connect();
+    void adapters.start().catch(() => {});
+    localCli = serveAdapterCli(dir, adapters);
+    void localCli.catch(() => console.warn("Local adapter CLI socket unavailable. Use the web API or stop the daemon before editing."));
   } catch (err) { release(); throw err; }
   return { stop: () => stop(), done: done.promise };
 }

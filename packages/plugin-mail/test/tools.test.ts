@@ -150,7 +150,7 @@ it("sets and clears only requested flags and rejects missing UIDs before updatin
   await app.call("mail_mark", args);
   expect(app.boxes.get(folder)!.get(7)!.flags).toEqual(new Set(["custom", "\\Seen"]));
   expect(app.sessions[0]!.mailboxOpen).toHaveBeenCalledWith(folder, { readOnly: false });
-  await expect(app.call("mail_mark", { folder, uids: [7] })).rejects.toThrow("seen or flagged");
+  await expect(app.call("mail_mark", { folder, uids: [7] })).rejects.toThrow('Invalid arguments for tool "mail_mark": provide at least one of "seen" or "flagged"');
   await expect(app.call("mail_mark", { ...args, uids: [7, 8] })).rejects.toThrow("8");
   expect(app.sessions.at(-1)!.messageFlagsAdd).not.toHaveBeenCalled();
 });

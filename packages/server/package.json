@@ -9,6 +9,7 @@
     "start": "node src/main.ts"
   },
   "dependencies": {
+    "@alter/adapters": "workspace:*",
     "@alter/core": "workspace:*",
     "@alter/node-protocol": "workspace:*",
     "@alter/plugin-browser": "workspace:*",
@@ -17,10 +18,10 @@
     "@alter/plugin-mail": "workspace:*",
     "@alter/plugin-runtime": "workspace:*",
     "@alter/plugin-sources": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.32.2",
     "ws": "8.23.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@types/ws": "8.18.1"
   }
 }

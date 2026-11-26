@@ -1,5 +1,7 @@
+import { fork } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -27,6 +29,26 @@ async function unusedPort() {
   const s = createServer(), p = await listen(s);
   await new Promise<void>(resolve => s.close(() => resolve()));
   return p;
+}
+// Account ports are consecutive. Ephemeral port + 1 can be the gateway client's
+// own source port by the time the second instance starts.
+async function twoInstancePorts() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const base = randomInt(16000, 30000);
+    const probes = [createServer(), createServer()];
+    try {
+      for (const [i, probe] of probes.entries()) {
+        probe.listen(base + i, "127.0.0.1");
+        await once(probe, "listening");
+      }
+      return base;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    } finally {
+      await Promise.all(probes.filter(s => s.listening).map(s => new Promise<void>(resolve => s.close(() => resolve()))));
+    }
+  }
+  throw new Error("Could not find two free instance ports");
 }
 async function adminServer() {
   const s = createServer((_, res) => res.end('{"rss":123}'));
@@ -155,7 +177,7 @@ test("HTTP, incremental SSE, session and node WebSocket proxying and child recov
 
 test("production gateway starts a real restricted server, reopens accounts and retains the shared secret", async () => {
   const dir = await temp(), adminPort = await adminServer();
-  const port = await unusedPort(), childPort = await unusedPort();
+  const port = await unusedPort(), childPort = await twoInstancePorts();
   const env = { ALTER_GATEWAY_DATA: join(dir, "gateway"), ALTER_GATEWAY_PORT: String(port), ALTER_INSTANCE_BASE_PORT: String(childPort),
     ALTER_ADMIN_INSTANCE: "http://127.0.0.1:" + adminPort, ALTER_WEB_PASSWORD: "password", ALTER_HEARTBEAT: "off",
     ALTER_LLM_BASE_URL: "http://127.0.0.1:" + adminPort + "/v1", ALTER_LLM_API_KEY: "fake", ALTER_MAIN_MODEL: "offline/main", ALTER_TASK_MODEL: "offline/task" };
@@ -177,6 +199,39 @@ test("production gateway starts a real restricted server, reopens accounts and r
   expect((await call("/api/service", "PUT", { autostart: true }, cookie)).status).toBe(403);
   const plugins = await (await call("/api/plugins", "GET", undefined, cookie)).json();
   expect(plugins.map((p: { id: string }) => p.id).sort()).toEqual(["calendar", "mail", "sources"]);
+  const server = "http://127.0.0.1:" + port;
+  const { id, token } = await (await call("/api/nodes", "POST", { name: "Laptop" }, cookie)).json();
+  const node = fork(join(import.meta.dirname, "fixtures/adapter-node.mjs"), [], { execArgv: [] });
+  const ended = once(node, "exit");
+  cleanup.push(async () => { if (node.connected) node.disconnect(); await ended; });
+  node.send({ server, token, dir: join(dir, "laptop") });
+  const root = "/api/nodes/" + id + "/adapters";
+  await expect.poll(async () => (await (await call(root, "GET", undefined, cookie)).json()).online, { timeout: 5000 }).toBe(true);
+  expect(await (await call("/api/nodes/adapter-presets", "GET", undefined, cookie)).json()).toMatchObject([{ id: "github" }]);
+  const value = "node-only-example-secret";
+  const payload = { id: "echo", name: "Echo", kind: "cli", config: { command: process.execPath, help: "echo",
+    env: { TOKEN: "{{secret:TOKEN}}" } }, secrets: { TOKEN: value } };
+  const result = await call(root, "POST", payload, cookie);
+  expect(result.status).toBe(201);
+  const summary = await result.json();
+  expect(summary).toMatchObject({ id: "echo", state: "ok", capabilityId: expect.stringMatching(/^node-/) });
+  expect(summary).not.toHaveProperty("config");
+  expect(JSON.stringify(summary)).not.toContain(value);
+  expect(await (await call(root, "GET", undefined, cookie)).json()).toMatchObject({ online: true, adapters: [summary] });
+  expect((await call(root + "/presets/github", "POST", { auth: "invalid" }, cookie)).status).toBe(400);
+  expect((await call(root + "/presets/absent", "POST", {}, cookie)).status).toBe(404);
+  expect((await call(root + "/echo/refresh", "POST", {}, cookie)).status).toBe(200);
+  expect(await (await call(root + "/echo", "PATCH", { enabled: false }, cookie)).json()).toMatchObject({ state: "off" });
+  const other = await register(admin, "neighbor"), otherCookie = await login(other.username, "password");
+  expect((await call(root, "GET", undefined, otherCookie)).status).toBe(404);
+  expect((await call(root + "/echo", "DELETE", {}, otherCookie)).status).toBe(404);
+  expect((await call(root + "/echo", "DELETE", {}, cookie)).status).toBe(204);
+  expect((await call(root + "/echo", "DELETE", {}, cookie)).status).toBe(404);
+  node.disconnect(); await ended;
+  const brain = join(dir, "users", user.id);
+  const files = await readdir(brain, { withFileTypes: true, recursive: true });
+  expect(files.map(f => f.name)).not.toContain("adapters.json");
+  for (const f of files.filter(f => f.isFile())) expect((await readFile(join(f.parentPath, f.name))).includes(Buffer.from(value))).toBe(false);
   const secretPath = join(env.ALTER_GATEWAY_DATA, "secret");
   const secret = await readFile(secretPath, "utf8");
   expect((await stat(secretPath)).mode & 0o777).toBe(0o600);

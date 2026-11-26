@@ -58,8 +58,9 @@ function Run({ run, onFeedback }: { run: HeartbeatRun; onFeedback: (feedback: "u
   );
 }
 
-export function HeartbeatSheet({ view, onClose, onChange }: { view: HeartbeatView | null; onClose: () => void; onChange: () => void }) {
-  const t = useT().heartbeat;
+export function HeartbeatPanel({ view, onChange }: { view: HeartbeatView | null; onChange: () => void }) {
+  const all = useT();
+  const t = all.heartbeat;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -83,7 +84,7 @@ export function HeartbeatSheet({ view, onClose, onChange }: { view: HeartbeatVie
 
   const runs = view ? [...view.runs].sort((a, b) => b.at - a.at) : [];
   return (
-    <Sheet title={t.title} onClose={onClose}>
+    <>
       {view && (
         <section className="hb-summary">
           <div className="hb-next">
@@ -95,16 +96,24 @@ export function HeartbeatSheet({ view, onClose, onChange }: { view: HeartbeatVie
             {t.interval(hours(view.intervalMs))} · {t.adoption} {Math.round(view.adoption * 100)}%
             {" "}· {t.signals(view.signals.dueGoals, view.signals.backlog, view.signals.userMessages24h)}
           </p>
-          <p className="hb-why">{view.report.paused ? t.reportPaused : t.report(view.report.nextAt ? clock(view.report.nextAt) : null)}</p>
+          {view.report && <p className="hb-why">{view.report.paused ? t.reportPaused : t.report(view.report.nextAt ? clock(view.report.nextAt) : null)}</p>}
           <p className="hb-hint">{t.hint}</p>
           {error && <p className="form-error">{error}</p>}
         </section>
       )}
-      {!view && <p className="empty">{useT().loading}</p>}
+      {!view && <p className="empty">{all.loading}</p>}
       {view && runs.length === 0 && <p className="empty">{t.empty}</p>}
       <ul className="rows">
         {runs.map(item => <Run key={item.id} run={item} onFeedback={value => void feedback(item.id, value)} />)}
       </ul>
+    </>
+  );
+}
+
+export function HeartbeatSheet({ view, onClose, onChange }: { view: HeartbeatView | null; onClose: () => void; onChange: () => void }) {
+  return (
+    <Sheet title={useT().heartbeat.title} onClose={onClose}>
+      <HeartbeatPanel view={view} onChange={onChange} />
     </Sheet>
   );
 }

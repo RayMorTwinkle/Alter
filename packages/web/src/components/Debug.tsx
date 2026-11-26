@@ -247,17 +247,25 @@ function Schedule() {
   );
 }
 
-export function DebugSheet({ onClose }: { onClose: () => void }) {
+export function DebugPanel() {
   const t = useT().debug;
   const [view, setView] = useState<"traces" | "schedule">("traces");
   return (
-    <Sheet title={t.title} onClose={onClose} wide>
+    <>
       <div className="seg" role="tablist">
         {(["traces", "schedule"] as const).map(v => (
           <button key={v} role="tab" aria-selected={view === v} className={view === v ? "active" : ""} onClick={() => setView(v)}>{t.views[v]}</button>
         ))}
       </div>
       {view === "traces" ? <Traces /> : <Schedule />}
+    </>
+  );
+}
+
+export function DebugSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <Sheet title={useT().debug.title} onClose={onClose} wide>
+      <DebugPanel />
     </Sheet>
   );
 }

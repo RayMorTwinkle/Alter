@@ -20,7 +20,7 @@ async function setup(timeZone = "Asia/Shanghai") {
   async function invoke(action: string, args: object = {}) {
     const tool = active.tools.find(t => t.name === "calendar_" + action)!;
     const api = { conversationId: 1 };
-    const result = await tool.execute(args, api as unknown as Parameters<ToolRegistration["execute"]>[1], context);
+    const result = await tool.execute(tool.prepareArguments?.(args) ?? args, api as unknown as Parameters<ToolRegistration["execute"]>[1], context);
     if (!("output" in result) || result.output?.[0]?.type !== "text") throw new Error("Expected calendar text");
     return { value: JSON.parse(result.output[0].text), details: result.details };
   }
@@ -35,6 +35,13 @@ async function setup(timeZone = "Asia/Shanghai") {
     stop = await active.start!({ emit: async () => {} });
   } };
 }
+
+it("rejects a calendar update with no fields and accepts explicit false", async () => {
+  const { call } = await setup();
+  const { event: { id } } = await call("create", { title: "test", start: "2026-12-01T09:00", allDay: true });
+  await expect(call("update", { id })).rejects.toThrow(/calendar_update.*at least one updatable field/);
+  expect(await call("update", { id, allDay: false })).toMatchObject({ event: { id, allDay: false } });
+});
 
 it("replaces the demo manifest and declares the effects of exactly five leasable tools", async () => {
   const { plugin } = await setup();

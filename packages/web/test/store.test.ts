@@ -47,6 +47,16 @@ describe("reduce", () => {
       ({ id, taskId: "t", audience, capability: "outbox", tool: "outbox_send", arguments: {}, reason: "", expiresAt: 0 });
     expect(userPending({ pending: [request("1", "user"), request("2", "main")] }).map(r => r.id)).toEqual(["1"]);
   });
+
+  it("stores pushed node lists including adapter summaries", () => {
+    const state = reduce(initialState, { type: "nodes", nodes: [{
+      id: "n1", name: "Mac", platform: "darwin", online: true, createdAt: 1, lastSeen: 2,
+      roots: ["/tmp"], harnesses: [{ id: "codex", available: true }],
+      adapters: [{ id: "gh", name: "GitHub", kind: "mcp", capabilityId: "node-gh-1", enabled: true, state: "ok", tools: [], effects: {} }],
+    }] });
+    expect(state.nodes).toHaveLength(1);
+    expect(state.nodes?.[0]?.adapters?.[0]?.capabilityId).toBe("node-gh-1");
+  });
 });
 
 describe("agenda", () => {

@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { toolArgumentError } from "@alter/core/tool-validation";
 
 export type Effect = "read" | "write" | "irreversible";
 export type Schema = {
@@ -66,6 +67,13 @@ function schema(s: unknown, depth = 0) {
   if ("items" in s) schema(s.items, depth + 1);
 }
 
+export function validateToolInput(tool: Manifest["tools"][number], value: unknown) {
+  const issue = toolArgumentError(tool.inputSchema, value);
+  if (issue) throw new PluginError("Invalid arguments for tool " + JSON.stringify(tool.name) + ": " + issue);
+}
+
+// Output schemas keep their declared semantics. Unlike calls, outputs can carry
+// undeclared properties unless their manifest explicitly closes the object.
 export function matches(s: Schema, value: unknown): boolean {
   if (s.enum && !s.enum.some(v => v === value)) return false;
   if (s.type === "object") return record(value) && (s.required ?? []).every(k => Object.hasOwn(value, k)) &&

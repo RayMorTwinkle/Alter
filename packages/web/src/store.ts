@@ -1,4 +1,4 @@
-import type { FeedbackView, ExtPluginView, Agenda, LedgerEntry, MemoryView, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
+import type { FeedbackView, ExtPluginView, Agenda, LedgerEntry, MemoryView, Node, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
 
 export type State = Snapshot & {
   draft: { id: string; text: string } | null;
@@ -8,6 +8,7 @@ export type State = Snapshot & {
   heartbeatTick: number;
   extPlugins: ExtPluginView[];
   feedback: FeedbackView | null;
+  nodes: Node[] | null;
 };
 
 export type Action =
@@ -26,10 +27,11 @@ export type Action =
   | { type: "schedules"; schedules: ScheduledTask[] }
   | { type: "watches"; watches: Watch[] }
   | { type: "extPlugins"; extPlugins: ExtPluginView[] }
-  | { type: "feedback"; feedback: FeedbackView };
+  | { type: "feedback"; feedback: FeedbackView }
+  | { type: "nodes"; nodes: Node[] };
 
 export const initialState: State = {
-  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: null, heartbeatTick: 0, extPlugins: [], feedback: null,
+  timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: null, heartbeatTick: 0, extPlugins: [], feedback: null, nodes: null,
 };
 
 function upsert(timeline: TimelineItem[], item: TimelineItem) {
@@ -74,6 +76,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, extPlugins: action.extPlugins };
     case "feedback":
       return { ...state, feedback: action.feedback };
+    case "nodes":
+      return { ...state, nodes: action.nodes };
     case "schedules":
       return { ...state, schedules: action.schedules };
     case "heartbeat":

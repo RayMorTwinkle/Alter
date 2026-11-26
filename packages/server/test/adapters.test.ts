@@ -53,6 +53,8 @@ it("discovers paginated MCP tools, reconnects and reconciles authenticated CRUD 
   expect((await web.post(root, input)).status).toBe(409);
   const tool = "mcp-local_read_back";
   expect(web.app.capabilities.toolActions.get(tool)?.effect).toBe("read");
+  await expect(web.app.borrowSource("fixture", tool, { text: null }, AbortSignal.timeout(5000))).rejects.toThrow("Source borrow failed or was denied");
+  await expect(web.app.borrowSource("fixture", tool, { text: "payload", pageToken: "2" }, AbortSignal.timeout(5000))).rejects.toThrow("Source borrow failed or was denied");
   expect(await web.app.borrowSource("fixture", tool, { text: "payload" }, AbortSignal.timeout(5000))).toBe("authenticated\npayload");
   expect(await web.call("mcp-local", "fail")).toMatchObject({ isError: true, text: "fixture failure" });
   const image = await web.call("mcp-local", "read_back_2");
@@ -128,6 +130,7 @@ it("adapts an OpenAPI document from HTTP or inline JSON and forwards JSON bodies
       ] } },
     "/items": { post: { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/Item" } } } } } },
   }, components: { schemas: { Item: { type: "object", properties: { label: { type: "string" } }, required: ["label"] } } } };
+  let posts = 0;
   const http = createServer(async (req, res) => {
     if (req.headers.authorization !== "Bearer " + "local-api-002") { res.writeHead(403).end(); return; }
     if (req.url === "/spec") { res.end(JSON.stringify(spec)); return; }
@@ -135,6 +138,7 @@ it("adapts an OpenAPI document from HTTP or inline JSON and forwards JSON bodies
       res.setHeader("content-type", "text/plain"); res.end([req.url, req.headers["x-label"]].join(" ")); return;
     }
     if (req.method === "POST" && req.url === "/v1/items") {
+      posts++;
       res.writeHead(201, { "content-type": "application/json" });
       req.pipe(res); return;
     }
@@ -154,8 +158,13 @@ it("adapts an OpenAPI document from HTTP or inline JSON and forwards JSON bodies
   expect(JSON.parse(post.text)).toEqual({ status: 201, body: JSON.stringify(body) });
   const update = await web.change("PATCH", "/items", { config: { ...config, spec, baseUrl: "{{secret:BASE}}/v1" }, effects: { post_items: "read" } });
   expect(await update.json()).toMatchObject({ status: { state: "ok" } });
+  const nestedPost = (body: { label: string | null; typo?: string }) => web.app.borrowSource("fixture", "api-items_post_items", { body }, AbortSignal.timeout(5000));
+  await expect(nestedPost({ label: null })).rejects.toThrow("Source borrow failed or was denied");
+  await expect(nestedPost({ label: "item", typo: "bad" })).rejects.toThrow("Source borrow failed or was denied");
+  expect(posts).toBe(1);
   const borrowed = await web.app.borrowSource("fixture", "api-items_post_items", { body }, AbortSignal.timeout(5000));
   expect(JSON.parse(String(borrowed))).toMatchObject({ status: 201 });
+  expect(posts).toBe(2);
 });
 
 it.each(["streamable", "sse"])("connects to a local %s MCP endpoint with configured headers", async transportKind => {

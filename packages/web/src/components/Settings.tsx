@@ -4,12 +4,19 @@ import { api } from "../api.ts";
 import { useT } from "../i18n.tsx";
 import { clock } from "../format.ts";
 import { Adapters } from "./Adapters.tsx";
+import { AdminPanel } from "./Admin.tsx";
+import { DebugPanel } from "./Debug.tsx";
 import { ExtPlugins } from "./ExtPlugins.tsx";
+import { HeartbeatPanel } from "./Heartbeat.tsx";
 import { Models } from "./Models.tsx";
 import { AlwaysAllowed } from "./AlwaysAllowed.tsx";
 import { Service } from "./Service.tsx";
-import type { ApprovalStats, ExtPluginView, FeishuGuide, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
+import { StatsPanel } from "./Stats.tsx";
+import type { ApprovalStats, ExtPluginView, FeishuGuide, GatewayUser, HeartbeatView, PluginField, PluginView, Settings, SourceCreate, SourceItem, SourceTemplate, SourceView } from "../types.ts";
 import { Sheet } from "./Sheets.tsx";
+
+export type ConsoleTab = "capabilities" | "models" | "proactive" | "observability" | "system";
+const CONSOLE_TABS: ConsoleTab[] = ["capabilities", "models", "proactive", "observability", "system"];
 
 type Draft = Record<string, string | boolean>;
 
@@ -288,14 +295,36 @@ function Sources() {
   );
 }
 
-export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { onClose: () => void; onToggleLocale: () => void; extPlugins?: ExtPluginView[] }) {
+export function SettingsSheet({
+  initialTab = "capabilities",
+  onClose,
+  onToggleLocale,
+  onOpenNodes,
+  extPlugins = [],
+  user = null,
+  heartbeat = null,
+  onHeartbeatChange,
+}: {
+  initialTab?: ConsoleTab;
+  onClose: () => void;
+  onToggleLocale: () => void;
+  onOpenNodes?: () => void;
+  extPlugins?: ExtPluginView[];
+  user?: GatewayUser | null;
+  heartbeat?: HeartbeatView | null;
+  onHeartbeatChange?: () => void;
+}) {
   const all = useT();
   const t = all.settings;
+  const c = all.console;
+  const [tab, setTab] = useState<ConsoleTab>(initialTab);
+  const [obsView, setObsView] = useState<"stats" | "debug">("stats");
   const [plugins, setPlugins] = useState<PluginView[] | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [stats, setStats] = useState<ApprovalStats | null>(null);
   const [restricted, setRestricted] = useState<string[]>([]);
   const [error, setError] = useState("");
+  useEffect(() => { setTab(initialTab); }, [initialTab]);
   useEffect(() => {
     api.service().then(state => setRestricted(state.restrictedCapabilities ?? []), () => {});
     api.plugins().then(setPlugins, err => setError(String(err.message ?? err)));
@@ -307,62 +336,134 @@ export function SettingsSheet({ onClose, onToggleLocale, extPlugins = [] }: { on
     try { setSettings(await api.updateSettings(next)); } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   }
   const replace = (view: PluginView) => setPlugins(list => list?.map(p => p.id === view.id ? view : p) ?? null);
+  const pendingExt = extPlugins.some(p => p.pending);
+
+  const nav = (
+    <nav className="console-tabs" role="tablist" aria-label={c.title}>
+      {CONSOLE_TABS.map(id => (
+        <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+          {c.tabs[id]}
+          {id === "capabilities" && pendingExt && <span className="tab-alert-dot" aria-hidden />}
+        </button>
+      ))}
+    </nav>
+  );
 
   return (
-    <Sheet title={t.title} onClose={onClose}>
+    <Sheet title={c.title} onClose={onClose} headerExtra={nav} wide={tab === "observability"}>
       {error && <p className="form-error">{error}</p>}
 
-      {!restricted.includes("adapters") && <Adapters />}
-      {!restricted.includes("ext-plugins") && <ExtPlugins plugins={extPlugins} />}
+      {tab === "capabilities" && (
+        <>
+          {restricted.includes("adapters") ? (
+            <section className="console-notice">
+              <h3>{c.restrictedAdaptersTitle}</h3>
+              <p className="settings-hint">{c.restrictedAdaptersHint}</p>
+              {onOpenNodes && (
+                <div className="form-actions">
+                  <button className="btn primary" onClick={() => { onClose(); onOpenNodes(); }}>{c.openNodes}</button>
+                </div>
+              )}
+            </section>
+          ) : <Adapters />}
 
-      <section className="settings-block">
-        <h3>{t.plugins}</h3>
-        <p className="settings-hint">{t.pluginsHint}</p>
-        {!plugins && !error && <p className="empty">{all.loading}</p>}
-        {plugins?.map(plugin => <PluginCard key={plugin.id} plugin={plugin} onChanged={replace} />)}
-      </section>
+          {!restricted.includes("ext-plugins") && <ExtPlugins plugins={extPlugins} />}
 
-      <Sources />
+          <section className="settings-block">
+            <h3>{t.plugins}</h3>
+            <p className="settings-hint">{t.pluginsHint}</p>
+            {!plugins && !error && <p className="empty">{all.loading}</p>}
+            {plugins?.map(plugin => <PluginCard key={plugin.id} plugin={plugin} onChanged={replace} />)}
+          </section>
 
-      {settings && <>
-        <section className="settings-block">
-          <h3>{t.approval}</h3>
-          <div className="seg" role="radiogroup" aria-label={t.approval}>
-            {(["on", "off"] as const).map(mode => (
-              <button key={mode} role="radio" aria-checked={settings.approvalModel === mode}
-                className={settings.approvalModel === mode ? "active" : ""} onClick={() => void patch({ approvalModel: mode })}>
-                {t.approvalModes[mode]}
+          <Sources />
+        </>
+      )}
+
+      {tab === "models" && (
+        <>
+          {settings && <Models settings={settings} onPatch={patch} />}
+          <section className="settings-block">
+            <h3>{t.language}</h3>
+            <div className="form-actions">
+              <button className="btn" onClick={onToggleLocale}>{all.language}</button>
+            </div>
+          </section>
+        </>
+      )}
+
+      {tab === "proactive" && (
+        <>
+          {settings && (
+            <section className="settings-block">
+              <h3>{t.approval}</h3>
+              <div className="seg" role="radiogroup" aria-label={t.approval}>
+                {(["on", "off"] as const).map(mode => (
+                  <button key={mode} role="radio" aria-checked={settings.approvalModel === mode}
+                    className={settings.approvalModel === mode ? "active" : ""} onClick={() => void patch({ approvalModel: mode })}>
+                    {t.approvalModes[mode]}
+                  </button>
+                ))}
+              </div>
+              <p className="settings-hint">{t.approvalHints[settings.approvalModel]}</p>
+              {stats && stats.modelAllowed + stats.askedUser > 0 &&
+                <p className="settings-hint">{t.approvalCounts(stats.modelAllowed, stats.askedUser, stats.userApproved, stats.userDenied)}</p>}
+            </section>
+          )}
+
+          <AlwaysAllowed />
+
+          {settings && (
+            <section className="settings-block">
+              <h3>{t.heartbeat}</h3>
+              <label className="field toggle-field">
+                <input type="checkbox" checked={settings.heartbeat.enabled} onChange={e => void patch({ heartbeat: { enabled: e.target.checked } })} />
+                <span>{t.heartbeatOn}</span>
+              </label>
+              <div className="time-range">
+                <label>{t.from}<input type="time" value={settings.heartbeat.start} onChange={e => void patch({ heartbeat: { start: e.target.value } })} /></label>
+                <label>{t.to}<input type="time" value={settings.heartbeat.end} onChange={e => void patch({ heartbeat: { end: e.target.value } })} /></label>
+              </div>
+              <p className="settings-hint">{t.heartbeatHint}</p>
+            </section>
+          )}
+
+          <HeartbeatPanel view={heartbeat} onChange={onHeartbeatChange ?? (() => {})} />
+        </>
+      )}
+
+      {tab === "observability" && (
+        <>
+          <div className="seg" role="tablist">
+            {(["stats", "debug"] as const).map(view => (
+              <button key={view} role="tab" aria-selected={obsView === view} className={obsView === view ? "active" : ""}
+                onClick={() => setObsView(view)}>
+                {c.observability[view]}
               </button>
             ))}
           </div>
-          <p className="settings-hint">{t.approvalHints[settings.approvalModel]}</p>
-          {stats && stats.modelAllowed + stats.askedUser > 0 &&
-            <p className="settings-hint">{t.approvalCounts(stats.modelAllowed, stats.askedUser, stats.userApproved, stats.userDenied)}</p>}
-        </section>
+          {obsView === "stats" ? <StatsPanel /> : <DebugPanel />}
+        </>
+      )}
 
-        <Models settings={settings} onPatch={patch} />
-
-        <section className="settings-block">
-          <h3>{t.heartbeat}</h3>
-          <label className="field toggle-field">
-            <input type="checkbox" checked={settings.heartbeat.enabled} onChange={e => void patch({ heartbeat: { enabled: e.target.checked } })} />
-            <span>{t.heartbeatOn}</span>
-          </label>
-          <div className="time-range">
-            <label>{t.from}<input type="time" value={settings.heartbeat.start} onChange={e => void patch({ heartbeat: { start: e.target.value } })} /></label>
-            <label>{t.to}<input type="time" value={settings.heartbeat.end} onChange={e => void patch({ heartbeat: { end: e.target.value } })} /></label>
-          </div>
-          <p className="settings-hint">{t.heartbeatHint}</p>
-        </section>
-      </>}
-
-      <AlwaysAllowed />
-      {!restricted.includes("service") && <Service />}
-
-      <section className="settings-block">
-        <h3>{t.language}</h3>
-        <button className="btn" onClick={onToggleLocale}>{all.language}</button>
-      </section>
+      {tab === "system" && (
+        <>
+          {user && (
+            <section className="console-notice">
+              <div className="console-account-head">
+                <b>{user.username}</b>
+                <span className="chip">{all.gw.role[user.role]}</span>
+              </div>
+              <p className="settings-hint">{user.role === "admin" ? c.roleAdminHint : c.roleUserHint}</p>
+            </section>
+          )}
+          {!restricted.includes("service") && <Service />}
+          {user?.role === "admin" && <AdminPanel selfId={user.id} />}
+          {!user && restricted.includes("service") && (
+            <p className="settings-hint">{c.roleUserHint}</p>
+          )}
+        </>
+      )}
     </Sheet>
   );
 }

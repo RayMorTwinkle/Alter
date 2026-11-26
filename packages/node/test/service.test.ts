@@ -6,7 +6,7 @@ import { configureService, launchAgent, systemdUnit } from "../src/service.ts";
 
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
 
-test.skipIf(process.platform !== "win32")("creates and deletes the same per-user logon task", () => {
+test("creates and deletes the same per-user logon task", () => {
   const sid = "S-1-5-21-123-456-789-1001";
   let file = "", xml = "";
   const commands: string[][] = [];
@@ -20,9 +20,9 @@ test.skipIf(process.platform !== "win32")("creates and deletes the same per-user
     }
     return Buffer.alloc(0);
   });
-  configureService(true);
+  configureService(true, "win32");
   expect(existsSync(file)).toBe(false);
-  configureService(false);
+  configureService(false, "win32");
   expect(commands).toEqual([["/Create", "/TN", "Alter Node " + sid, "/XML", file, "/F"],
     ["/Delete", "/TN", "Alter Node " + sid, "/F"]]);
   expect(xml).toContain("<LogonTrigger><UserId>" + sid + "</UserId>");

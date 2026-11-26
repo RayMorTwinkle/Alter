@@ -1,3 +1,4 @@
+import { validAdapters } from "./node-adapters.ts";
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
@@ -12,7 +13,7 @@ const oneOf = (v: unknown, ...choices: string[]) => string(v) && choices.include
 
 function valid(m: unknown): m is NodeMessage {
   if (!record(m)) return false;
-  if (m.type === "hello") return m.protocol === protocolVersion && id(m.nodeId) && id(m.name) &&
+  if (m.type === "hello") return m.protocol === protocolVersion && id(m.nodeId) && id(m.name) && (m.adapters === undefined || validAdapters(m.adapters)) &&
     oneOf(m.platform, "darwin", "linux", "win32") && string(m.nodeVersion) &&
     Array.isArray(m.roots) && m.roots.every(string) && Array.isArray(m.harnesses) && m.harnesses.every(h =>
       record(h) && validHarness.check(h.id) && typeof h.available === "boolean" &&
@@ -23,6 +24,11 @@ function valid(m: unknown): m is NodeMessage {
     (m.error === undefined || string(m.error)) && Array.isArray(m.sessions) && m.sessions.every(s =>
       record(s) && id(s.sessionId) && string(s.cwd) && (s.title === undefined || string(s.title)) &&
       (s.updatedAt === undefined || integer(s.updatedAt)));
+  if (m.type === "adapters.state") return validAdapters(m.adapters);
+  if (m.type === "adapters.manage.result") return id(m.requestId) && typeof m.ok === "boolean" &&
+    (m.status === undefined || integer(m.status)) && (m.error === undefined || string(m.error));
+  if (m.type === "tool.result") return id(m.callId) && typeof m.ok === "boolean" && (m.content === undefined || string(m.content)) &&
+    (m.isError === undefined || typeof m.isError === "boolean") && (m.error === undefined || string(m.error));
   if (!integer(m.at)) return false;
   if (m.type === "pong") return true;
   if (!id(m.taskId) || !integer(m.seq) || m.seq < 1) return false;
