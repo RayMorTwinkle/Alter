@@ -61,8 +61,10 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
   const [side, setSide] = useState<Exclude<Tab, "chat">>("tasks");
   const [openTask, setOpenTask] = useState<string | null>(null);
   const [showNodes, setShowNodes] = useState(false);
-  // Track node count and online state so the topbar shows an offline CTA before first pairing or an online count dot.
-  const [nodeInfo, setNodeInfo] = useState({ total: 1, online: 0 });
+  const nodeInfo = {
+    total: state.nodes?.length ?? 1,
+    online: state.nodes?.filter(n => n.online).length ?? 0,
+  };
   const [consoleTab, setConsoleTab] = useState<ConsoleTab | null>(null);
   const awaiting = state.extPlugins.find(p => p.pending);
   const [heartbeat, setHeartbeat] = useState<HeartbeatView | null>(null);
@@ -72,8 +74,8 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
 
   useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
   useEffect(() => {
-    if (!showNodes) api.nodes().then(list => setNodeInfo({ total: list.length, online: list.filter(n => n.online).length }), () => {});
-  }, [showNodes]);
+    if (!showNodes && state.nodes === null) api.nodes().then(nodes => dispatch({ type: "nodes", nodes }), () => {});
+  }, [showNodes, state.nodes]);
   useEffect(() => { api.heartbeat().then(setHeartbeat, () => setHeartbeat(null)); }, [state.heartbeatTick, heartbeatTick]);
 
   // The code rotates every 10 minutes until the owner pairs; a 404 means Feishu is not configured.
@@ -139,7 +141,7 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
     { id: "tasks", label: t.tasks, icon: ListChecks, count: state.tasks.filter(task => task.status === "running").length },
     { id: "approvals", label: t.approvals, icon: SealCheck, count: waiting },
     ...state.agenda ? [{ id: "agenda" as const, label: t.agenda, icon: CalendarBlank }] : [],
-    { id: "memory", label: t.memory, icon: Brain, count: (state.memory?.entries ?? []).filter(item => item.status === "pending").length },
+    { id: "memory", label: t.memory, icon: Brain, count: (Array.isArray(state.memory?.entries) ? state.memory.entries : []).filter(item => item.status === "pending").length },
     { id: "ledger", label: t.ledger, icon: Notebook },
   ];
 
@@ -150,7 +152,7 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
         <span className={`status ${state.connection !== "open" ? "lost" : state.busy ? "busy" : ""}`}>
           <i /><span className="status-text">{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}</span>
         </span>
-        {heartbeat?.enabled && (heartbeat.nextAt || heartbeat.report.paused) && (
+        {heartbeat?.enabled && (heartbeat.nextAt || heartbeat.report?.paused) && (
           <button className="next-heartbeat" onClick={() => setConsoleTab("proactive")} title={t.heartbeat.title}>
             <Binoculars /><span className="label">{t.heartbeat.next}</span> {heartbeat.nextAt ? clock(heartbeat.nextAt) : t.heartbeat.paused}
           </button>
@@ -233,7 +235,13 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
           onHeartbeatChange={() => setHeartbeatTick(n => n + 1)}
         />
       )}
-      {showNodes && <NodesSheet onClose={() => setShowNodes(false)} />}
+      {showNodes && (
+        <NodesSheet
+          liveNodes={state.nodes}
+          onNodesChanged={nodes => dispatch({ type: "nodes", nodes })}
+          onClose={() => setShowNodes(false)}
+        />
+      )}
       {showNotices && <NotificationsSheet items={notices} onClose={() => setShowNotices(false)} onFeedback={onFeedback} />}
     </div>
   );

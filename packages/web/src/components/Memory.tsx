@@ -101,7 +101,7 @@ function Changes({ version }: { version: unknown }) {
 export function MemoryPanel({ view, onUpdate, onDelete }: Props) {
   const all = useT();
   const t = all.mem;
-  if (!view) return <div className="panel-body"><p className="empty">{all.loading}</p></div>;
+  if (!view || !Array.isArray(view.entries)) return <div className="panel-body"><p className="empty">{all.loading}</p></div>;
   const current = view.entries.filter(e => !e.supersededBy);
   // Expired goals need a decision, so they lead; finished goals sink.
   const rank = (e: MemoryEntry) => (e.status === "pending" ? 0 : e.status === "done" ? 2 : 1);

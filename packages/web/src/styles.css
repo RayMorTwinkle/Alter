@@ -321,7 +321,7 @@ a.text-btn { text-decoration: none; font-size: 14px; }
   box-shadow: -8px 0 32px rgba(0, 0, 0, .12); animation: slide .18s ease-out;
 }
 @keyframes fade { from { opacity: 0; } }
-@keyframes slide { from { transform: translateX(24px); opacity: .6; } }
+@keyframes slide { from { transform: translateX(24px); } }
 .sheet-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px 20px; padding-top: calc(12px + env(safe-area-inset-top)); }
 .sheet-head h2 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .sheet-body { flex: 1; overflow-y: auto; grid-template-columns: minmax(0, 1fr); padding: 4px 20px 32px; display: grid; align-content: start; gap: 20px; }
@@ -656,3 +656,5 @@ a.text-btn { text-decoration: none; font-size: 14px; }
 .node-sessions li { display: flex; gap: 8px; font-size: 13px; min-width: 0; }
 .node-sessions li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-sessions li time { flex: none; color: var(--muted); font-size: 12px; }
+.node-adapters-body { display: grid; gap: 8px; padding-top: 8px; }
+.node-adapters-body .adapter { background: var(--surface); }

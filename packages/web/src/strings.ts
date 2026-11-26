@@ -281,6 +281,7 @@ const hant = {
     platforms: { windows: "Windows", unix: "macOS / Linux" }, copy: "複製", copied: "已複製", done: "完成",
     harnessNames: { "claude-code": "Claude Code", codex: "Codex", opencode: "opencode", dsh: "DeepSeek Harness" } as Record<string, string>,
     sessions: "最近會話", sessionsHint: "對 Alter 說「接著我在 opencode 裡那個對話做」，它就會在原會話裡繼續，回到原界面能看到。", loadingSessions: "讀取中…", noSessions: "沒有會話。", untitled: "（無標題）", model: "默認模型",
+    adapters: "外部工具", adaptersHint: "此電腦託管的 MCP、CLI 與 HTTP 工具，密鑰僅加密保存在這台電腦本地。", adaptersOffline: "節點離線，上線後可新增、配置或重新發現外部工具。",
   },
   debug: {
     title: "調試", views: { traces: "模型調用", schedule: "調度" },
@@ -727,6 +728,7 @@ const hans: Strings = {
     platforms: { windows: "Windows", unix: "macOS / Linux" }, copy: "复制", copied: "已复制", done: "完成",
     harnessNames: { "claude-code": "Claude Code", codex: "Codex", opencode: "opencode", dsh: "DeepSeek Harness" } as Record<string, string>,
     sessions: "最近会话", sessionsHint: "对 Alter 说“接着我在 opencode 里那个对话做”，它就会在原会话里继续，回到原界面能看到。", loadingSessions: "读取中…", noSessions: "没有会话。", untitled: "（无标题）", model: "默认模型",
+    adapters: "外部工具", adaptersHint: "此电脑托管的 MCP、CLI 与 HTTP 工具，密钥仅加密保存在这台电脑本地。", adaptersOffline: "节点离线，上线后可新增、配置或重新发现外部工具。",
   },
   debug: {
     title: "调试", views: { traces: "模型调用", schedule: "调度" },

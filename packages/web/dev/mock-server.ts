@@ -19,7 +19,8 @@ const id = () => String(++seq);
 
 const timeline: TimelineItem[] = [
   { id: "1", kind: "user", text: "幫我看一下 welcome 這條筆記寫了什麼", at: now - 3_600_000, source: "feishu" },
-  { id: "2", kind: "assistant", text: "好的，我派一個任務去讀取 welcome 筆記。", at: now - 3_598_000, model: "opencode-go/glm-5.3" },
+  { id: "2", kind: "tool", tool: "dispatch_task", args: '{"brief":"整理筆記"}', text: "", isError: true, errorDetail: 'Invalid arguments for tool "dispatch_task": missing required arguments "context" and "permission" when creating a new task without "continue_from" or "runner"', at: now - 3_599_000 },
+  { id: "2b", kind: "assistant", text: "好的，我派一個任務去讀取 welcome 筆記。", at: now - 3_598_000, model: "opencode-go/glm-5.3" },
   { id: "3", kind: "report", taskId: "task-14", text: "task task-14 finished: 已讀取筆記「welcome」，內容為：**Remember the planning meeting.**", at: now - 3_590_000 },
   { id: "4", kind: "assistant", text: "welcome 筆記只有一句話：\n\n> Remember the planning meeting.\n\n意思是「記得規劃會議」。需要我幫你在日曆上找時間嗎？", at: now - 3_588_000, model: "opencode-go/glm-5.3" },
 ];
@@ -186,7 +187,9 @@ function mockStats(range: string) {
     return { date, usage: usage(20 * k, 9000 * k, 30000 * k, 1800 * k, 0.04 * k), tasks: k, succeeded: k - (i % 3 === 0 ? 1 : 0), wakes: 3 * k };
   });
   return {
+    silent: 0,
     range, timeZone: "Asia/Shanghai", at: Date.now(), total: usage(612, 284_000, 1_020_000, 61_000, 1.32),
+    leases: { count: 2, byTool: { calendar_list: 2 }, dispatchAfterLeaseRate: 0.5, items: [] },
     byRole: [
       { role: "main", ...usage(210, 120_000, 640_000, 22_000, 0.6) }, { role: "task", ...usage(330, 150_000, 370_000, 36_000, 0.66) },
       { role: "judge", ...usage(52, 9000, 6000, 1800, 0.03) }, { role: "triage", ...usage(20, 5000, 4000, 1200, 0.03) },
@@ -227,6 +230,7 @@ createServer(async (req, res) => {
     res.setHeader("Set-Cookie", `alter_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
     return json(res, 204);
   }
+  if (path === "/gateway/me") return json(res, 404, { error: "no gateway" });
   if (!sessions.has(cookie(req) ?? "")) return json(res, 401, { error: "unauthorized" });
   if (path === "/api/logout") { sessions.delete(cookie(req)!); return json(res, 204); }
   if (path === "/api/state") return json(res, 200, snapshot());
@@ -257,7 +261,11 @@ createServer(async (req, res) => {
   if (path.startsWith("/api/funnel")) return json(res, 200, { timeZone: "Asia/Shanghai", precision: 0.75,
     days: [{ date: "2026-11-21", triggered: 18, passed: 9, pushed: 2, read: 2, useful: 2, useless: 0, digests: 1, reminders: 1 },
       { date: "2026-11-22", triggered: 23, passed: 12, pushed: 3, read: 2, useful: 1, useless: 1, digests: 1, reminders: 2 }] });
-  if (path === "/api/memory") return json(res, 200, memory);
+  if (path === "/api/memory") {
+    const entries = memory.map(m => ({ id: m.id, title: m.text.slice(0, 18), type: m.kind === "profile" ? "user" : m.kind === "fact" ? "reference" : m.kind,
+      body: m.text, source: "web", ...(m.due !== undefined && { dueAt: m.due }), status: m.status, createdAt: m.createdAt, updatedAt: m.updatedAt }));
+    return json(res, 200, url.searchParams.get("memory") === "entries" ? { index: "", entries, needsConsolidation: false } : memory);
+  }
   const notice = /^\/api\/notifications\/(.+)$/.exec(path);
   if (notice) {
     const item = notifications.find(n => n.id === decodeURIComponent(notice[1]!));
@@ -283,7 +291,26 @@ createServer(async (req, res) => {
     steps: ["在飛書開放平台創建企業自建應用，開啟機器人能力", "權限管理中批量導入下面的權限 JSON", "事件訂閱選擇「長連接」，添加接收消息事件", "安全設置中添加下面的回調地址", "把 App ID 和 App Secret 填到下面並保存", "在飛書裡給機器人發配對碼，再授權你的賬號"],
   });
   if (path.startsWith("/api/plugins/")) return json(res, 200, mockPlugins.find(p => path.includes(p.id)));
-  if (path === "/api/settings") return json(res, 200, { approvalModel: "on", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
+  if (path === "/api/settings") return json(res, 200, { compactAtTokens: 128000, approvalModel: "on", heartbeat: { enabled: true, start: "08:00", end: "23:00" } });
+  if (path === "/api/service") return json(res, 200, { supported: false, autostart: false, keepAlive: false, preventSleep: false, managed: false, restrictedCapabilities: ["browser", "adapters", "ext-plugins", "cli", "feishu", "service"] });
+  if (path === "/api/nodes") return json(res, 200, [
+    { id: "node-mac", name: "MacBook Pro", platform: "darwin", online: true, createdAt: now - 86_400_000, lastSeen: now,
+      roots: ["/Users/Ray/Documents"], harnesses: [{ id: "codex", version: "0.166.0", available: true }],
+      adapters: [{ id: "github", name: "GitHub", kind: "mcp", capabilityId: "node-github-demo", enabled: true, state: "ok",
+        tools: [{ name: "list_issues", description: "列出倉庫 Issue", effect: "read", defaultEffect: "read" }], effects: {} }] },
+    { id: "node-win", name: "宿舍台式", platform: "win32", online: false, createdAt: now - 172_800_000, lastSeen: now - 7_200_000,
+      roots: [], harnesses: [] },
+  ]);
+  if (path === "/api/nodes/adapter-presets") return json(res, 200, []);
+  if (path === "/api/nodes/node-mac/adapters") return json(res, 200, { online: true, adapters: [
+    { id: "github", name: "GitHub", kind: "mcp", capabilityId: "node-github-demo", enabled: true, state: "ok",
+      tools: [{ name: "list_issues", description: "列出倉庫 Issue", effect: "read", defaultEffect: "read" }], effects: {} },
+  ] });
+  if (path === "/api/models") return json(res, 200, []);
+  if (path === "/api/settings/always-allowed") return json(res, 200, { capabilities: [] });
+  if (path === "/api/sources") return json(res, 200, []);
+  if (path === "/api/sources/templates") return json(res, 200, []);
+  if (path === "/api/ext-plugins") return json(res, 200, []);
   if (path === "/api/approvals/stats") return json(res, 200, { modelAllowed: 4, askedUser: 13, userApproved: 10, userDenied: 2 });
   if (path.startsWith("/api/watches/")) return json(res, 204);
   if (path.startsWith("/api/schedules/")) return json(res, 204);
@@ -292,6 +319,7 @@ createServer(async (req, res) => {
     const counts = (d: number) => ({ goals: 2, memories: 6, chat: 4, agenda: 1, tasks: 0, digests: d });
     return json(res, 200, {
       enabled: true, nextAt: Date.now() + 3.2 * h, intervalMs: 4.4 * h, adoption: 0.62,
+      report: { intervalDays: 1, activeDays: 5, time: "22:00", nextAt: Date.now() + 5 * h, paused: false },
       signals: { dueGoals: 2, backlog: 5, userMessages24h: 9 },
       runs: [
         { id: "hb-4", at: Date.now() - 1.3 * h, finishedAt: Date.now() - 1.28 * h, status: "ran", skipReason: null, counts: counts(5),

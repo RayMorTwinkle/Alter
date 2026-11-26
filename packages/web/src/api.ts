@@ -1,5 +1,5 @@
 import type { GatewayAdminUser, GatewayInvite, GatewayUser, GatewayUserPatch } from "./types.ts";
-import type { Node, CreatedNode, HarnessId, NativeSession, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
+import type { Node, NodeAdapterSummary, CreatedNode, HarnessId, NativeSession, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
 import type { Action } from "./store.ts";
 import type { AdapterCreate, AdapterPatch, AdapterPreset, AdapterPresetCreate, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
@@ -36,6 +36,18 @@ export const gatewayApi = {
 
 export const api = {
   nodes: () => request<Node[]>("/api/nodes"),
+  nodeAdapterPresets: () => request<AdapterPreset[]>("/api/nodes/adapter-presets"),
+  nodeAdapters: (id: string) => request<{ online: boolean; adapters: NodeAdapterSummary[] }>(`/api/nodes/${encodeURIComponent(id)}/adapters`),
+  createNodeAdapter: (id: string, input: AdapterCreate) =>
+    request<NodeAdapterSummary>(`/api/nodes/${encodeURIComponent(id)}/adapters`, { body: input }),
+  createNodeAdapterFromPreset: (id: string, presetId: string, input: AdapterPresetCreate) =>
+    request<NodeAdapterSummary>(`/api/nodes/${encodeURIComponent(id)}/adapters/presets/${encodeURIComponent(presetId)}`, { body: input }),
+  updateNodeAdapter: (id: string, adapterId: string, patch: AdapterPatch) =>
+    request<NodeAdapterSummary>(`/api/nodes/${encodeURIComponent(id)}/adapters/${encodeURIComponent(adapterId)}`, { method: "PATCH", body: patch }),
+  refreshNodeAdapter: (id: string, adapterId: string) =>
+    request<NodeAdapterSummary>(`/api/nodes/${encodeURIComponent(id)}/adapters/${encodeURIComponent(adapterId)}/refresh`, { body: {} }),
+  deleteNodeAdapter: (id: string, adapterId: string) =>
+    request<void>(`/api/nodes/${encodeURIComponent(id)}/adapters/${encodeURIComponent(adapterId)}`, { method: "DELETE", body: {} }),
   nodeSessions: (id: string, harness: HarnessId, cwd?: string) =>
     request<NativeSession[]>(`/api/nodes/${encodeURIComponent(id)}/sessions?${new URLSearchParams({ harness, ...(cwd && { cwd }) })}`),
   createNode: (name: string) => request<CreatedNode>("/api/nodes", { body: { name } }),
@@ -118,7 +130,7 @@ export const api = {
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins", "feedback"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins", "feedback", "nodes"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -130,6 +142,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
     api.memory().then(memory => dispatch({ type: "memory", memory }), () => {});
     api.extPlugins().then(extPlugins => dispatch({ type: "extPlugins", extPlugins }), () => {});
     api.feedback().then(feedback => dispatch({ type: "feedback", feedback }), () => {});
+    api.nodes().then(nodes => dispatch({ type: "nodes", nodes }), () => {});
   };
   source.onerror = () => {
     dispatch({ type: "connection", connection: "lost" });
@@ -159,6 +172,7 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "watches": return dispatch({ type: "watches", watches: data });
         case "ext-plugins": return dispatch({ type: "extPlugins", extPlugins: data });
         case "feedback": return dispatch({ type: "feedback", feedback: data });
+        case "nodes": return dispatch({ type: "nodes", nodes: data });
       }
     });
   }

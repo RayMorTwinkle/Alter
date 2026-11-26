@@ -1,10 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
+import { AdapterCard, hostAdapterDisplay, nodeAdapterDisplay } from "../src/components/Adapters.tsx";
 import { ToolCall, formatArgs } from "../src/components/Chat.tsx";
 import { I18n } from "../src/i18n.tsx";
 import { strings } from "../src/strings.ts";
-import type { TimelineItem } from "../src/types.ts";
+import type { AdapterView, NodeAdapterSummary, TimelineItem } from "../src/types.ts";
 
 describe("formatArgs", () => {
   it("pretty-prints valid JSON arguments and ignores empty objects", () => {
@@ -62,6 +63,36 @@ describe("i18n console coverage", () => {
       expect(Object.keys(locale.console.tabs)).toEqual(["capabilities", "models", "proactive", "observability", "system"]);
       expect(locale.console.restrictedAdaptersHint.length).toBeGreaterThan(10);
       expect(locale.toolCallDetail.showArgs).toBeTruthy();
+      expect(locale.nodes.adaptersOffline).toBeTruthy();
     }
+  });
+});
+
+describe("AdapterCard shared host/node rendering", () => {
+  const noop = async () => {};
+  const tools = [{ name: "ping", description: "Check connection", effect: "read" as const, defaultEffect: "read" as const, inputSchema: {} }];
+
+  it("renders both host AdapterView and NodeAdapterSummary consistently", () => {
+    const host: AdapterView = {
+      id: "h1", name: "Host Tool", kind: "cli", capabilityId: "cli-h1", enabled: true,
+      config: { command: "echo" }, secretNames: [], status: { state: "ok" }, tools, effects: {},
+    };
+    const node: NodeAdapterSummary = {
+      id: "n1", name: "Node Tool", kind: "mcp", capabilityId: "node-n1-abc", enabled: true,
+      state: "error", detail: "Connection refused", tools, effects: {},
+    };
+    const render = (display: ReturnType<typeof hostAdapterDisplay>) => renderToStaticMarkup(
+      createElement(I18n.Provider, { value: strings.hans },
+        createElement(AdapterCard, { adapter: display, onUpdate: noop, onRefresh: noop, onRemove: noop })),
+    );
+    const hostHtml = render(hostAdapterDisplay(host));
+    const nodeHtml = render(nodeAdapterDisplay(node));
+    expect(hostHtml).toContain("Host Tool");
+    expect(hostHtml).toContain("cli-h1");
+    expect(hostHtml).toContain("已连接");
+    expect(nodeHtml).toContain("Node Tool");
+    expect(nodeHtml).toContain("node-n1-abc");
+    expect(nodeHtml).toContain("出错");
+    expect(nodeHtml).toContain("Connection refused");
   });
 });
