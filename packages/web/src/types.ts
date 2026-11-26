@@ -19,6 +19,7 @@ export type TimelineItem = {
   tool?: string;
   args?: string;
   isError?: boolean;
+  errorDetail?: string;
   silent?: true;
   reason?: string;
   taskId?: string;
