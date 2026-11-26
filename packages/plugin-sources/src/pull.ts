@@ -6,7 +6,12 @@ export type PullOptions = { fetch?: typeof fetch; allowLocalHttp?: boolean; time
 export type Batch = { items: Item[]; lastModified?: string; pollMs?: number };
 export class PullError extends SourceError {
   pollMs?: number;
-  constructor(message: string, pollMs?: number) { super(message, 502); this.pollMs = pollMs; }
+  readonly invalid: boolean;
+  constructor(message: string, pollMs?: number, invalid = false) {
+    super(message, 502);
+    this.pollMs = pollMs;
+    this.invalid = invalid;
+  }
 }
 const maxBytes = 2 * 1024 * 1024;
 async function readBody(response: Response) {
@@ -47,12 +52,15 @@ export async function pull(spec: Spec, lastModified?: string, options: PullOptio
         }
         if (!response.ok) throw new PullError("Source HTTP " + response.status, batch.pollMs);
         const body = await readBody(response);
-        if (spec.template === "rss") return { items: parseFeed(body, url) };
+        if (spec.template === "rss") {
+          try { return { items: parseFeed(body, url) }; }
+          catch (cause) { throw new PullError((cause as Error).message, batch.pollMs, true); }
+        }
         const data: unknown = JSON.parse(body);
         try {
           if (spec.template === "json") return { items: jsonItems(data, spec.params) };
           batch.items.push(...githubItems(data));
-        } catch (error) { throw new PullError((error as Error).message); }
+        } catch (error) { throw new PullError((error as Error).message, batch.pollMs, true); }
         visited.add(url);
         const next = response.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
         if (!next) return batch;
@@ -65,7 +73,10 @@ export async function pull(spec: Spec, lastModified?: string, options: PullOptio
   } catch (cause) {
     if (cause instanceof PullError) cause.pollMs ??= batch.pollMs;
     if (cause instanceof SourceError) throw cause;
-    if (!signal.aborted) throw new PullError(cause instanceof SyntaxError ? "Invalid source response" : "Source request failed", batch.pollMs);
+    if (!signal.aborted) {
+      const invalid = cause instanceof SyntaxError;
+      throw new PullError(invalid ? "Invalid source response" : "Source request failed", batch.pollMs, invalid);
+    }
   }
   throw new PullError(timeout.aborted ? "Source request timed out" : "Source request stopped", batch.pollMs);
 }
