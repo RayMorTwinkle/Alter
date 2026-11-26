@@ -90,3 +90,13 @@ it("pins the vetted IP on each TLS hop, retains the URL host and strips credenti
     expect(logs.map(l => l.decision)).toEqual(["allow","allow"]);
   } finally { request.mockRestore(); }
 });
+
+it("rejects a credential in a write body and in an encoded redirect before forwarding", async () => {
+  const proxy = createProxy(e => logs.push(e));
+  await expect(proxy(manifest, { url: "https://example.org/", method: "POST", body: context.secrets.token },
+    { ...context, effect: "write" })).rejects.toThrow("Credential in body");
+  const { request } = await local((_, res) => res.writeHead(302, { Location: "https://example.org/?q=fixture%5Fcredential" }).end());
+  await expect(request()).rejects.toThrow("Secret in query");
+  expect(logs.map(e => e.decision)).toEqual(["deny", "allow", "deny"]);
+  expect(JSON.stringify(logs)).not.toContain(context.secrets.token);
+});

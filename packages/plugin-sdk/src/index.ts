@@ -2,11 +2,14 @@ export type Item = { id: string; title: string; url?: string; body?: string; pub
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type HttpRequest = { url: string; method: string; headers?: Record<string,string>; body?: string; secretHeaders?: Record<string,string> };
 export type Context = {
+  secrets: { get(name: string): Promise<string | undefined>; list(): Promise<string[]> };
   http: { request(input: HttpRequest): Promise<{ status: number; body: string }> };
   kv: { get(key: string): Promise<Json>; set(key: string, value: Json): Promise<void>; delete(key: string): Promise<void>; list(): Promise<string[]> };
   borrow(tool: string, args: Record<string,Json>): Promise<Json>; log(message: string): Promise<void>;
 };
 type Plugin = {
+  init?(ctx: Context): void | Promise<void>;
+  close?(): void | Promise<void>;
   tools?: Record<string,(args: Record<string,Json>, ctx: Context) => Json | Promise<Json>>;
   sources?: Record<string,(ctx: Context) => Item[] | Promise<Item[]>>;
 };

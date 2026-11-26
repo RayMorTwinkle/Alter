@@ -312,7 +312,8 @@ export type ExtPluginManifest = {
 export type ExtPluginProposal = { manifest: ExtPluginManifest; sha: string; directory: string; codeUrl: string; dependencies: Record<string, string>; permissions: string[]; removed: string[]; expanded: string[]; summary: string };
 export type ExtPluginView = {
   id: string; status: "pending" | "enabled" | "disabled" | "paused" | "quarantined"; active: string | null;
-  manifest: ExtPluginManifest; failures: number; sources: { name: string; paused: boolean; invalid: number; next: number }[];
+  manifest: ExtPluginManifest; failures: number; sources: { name: string; paused: boolean; invalid: number; next: number;
+    lastPollAt: number; nextPollAt: number | null; todayCount: number; error: string | null }[];
   versions: { sha: string; version: string }[]; pending: ExtPluginProposal | null;
 };
 export type ExtPluginsEvent = { event: "ext-plugins"; data: ExtPluginView[] };

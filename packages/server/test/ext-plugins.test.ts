@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { installedPlugins } from "../src/plugins.ts";
@@ -61,4 +61,30 @@ it("runs an unattended source borrow as its own restricted task through the brok
   expect(audit?.entries).toContainEqual(expect.objectContaining({ borrower: "example", tool: "notes_read", decision: "allow" }));
   await expect(web.app.borrowSource("example", "outbox_send", { message: "fixture" }, AbortSignal.timeout(5000))).rejects.toThrow();
   expect(web.app.demo.outbox).toEqual([]);
+});
+
+it("publishes external source checkpoints over HTTP and SSE and awaits graceful disable", async () => {
+  const web = await setup(undefined, false, undefined, Date.now, (app, dir) => installedPlugins(app, dir, { ALTER_BROWSER: "off" }));
+  const path = join(web.dir, "feed"), marker = join(web.dir, "feed-closed");
+  mkdirSync(path);
+  writeFileSync(join(path, "index.mjs"), `
+    import { writeFileSync } from "node:fs";
+    export default { sources: { feed: () => [{id:"old", title:"baseline"}] },
+      close: () => writeFileSync(${JSON.stringify(marker)}, "closed") };
+  `);
+  writeFileSync(join(path, "alter-plugin.json"), JSON.stringify({ schemaVersion: 1, id: "feed", version: "1", displayName: "Feed", description: "test",
+    tools: [], sources: [{ name: "feed", minIntervalSeconds: 60 }], secrets: [], borrows: [],
+    resources: { memoryMB: 128, storageKB: 0, timeoutMs: 5000 } }));
+  await web.login();
+  const base = "/api/ext-plugins", events = await stream(web.read);
+  const { sha } = await (await web.post(base + "/install", { path })).json();
+  expect((await web.post(base + "/feed/approve", { sha })).status).toBe(204);
+  await events.seen(e => e.event === "ext-plugins" && (e.data[0]?.sources[0]?.lastPollAt ?? 0) > 0);
+  const [installed] = await (await web.read(base)).json();
+  const s = installed.sources[0];
+  expect(s).toMatchObject({ name: "feed", paused: false, invalid: 0, error: null, todayCount: 0,
+    next: s.lastPollAt + 60_000, nextPollAt: s.lastPollAt + 60_000 });
+  expect((await web.post(base + "/feed/disable", {})).status).toBe(204);
+  expect(readFileSync(marker, "utf8")).toBe("closed");
+  expect(await (await web.read(base)).json()).toMatchObject([{ sources: [{ nextPollAt: null, lastPollAt: s.lastPollAt }] }]);
 });

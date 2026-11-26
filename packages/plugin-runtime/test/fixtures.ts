@@ -19,3 +19,9 @@ export function fixture() {
   writeFileSync(join(pkg, "index.mjs"), "export default {}");
   return { data, pkg, write };
 }
+
+export function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}

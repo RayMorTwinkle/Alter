@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import { BlockList, isIP } from "node:net";
+import { containsCredential } from "./credentials.ts";
 import { check, record, type Effect, type Manifest } from "./manifest.ts";
 
 const blocked = new BlockList();
@@ -69,7 +70,9 @@ export function createProxy(audit: (e: HttpAudit) => void, options: Options = {}
   const resolve = options.resolve ?? (host => lookup(host, { all: true, verbatim: true }));
   return async (m: Manifest, input: unknown, ctx: Context) => {
     let method = "INVALID", host: string | undefined;
-    const log = (decision: HttpAudit["decision"], reason?: string) => audit({ plugin: m.id, method, host, decision, reason });
+    const values = Object.values(ctx.secrets);
+    const log = (decision: HttpAudit["decision"], reason?: string) => audit({ plugin: m.id, method,
+      host: host && containsCredential(host, values) ? undefined : host, decision, reason });
     const deadline = AbortSignal.timeout(options.timeoutMs ?? 15_000);
     const signal = AbortSignal.any([deadline, ctx.signal]);
     let aborted!: () => void;
@@ -84,6 +87,7 @@ export function createProxy(audit: (e: HttpAudit) => void, options: Options = {}
       method = input.method;
       const body = input.body;
       permit(body === undefined || typeof body === "string" && Buffer.byteLength(body) <= 256 * 1024, "Invalid or oversized body");
+      permit(typeof body !== "string" || !containsCredential(body, values), "Credential in body");
       const read = ctx.effect === "read";
       permit(!read || (["GET", "HEAD"].includes(method) && body === undefined), "Read request requires GET/HEAD without a body");
       const ordinary = headers(input.headers, m), secret = headers(input.secretHeaders, m, ctx.secrets);
@@ -95,6 +99,7 @@ export function createProxy(audit: (e: HttpAudit) => void, options: Options = {}
         const local = options.testLoopback && hop === 0 && host === "127.0.0.1" && url.protocol === "http:";
         permit(!url.username && !url.password && !url.hash && (local || url.protocol === "https:" && !url.port), "Forbidden URL");
         permit(!/%(?:2[ef]|5c|25|00|3f|23)/i.test(url.pathname) && !url.pathname.includes("//"), "Ambiguous path");
+        permit(!containsCredential(url.href, values) && !containsCredential(decodeURIComponent(url.pathname), values), "Credential in URL");
         if (url.search) {
           const query = [...url.searchParams].flat().join("\n");
           permit(!Object.values(ctx.secrets).some(v => v && (query.includes(v) || url.search.includes(v))), "Secret in query");

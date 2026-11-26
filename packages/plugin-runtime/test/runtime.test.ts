@@ -126,3 +126,104 @@ it.each(["write-local", "external-send"])("migrates an installed %s package with
 it.each(["unknown", "", null, undefined])("rejects an invalid effect at installation (%s)", effect => {
   expect(() => parseManifest({ ...manifest, tools: [{ ...manifest.tools[0], effect }] })).toThrow("Unsupported effect");
 });
+
+it("audits declared and denied reads and blocks credential-bearing host requests, results and errors", async () => {
+  const borrow = vi.fn(async () => null);
+  const f = await setup(async (_, __, call, host) => {
+    expect(await host("secrets.list", {})).toEqual(["token"]);
+    const token = await host("secrets.get", { name: "token" });
+    expect(token).toBe("test-secret");
+    await expect(host("secrets.get", { name: "undeclared" })).rejects.toThrow("Undeclared");
+    for (const [method, params] of [
+      ["kv.set", { key: "k", value: { nested: token } }], ["kv.set", { key: token, value: true }],
+      ["borrow", { tool: "notes_read", args: { token } }], ["log", { message: token }],
+      ["http.request", { url: "https://example.org/", method: "POST", body: token }],
+    ] as const) await expect(host(method, params)).rejects.toThrow("Credential withheld");
+    if ((call.args as { fail?: boolean }).fail) throw new Error("broken: " + token);
+    return { nested: [token] };
+  });
+  await f.approve();
+  const invoke = (fail: boolean) => f.r.invoke("sample", f.p.sha, { kind: "tools", name: "read", args: { fail } }, { borrow });
+  await expect(invoke(false)).rejects.toThrow("Credential withheld");
+  await expect(invoke(true)).rejects.toThrow("Plugin invocation failed");
+  expect(borrow).not.toHaveBeenCalled();
+  expect(f.r.store.active("sample")!.kv).toEqual({});
+  const audit = readFileSync(join(f.r.store.root, "audit.jsonl"), "utf8");
+  expect(audit).not.toContain("test-secret");
+  const reads = audit.trim().split("\n").map(line => JSON.parse(line)).filter(row => row.secret);
+  expect(reads).toEqual(["token", "undeclared", "token", "undeclared"]
+    .map(secret => ({ plugin: "sample", secret, caller: "read" })));
+});
+
+it("keeps overflow history, delivery checkpoints, backoff and tool failures independent across restart", async () => {
+  const old = Array.from({ length: 1010 }, (_, i) => ({ id: String(i), title: "old" }));
+  let batch = old, offline = false;
+  const worker: typeof run = async (_, __, call) => {
+    if (call.kind === "tools" || offline) throw new Error("offline");
+    return batch;
+  };
+  const f = await setup(worker);
+  await f.approve(); await f.poll();
+  expect(f.emit).not.toHaveBeenCalled();
+  expect(f.r.store.active("sample")!.sources.feed).toMatchObject({ baseline: true, overflow: { length: 10 } });
+  expect(f.r.store.active("sample")!.sources.feed!.seen).toHaveLength(1000);
+  await expect(f.tool()).rejects.toThrow("offline");
+  batch = [{ id: "a", title: "first" }, ...old, { id: "b", title: "second" }];
+  f.emit.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("delivery failed"));
+  await expect(f.poll()).rejects.toThrow("delivery failed");
+  const progress = f.r.store.view("sample").sources[0]!;
+  expect(progress).toMatchObject({ todayCount: 1, error: "delivery failed", invalid: 0, nextPollAt: progress.next });
+  expect(progress.next - progress.lastPollAt).toBe(120_000);
+  await f.r.close();
+  const emit = vi.fn(async () => {});
+  const runtime = openRuntime(f.data, { emit, notify: f.notify, changed() {}, secrets: () => ({}) }, { run: worker });
+  const poll = () => runtime.invoke("sample", f.p.sha, { kind: "sources", name: "feed", args: null });
+  await poll();
+  expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ summary: "second" }));
+  expect(runtime.store.view("sample")).toMatchObject({ failures: 1, sources: [{ todayCount: 2, error: null }] });
+  offline = true;
+  for (let i = 1; i <= 6; i++) {
+    await expect(poll()).rejects.toThrow("offline");
+    const s = runtime.store.view("sample").sources[0]!;
+    expect(s.next - s.lastPollAt).toBe(60_000 * 2 ** i);
+  }
+  expect(runtime.store.view("sample")).toMatchObject({ failures: 1, status: "enabled", sources: [{ paused: false, invalid: 0 }] });
+  await runtime.close();
+});
+
+it("migrates legacy next and seen, including an empty baseline, without replaying old data", async () => {
+  const f = await setup(async () => [{ id: "old", title: "old" }]);
+  await f.approve(); await f.poll(); await f.r.close();
+  const path = join(f.r.store.root, "registry.json"), registry = JSON.parse(readFileSync(path, "utf8"));
+  const version = registry.sample.versions[0];
+  version.manifest.sources.push({ name: "empty", minIntervalSeconds: 60 });
+  version.sources = {
+    feed: { seen: version.sources.feed.seen, invalid: 1, paused: false, next: 1234 },
+    empty: { seen: [], invalid: 0, paused: false, next: 42 },
+  };
+  writeFileSync(path, JSON.stringify(registry));
+  const runtime = openRuntime(f.data, { emit: f.emit, notify: f.notify, changed() {}, secrets: () => ({}) },
+    { run: async () => [{ id: "old", title: "old" }], timeZone: "Asia/Taipei" });
+  expect(runtime.store.view("sample").sources[0]).toMatchObject({ invalid: 1, next: 1234, nextPollAt: 1234, lastPollAt: 0, todayCount: 0, error: null });
+  for (const name of ["feed", "empty"]) await runtime.invoke("sample", f.p.sha, { kind: "sources", name, args: null });
+  expect(f.emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: "feed:empty" }));
+  runtime.store.update("sample", f.p.sha, v => { v.sources.empty!.day = "2000-01-01"; });
+  expect(runtime.store.view("sample").sources[1]?.todayCount).toBe(0);
+  await runtime.close();
+});
+
+it("persists each acknowledged delivery before the next and retains the burst summary", async () => {
+  let batch: { id: string; title: string }[] = [];
+  const f = await setup(async () => batch);
+  await f.approve(); await f.poll();
+  batch = Array.from({ length: 25 }, (_, i) => ({ id: String(i), title: String(i) }));
+  f.emit.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+    const onDisk = openStore(f.data).view("sample").sources[0]!;
+    expect(onDisk.todayCount).toBe(1);
+  });
+  await f.poll(); await f.poll();
+  expect(f.emit).toHaveBeenCalledTimes(21);
+  expect(f.emit).toHaveBeenLastCalledWith(expect.objectContaining({ summary: "另外 5 条更新" }));
+  expect(f.r.store.view("sample").sources[0]?.todayCount).toBe(25);
+  await f.r.close();
+});

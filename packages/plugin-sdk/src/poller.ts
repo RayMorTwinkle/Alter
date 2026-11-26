@@ -76,6 +76,10 @@ export type PollerFailure = { error: string; invalid?: boolean; minIntervalMs?: 
 export type PollerOptions<T extends PollerItem, Metadata = unknown> = {
   pull: () => PollerBatch<T, Metadata> | Promise<PollerBatch<T, Metadata>>;
   onItem: (item: T) => void | Promise<void>;
+  /** Acknowledge the remainder together once this many individual items have been delivered. */
+  coalesce?: { after: number; onRemainder: (items: readonly T[]) => void | Promise<void> };
+  /** Persist acknowledged progress before attempting the next delivery in the same batch. */
+  checkpoint?: (state: PollerState) => void | Promise<void>;
   intervalMs: number;
   timeZone: string;
   now?: () => number;
@@ -113,13 +117,24 @@ export async function runPollBatch<T extends PollerItem, Metadata = unknown>(
     if (state.baseline) {
       const { fresh, matched } = partitionUnseen(items, known, state.overflow);
       for (const id of matched) known.add(id);
-      for (const item of fresh) {
+      let delivered = 0;
+      while (delivered < fresh.length) {
         signal?.throwIfAborted();
-        await options.onItem(item);
-        received.push(item.id);
-        known.add(item.id);
+        let end = delivered + 1;
+        if (options.coalesce && delivered >= options.coalesce.after) {
+          await options.coalesce.onRemainder(fresh.slice(delivered));
+          end = fresh.length;
+        } else await options.onItem(fresh[delivered]!);
         rollDay(now());
-        state.count++;
+        state.count += end - delivered;
+        while (delivered < end) {
+          const { id } = fresh[delivered++]!;
+          received.push(id);
+          known.add(id);
+        }
+        if (options.checkpoint && delivered < fresh.length) {
+          await options.checkpoint({ ...state, ...rememberItems(state, items, known, received, options.maxSeen) });
+        }
       }
     } else {
       for (const item of items) { received.push(item.id); known.add(item.id); }
