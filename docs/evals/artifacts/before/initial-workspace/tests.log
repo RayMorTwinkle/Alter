@@ -1,0 +1,292 @@
+Scope: 15 of 16 workspace projects
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/adapters
+
+ ✓ test/engine.test.ts (3 tests) 189ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  09:24:52
+   Duration  1.11s (import 57%, transform 22%, tests 21%)
+
+no tests
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/plugin-sdk
+
+ ✓ test/poller.test.ts (8 tests) 53ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:24:54
+   Duration  354ms (transform 50%, tests 32%, import 15%, worker 3%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/web
+
+ ✓ test/store.test.ts (9 tests) 28ms
+ ✓ test/markdown.test.ts (7 tests) 11ms
+ ✓ test/ui.test.ts (6 tests) 25ms
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  09:24:55
+   Duration  5.32s (import 91%, transform 8%, tests 1%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/core
+
+ ✓ test/heartbeat.test.ts (25 tests) 8118ms
+   ✓ summarizes new digests including read items, goals, agenda and tasks, omitting a blank final answer live and on replay 327ms
+   ✓ runs an empty first inspection, then skips recently active and unfunded inspections without consuming new digest input 425ms
+   ✓ does not count a completed heartbeat task whose requested action the user denied 350ms
+   ✓ retains only the latest 50 interval decisions across a restart 3046ms
+   ✓ checks again at exactly 24h with no changes and preserves skipped attempts 329ms
+   ✓ uses changes to preferences, recent facts and actual user chat as independent clues 325ms
+   ✓ records effective quiet-hour notification levels and the ID of a created schedule 403ms
+   ✓ forks the user's conversation and supplies only the last three completed conclusions after restart 370ms
+ ✓ test/prototype.test.ts (57 tests) 9211ms
+   ✓ recovers a parked call after SIGKILL with no graceful close 1010ms
+   ✓ renews the calendar lease on use and expires it at thirty idle turns 534ms
+   ✓ replays an interrupted mail_send from SQLite and finds the server copy before SMTP 1618ms
+   ✓ leases a declared plugin only in the harness where it is installed 322ms
+   ✓ summarizes a parked task, rejects live continuation, and delivers steering after approval across reopen 328ms
+   ✓ cancels a continued task during approval, removes the card, and stays cancelled after reopen 403ms
+ ✓ test/gateway.test.ts (32 tests) 3356ms
+   ✓ falls back before output on 500 and records both attempts 320ms
+   ✓ falls back before output on no headers and records both attempts 312ms
+   ✓ falls back before output on role only and records both attempts 314ms
+   ✓ stops the deadline at first output, even for a slow completion 312ms
+   ✓ accounts for a single tool-free task-model attempt per event, including gateway errors 446ms
+ ✓ test/proactive.test.ts (11 tests) 4539ms
+   ✓ recovers the cursor and unprocessed evictions while an external call is in flight 513ms
+   ✓ feeds grouped, validated digest lines into the report and looks up their full sources 726ms
+   ✓ retries an unnotified report with new arrivals and advances its cursor only on a delivered reply 1489ms
+   ✓ accepts historical feedback answers from the user and rejects answers from an event wake 342ms
+   ✓ checks every evening regardless of active days and the feedback preference 557ms
+   ✓ pauses exactly seven days after interaction and resumes evening checks on return across restart 339ms
+ ✓ test/feedback.test.ts (11 tests) 5236ms
+   ✓ rejects missing or unusable effects and reduces the rank of frequently skipped questions 1217ms
+   ✓ sends due checkins only after recent activity and doubles the interval after two fully skipped visits 662ms
+   ✓ defers an active main turn and withholds a weekly batch with fewer than three eligible questions 432ms
+   ✓ recovers a committed memory write after restart and reconciles undo from the memory API 506ms
+   ✓ reviews a batch once and validates option mappings (valid=true) 1474ms
+   ✓ reviews a batch once and validates option mappings (valid=false) 403ms
+ ✓ test/approval.test.ts (17 tests) 16467ms
+   ✓ checks writes against the dispatch snapshot and brief, then asks for out-of-scope and irreversible calls 1530ms
+   ✓ scopes a capability grant to the selected capability 570ms
+   ✓ keeps a deferred approval across restart and allows rewritten arguments for ten minutes 2776ms
+   ✓ defers an irreversible call without a judge and expires its detached card once at the final deadline 1191ms
+   ✓ resumes statement authorizations from SQLite without asking again for an in-scope call 1021ms
+   ✓ leases without review and judges the write against ten recent original user inputs 1016ms
+   ✓ migrates stored approval modes, audit effects and statement decisions on reopen 344ms
+   ✓ requires a user decision for an unrecognized runtime effect even with an in-scope statement 502ms
+   ✓ lets the main session write memories without asking 761ms
+   ✓ ends a main capability grant with the lease that prompted it 3667ms
+   ✓ migrates a legacy task-wide decision to its capability and keeps existing statement items 1218ms
+   ✓ does not carry once into a task continuing the same conversation 515ms
+   ✓ does not carry capability into a task continuing the same conversation 798ms
+   ✓ recovers a recent pre-upgrade once decision from its click time 418ms
+ ✓ test/scheduled-tasks.test.ts (8 tests) 6039ms
+   ✓ calculates local, weekly, interval and signed event times and follows live calendar edits outside the agenda 1287ms
+   ✓ persists pause, resumes at the next interval and coalesces downtime to one attributed wake 1485ms
+   ✓ dispatches ordinary tasks, charges their usage and continues the settled conversation 1117ms
+   ✓ skips both actions when today's shared budget is exhausted, including after a restart 545ms
+   ✓ requires ordinary user approval for a scheduled send and skips a continuation while its task runs 506ms
+   ✓ keeps an independent dispatch out of the active heartbeat's task and adoption counts 682ms
+   ✓ migrates action-only rows and edits paused reminders without spending model budget 346ms
+ ✓ test/memory-consolidation.test.ts (6 tests) 2750ms
+   ✓ waits for both 200 user turns and 30 idle minutes and sends only own messages to a low-thinking model 1121ms
+   ✓ recovers a committed batch without replaying it or consuming later turns 511ms
+   ✓ restores marked custom channels and legacy Feishu inputs from SQLite without loading their plugins 574ms
+ ✓ test/watch.test.ts (7 tests) 5540ms
+   ✓ creates through main, batches for 30s, sleeps, then finishes in the same conversation 1300ms
+   ✓ polls active watches, retries a failed window and stops after cancellation 1029ms
+   ✓ charges one unit per wake even for a zero-token provider and restores the shared budget 556ms
+   ✓ keeps polling during a parked send and task_stop withdraws the approval 1066ms
+   ✓ resumes the original batch deadline and deduplicates a realtime ref seen again by polling 1314ms
+ ✓ test/memory.test.ts (5 tests) 443ms
+ ✓ test/tool-validation.test.ts (6 tests) 611ms
+   ✓ settles invalid arguments without calling beforeTool or execute 432ms
+ ✓ test/scheduler.test.ts (4 tests) 2756ms
+   ✓ sleeps durably, fires once per occurrence, catches up once and resumes registered kinds 1736ms
+   ✓ rolls back a failed handler and keeps the latest 500 notifications on retry 575ms
+   ✓ reschedules an adaptive item to the same time without reusing a woken signal key 436ms
+ ✓ test/stats.test.ts (7 tests) 3699ms
+   ✓ reads legacy lines without guessing cache splits, charges or wake IDs 358ms
+   ✓ weights cache hits by token count and freezes known prices on each row 333ms
+   ✓ ranks only priced tasks, keeps continued tasks separate and excludes running tasks from success rate 503ms
+   ✓ streams multi-megabyte JSONL across UTF-8 chunk boundaries and picks up later appends 1723ms
+   ✓ counts a real wake even when generation ends before contacting a model 449ms
+ ✓ test/debug-traces.test.ts (2 tests) 256ms
+ ✓ test/eval.test.ts (3 tests) 8581ms
+   ✓ removes only the lease tool and lease instruction when leasing is disabled 918ms
+   ✓ leases once and renames the same calendar event across three user turns 4805ms
+   ✓ waits for the dispatched list and its final reply, and counts usage attempts by role 2856ms
+ ✓ test/timeline.test.ts (6 tests) 170ms
+ ✓ test/node-adapters.test.ts (1 test) 392ms
+   ✓ binds replies to the authenticated peer, times out management, cancels tools and ignores late replies 377ms
+ ✓ test/permissions.test.ts (2 tests) 7130ms
+   ✓ runs the annotated permission calls and fails on missed protections or runner errors 7069ms
+
+ Test Files  18 passed (18)
+      Tests  210 passed (210)
+   Start at  09:25:00
+   Duration  69.50s (tests 73%, import 22%, transform 4%)
+
+    Isolate  18 workers spawned · ~606ms startup each (spawn + environment, per file)
+             at least ~4.85s faster with isolate: false — reuses workers across files instead of one per file
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/node
+
+ ❯ test/platform.test.ts (8 tests | 2 failed) 31820ms
+   × pair/status/roots through CLI, durable identity, mode and token secrecy 20456ms
+   ✓ platform directories, drive boundaries, device prefix and UNC case 2ms
+   ✓ realpath rejects symlinks and junctions that escape the root 3ms
+   ✓ probes only the supplied executables, including .cmd shims on Windows 2789ms
+   × falls back to a desktop app's bundled CLI and honours a configured path 5039ms
+   ✓ desktop candidates point at the bundled DeepSeek Harness CLI 1ms
+   ✓ the harness wrapper preserves argument boundaries and Unicode 3464ms
+   ✓ journal survives a torn tail, reports an interrupted host once and preserves the terminal ack 49ms
+ ✓ test/sessions.test.ts (2 tests) 1407ms
+   ✓ dsh v3 history uses the first human text and sorts by artifact mtime even if decoding fails 1390ms
+ ✓ test/service.test.ts (2 tests) 45ms
+ ✓ test/acp.test.ts (1 test) 6ms
+ ❯ test/connection.test.ts (31 tests | 6 failed) 80687ms
+   ✓ hello, ping, roots and unavailable harness 990ms
+   × Codex bridges approval, replays the pending request with its original seq, queues the next turn and resumes 5645ms
+   × codex drives native stdio, denial, finish MCP, and a crash 5034ms
+   × claude-code drives native stdio, denial, finish MCP, and a crash 5049ms
+   × Claude uses streaming input for a follow-up and checks error flags on success results 5827ms
+   × stop kills the codex process tree before the report 5046ms
+   × stop kills the claude-code process tree before the report 5093ms
+   ✓ stop kills the dsh process tree before the report 1373ms
+   ✓ stop kills the opencode process tree before the report 1785ms
+   ✓ timeout settles exactly once 314ms
+   ✓ an offline terminal report is persisted before welcome and replayed from the hub cursor 2050ms
+   ✓ node shutdown interrupts a task and persists the terminal report 1539ms
+   ✓ silent hub triggers reconnect and rejection terminates without leaking the supplied reason 221ms
+   ✓ CLI run advertises detected shims, reports live status and drains on shutdown 4435ms
+   ✓ dsh maps ACP updates, reports and stop reasons 4541ms
+   ✓ opencode maps ACP updates, reports and stop reasons 4251ms
+   ✓ ACP resume, load replay, follow-up and occupied sessions 3947ms
+   ✓ ACP permissions restricted / read 868ms
+   ✓ ACP permissions restricted / search 1037ms
+   ✓ ACP permissions auto / read 972ms
+   ✓ ACP permissions auto / edit 1038ms
+   ✓ ACP permissions auto / fetch 918ms
+   ✓ ACP permissions auto / move 1104ms
+   ✓ ACP permissions auto / delete 1236ms
+   ✓ ACP permissions auto / execute 1003ms
+   ✓ ACP permissions full / execute 821ms
+   ✓ ACP permissions full / missing 947ms
+   ✓ sessions.list paginates, filters by real cwd and roots before sorting and limiting 2021ms
+   ✓ a timed out sessions.list replies with an error and releases its process 1528ms
+   ✓ manages live node adapters through the socket and local CLI, redacts outputs and restores discovery on reconnect 9823ms
+   ✓ handshakes during slow discovery and aborts a running CLI on disconnect 221ms
+
+ Test Files  2 failed | 3 passed (5)
+      Tests  8 failed | 36 passed (44)
+   Start at  09:26:13
+   Duration  93.46s (tests 84%, import 9%, transform 7%, worker 1%)
+
+/private/tmp/alter-review.xY9wbPoL/measured/packages/node:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @alter/node@0.0.0 test: `vitest run`
+Exit status 1
+[ELIFECYCLE] Test failed. See above for more details.
+$ pnpm -r test
+$ vitest run
+$ echo "no tests"
+$ vitest run
+$ vitest run
+$ vitest run
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Unknown pre-compaction memory source
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Incomplete main compaction response: length
+
+$ vitest run
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/connection.test.ts > Codex bridges approval, replays the pending request with its original seq, queues the next turn and resumes
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/connection.test.ts:72:1
+     70| });
+     71|
+     72| test("Codex bridges approval, replays the pending request with its ori…
+       | ^
+     73|   const f = await setup();
+     74|   f.start("task", "ask", "codex", { resume: "previous" });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  test/connection.test.ts > codex drives native stdio, denial, finish MCP, and a crash
+ FAIL  test/connection.test.ts > claude-code drives native stdio, denial, finish MCP, and a crash
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/connection.test.ts:102:45
+    100| });
+    101|
+    102| test.each(["codex", "claude-code"] as const)("%s drives native stdio, …
+       |                                             ^
+    103|   const f = await setup();
+    104|   f.start("denied", "ask-edit", harness, { resume: "old", permission: …
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  test/connection.test.ts > Claude uses streaming input for a follow-up and checks error flags on success results
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/connection.test.ts:120:1
+    118| });
+    119|
+    120| test("Claude uses streaming input for a follow-up and checks error fla…
+       | ^
+    121|   const f = await setup();
+    122|   f.start("a", "ask", "claude-code");
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  test/connection.test.ts > stop kills the codex process tree before the report
+ FAIL  test/connection.test.ts > stop kills the claude-code process tree before the report
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/connection.test.ts:131:64
+    129| });
+    130|
+    131| test.each(["codex", "claude-code", "dsh", "opencode"] as const)("stop …
+       |                                                                ^
+    132|   const f = await setup();
+    133|   f.start("long", "hold", harness);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  test/platform.test.ts > pair/status/roots through CLI, durable identity, mode and token secrecy
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/platform.test.ts:16:1
+     14| function fixture() { const f = workspace(); dirs.push(f.base); return …
+     15|
+     16| test("pair/status/roots through CLI, durable identity, mode and token …
+       | ^
+     17|   const f = fixture();
+     18|   const env = { ...process.env, HOME: f.base, USERPROFILE: f.base, APP…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  test/platform.test.ts > falls back to a desktop app's bundled CLI and honours a configured path
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/platform.test.ts:95:1
+     93| });
+     94|
+     95| test("falls back to a desktop app's bundled CLI and honours a configur…
+       | ^
+     96|   const f = fixture(), dsh = (await detectHarnesses({ PATH: f.bin, PAT…
+     97|   const offPath = async (id: string) => id === "dsh" ? [path.join(f.ro…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+

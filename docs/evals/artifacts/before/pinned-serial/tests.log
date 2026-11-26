@@ -1,0 +1,378 @@
+Scope: 15 of 16 workspace projects
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/adapters
+
+ ✓ test/engine.test.ts (3 tests) 69ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  09:36:28
+   Duration  346ms (import 61%, tests 29%, transform 8%, worker 1%)
+
+no tests
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/plugin-sdk
+
+ ✓ test/poller.test.ts (8 tests) 40ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:36:29
+   Duration  149ms (tests 67%, import 19%, transform 9%, worker 4%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/web
+
+ ✓ test/ui.test.ts (6 tests) 11ms
+ ✓ test/markdown.test.ts (7 tests) 5ms
+ ✓ test/store.test.ts (9 tests) 5ms
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  09:36:29
+   Duration  1.68s (import 96%, transform 2%, tests 1%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/core
+
+ ✓ test/prototype.test.ts (57 tests) 5371ms
+   ✓ recovers a parked call after SIGKILL with no graceful close 422ms
+   ✓ replays an interrupted mail_send from SQLite and finds the server copy before SMTP 578ms
+ ✓ test/heartbeat.test.ts (25 tests) 5773ms
+   ✓ retains only the latest 50 interval decisions across a restart 2780ms
+   ✓ forks the user's conversation and supplies only the last three completed conclusions after restart 309ms
+ ✓ test/eval.test.ts (3 tests) 5367ms
+   ✓ leases once and renames the same calendar event across three user turns 3131ms
+   ✓ waits for the dispatched list and its final reply, and counts usage attempts by role 2176ms
+ ✓ test/approval.test.ts (17 tests) 2242ms
+ ✓ test/gateway.test.ts (32 tests) 2137ms
+   ✓ falls back before output on no headers and records both attempts 308ms
+   ✓ falls back before output on role only and records both attempts 310ms
+   ✓ stops the deadline at first output, even for a slow completion 305ms
+ ✓ test/proactive.test.ts (11 tests) 1336ms
+   ✓ recovers the cursor and unprocessed evictions while an external call is in flight 310ms
+ ✓ test/scheduled-tasks.test.ts (8 tests) 1217ms
+ ✓ test/watch.test.ts (7 tests) 1135ms
+ ✓ test/scheduler.test.ts (4 tests) 799ms
+   ✓ sleeps durably, fires once per occurrence, catches up once and resumes registered kinds 442ms
+ ✓ test/feedback.test.ts (11 tests) 432ms
+ ✓ test/permissions.test.ts (2 tests) 451ms
+   ✓ runs the annotated permission calls and fails on missed protections or runner errors 448ms
+ ✓ test/memory-consolidation.test.ts (6 tests) 221ms
+ ✓ test/stats.test.ts (7 tests) 165ms
+ ✓ test/memory.test.ts (5 tests) 53ms
+ ✓ test/node-adapters.test.ts (1 test) 105ms
+ ✓ test/tool-validation.test.ts (6 tests) 45ms
+ ✓ test/debug-traces.test.ts (2 tests) 19ms
+ ✓ test/timeline.test.ts (6 tests) 5ms
+
+ Test Files  18 passed (18)
+      Tests  210 passed (210)
+   Start at  09:36:31
+   Duration  31.17s (tests 91%, import 9%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/node
+
+ ✓ test/connection.test.ts (31 tests) 32936ms
+   ✓ Codex bridges approval, replays the pending request with its original seq, queues the next turn and resumes 2888ms
+   ✓ codex drives native stdio, denial, finish MCP, and a crash 2360ms
+   ✓ claude-code drives native stdio, denial, finish MCP, and a crash 1166ms
+   ✓ Claude uses streaming input for a follow-up and checks error flags on success results 1287ms
+   ✓ stop kills the codex process tree before the report 568ms
+   ✓ stop kills the claude-code process tree before the report 455ms
+   ✓ stop kills the dsh process tree before the report 565ms
+   ✓ stop kills the opencode process tree before the report 471ms
+   ✓ timeout settles exactly once 302ms
+   ✓ an offline terminal report is persisted before welcome and replayed from the hub cursor 1133ms
+   ✓ node shutdown interrupts a task and persists the terminal report 460ms
+   ✓ CLI run advertises detected shims, reports live status and drains on shutdown 1767ms
+   ✓ dsh maps ACP updates, reports and stop reasons 1788ms
+   ✓ opencode maps ACP updates, reports and stop reasons 1908ms
+   ✓ ACP resume, load replay, follow-up and occupied sessions 2292ms
+   ✓ ACP permissions restricted / read 1052ms
+   ✓ ACP permissions restricted / search 459ms
+   ✓ ACP permissions auto / read 1000ms
+   ✓ ACP permissions auto / edit 457ms
+   ✓ ACP permissions auto / fetch 588ms
+   ✓ ACP permissions auto / move 455ms
+   ✓ ACP permissions auto / delete 579ms
+   ✓ ACP permissions auto / execute 1430ms
+   ✓ ACP permissions full / execute 1229ms
+   ✓ ACP permissions full / missing 504ms
+   ✓ sessions.list paginates, filters by real cwd and roots before sorting and limiting 1675ms
+   ✓ a timed out sessions.list replies with an error and releases its process 1456ms
+   ✓ manages live node adapters through the socket and local CLI, redacts outputs and restores discovery on reconnect 2309ms
+ ✓ test/platform.test.ts (8 tests) 5936ms
+   ✓ pair/status/roots through CLI, durable identity, mode and token secrecy 1224ms
+   ✓ probes only the supplied executables, including .cmd shims on Windows 3526ms
+   ✓ falls back to a desktop app's bundled CLI and honours a configured path 872ms
+ ✓ test/sessions.test.ts (2 tests) 309ms
+ ✓ test/service.test.ts (2 tests) 5ms
+ ✓ test/acp.test.ts (1 test) 2ms
+
+ Test Files  5 passed (5)
+      Tests  44 passed (44)
+   Start at  09:37:02
+   Duration  40.28s (tests 98%, import 2%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/plugin-browser
+
+ ✓ test/runner.test.ts (6 tests) 258ms
+ ✓ test/browser.test.ts (20 tests) 105ms
+
+ Test Files  2 passed (2)
+      Tests  26 passed (26)
+   Start at  09:37:43
+   Duration  717ms (tests 67%, import 30%, transform 2%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/plugin-calendar
+
+ ✓ test/calendar.test.ts (11 tests) 47ms
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  09:37:44
+   Duration  362ms (import 61%, transform 20%, tests 18%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/alter-review.xY9wbPoL/measured/packages/plugin-feishu
+
+stdout | test/surface.test.ts > locks five wrong attempts until rotation, rejects an expired code and persists the owner privately
+Alter Feishu 配对码 069352（10 分钟有效）
+
+stdout | test/surface.test.ts > locks five wrong attempts until rotation, rejects an expired code and persists the owner privately
+Alter Feishu 配对码 275664（10 分钟有效）
+
+stdout | test/surface.test.ts > keeps strangers and groups in external events and deduplicates concurrent and restarted deliveries
+Alter Feishu 配对码 412426（10 分钟有效）
+
+stdout | test/surface.test.ts > routes completed replies by placed input even with a queued follow-up (web first=true)
+Alter Feishu 配对码 426231（10 分钟有效）
+
+stdout | test/surface.test.ts > routes completed replies by placed input even with a queued follow-up (web first=false)
+Alter Feishu 配对码 327559（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via once
+Alter Feishu 配对码 533023（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via capability
+Alter Feishu 配对码 218946（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via always
+Alter Feishu 配对码 926242（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via deny
+Alter Feishu 配对码 808781（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via web
+Alter Feishu 配对码 428952（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via cancel
+Alter Feishu 配对码 133666（10 分钟有效）
+
+stdout | test/surface.test.ts > keeps the most recent 500 message receipts across restart
+Alter Feishu 配对码 469633（10 分钟有效）
+
+stdout | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu 配对码 779688（10 分钟有效）
+
+stdout | test/surface.test.ts > delivers only unread now notifications to the paired owner and remembers IDs across restarts
+Alter Feishu 配对码 158407（10 分钟有效）
+
+stdout | test/surface.test.ts > pushes only the main session's final reply for an urgent external event
+Alter Feishu 配对码 664490（10 分钟有效）
+
+stdout | test/surface.test.ts > sends one Feishu reply when the user's turn incorporates a fast task report
+Alter Feishu 配对码 664889（10 分钟有效）
+
+stdout | test/surface.test.ts > delivers a standalone task result and quiet-hour replies, and keeps the initiating web turn local
+Alter Feishu 配对码 287673（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (before)
+Alter Feishu 配对码 366332（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (after)
+Alter Feishu 配对码 165858（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (normal)
+Alter Feishu 配对码 206978（10 分钟有效）
+
+stdout | test/surface.test.ts > updates an already queued report when its dispatching turn chooses silence
+Alter Feishu 配对码 047362（10 分钟有效）
+
+stdout | test/surface.test.ts > forwards an actionable heartbeat reply after a Feishu turn and records its gateway usage once
+Alter Feishu 配对码 032911（10 分钟有效）
+
+stdout | test/surface.test.ts > accepts existing owner feedback forms and syncs Web skips while issuance is paused
+Alter Feishu 配对码 584403（10 分钟有效）
+
+stdout | test/surface.test.ts > closes a feedback card whose question left the bank with a schema 2.0 update
+Alter Feishu 配对码 704843（10 分钟有效）
+
+ ❯ test/surface.test.ts (25 tests | 6 failed) 12768ms
+   ✓ loads both credentials, validates the domain and leaves an unconfigured server optional 2ms
+   ✓ normalizes real SDK WS envelopes, strips only supplied mentions and returns the callback toast 2ms
+   ✓ locks five wrong attempts until rotation, rejects an expired code and persists the owner privately 243ms
+   ✓ keeps strangers and groups in external events and deduplicates concurrent and restarted deliveries 119ms
+   ✓ routes completed replies by placed input even with a queued follow-up (web first=true) 97ms
+   ✓ routes completed replies by placed input even with a queued follow-up (web first=false) 93ms
+   ✓ restores the pending card and resolves it once via once 189ms
+   ✓ restores the pending card and resolves it once via capability 188ms
+   ✓ restores the pending card and resolves it once via always 188ms
+   ✓ restores the pending card and resolves it once via deny 500ms
+   × restores the pending card and resolves it once via web 1035ms
+   × restores the pending card and resolves it once via cancel 1033ms
+   ✓ keeps the most recent 500 message receipts across restart 164ms
+   × continues sending other cards after a failed send and recovers the winning decision after an update fails 1026ms
+   ✓ delivers only unread now notifications to the paired owner and remembers IDs across restarts 34ms
+   × pushes only the main session's final reply for an urgent external event 1025ms
+   × sends one Feishu reply when the user's turn incorporates a fast task report 1026ms
+   × delivers a standalone task result and quiet-hour replies, and keeps the initiating web turn local 5005ms
+   ✓ applies the originating turn’s silence to a standalone task report (before) 297ms
+   ✓ applies the originating turn’s silence to a standalone task report (after) 114ms
+   ✓ applies the originating turn’s silence to a standalone task report (normal) 102ms
+   ✓ updates an already queued report when its dispatching turn chooses silence 144ms
+   ✓ forwards an actionable heartbeat reply after a Feishu turn and records its gateway usage once 88ms
+   ✓ accepts existing owner feedback forms and syncs Web skips while issuance is paused 28ms
+   ✓ closes a feedback card whose question left the bank with a schema 2.0 update 27ms
+ ✓ test/connector.test.ts (18 tests) 282ms
+ ✓ test/settings.test.ts (1 test) 40ms
+
+ Test Files  1 failed | 2 passed (3)
+      Tests  6 failed | 38 passed (44)
+   Start at  09:37:44
+   Duration  14.31s (tests 93%, import 6%, transform 1%)
+
+/private/tmp/alter-review.xY9wbPoL/measured/packages/plugin-feishu:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @alter/plugin-feishu@0.0.0 test: `vitest run`
+Exit status 1
+[ELIFECYCLE] Test failed. See above for more details.
+$ pnpm -r test
+$ vitest run
+$ echo "no tests"
+$ vitest run
+$ vitest run
+$ vitest run
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Unknown pre-compaction memory source
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Incomplete main compaction response: length
+
+$ vitest run
+$ vitest run
+(node:53902) ExperimentalWarning: vm.USE_MAIN_CONTEXT_DEFAULT_LOADER is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+$ vitest run
+$ vitest run
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/surface.test.ts > restores the pending card and resolves it once via web
+ FAIL  test/surface.test.ts > restores the pending card and resolves it once via cancel
+AssertionError: expected +0 to be 1 // Object.is equality
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ test/surface.test.ts:180:61
+    178|   const f = await setupApproval();
+    179|   await submitMessage(f.app.main, "delegate");
+    180|   await expect.poll(() => f.feed.snapshot().pending.length).toBe(1);
+       |                                                             ^
+    181|   expect(f.transport.sendCard).not.toHaveBeenCalled();
+    182|   await f.pair();
+
+Caused by: Error: Matcher did not succeed in time.
+ ❯ test/surface.test.ts:180:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+AssertionError: expected undefined to be defined
+ ❯ test/surface.test.ts:234:37
+    232|   });
+    233|   await submitMessage(f.app.main, "delegate");
+    234|   await expect.poll(() => failedId).toBeDefined();
+       |                                     ^
+    235|   await submitMessage(f.app.main, "delegate");
+    236|   await expect.poll(() => f.feed.snapshot().pending.length).toBe(2);
+
+Caused by: Error: Matcher did not succeed in time.
+ ❯ test/surface.test.ts:234:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  test/surface.test.ts > pushes only the main session's final reply for an urgent external event
+AssertionError: expected [ [ 'private', '配对成功' ] ] to deeply equal [ [ 'private', '配对成功' ], …(1) ]
+
+- Expected
++ Received
+
+  [
+    [
+      "private",
+      "配对成功",
+    ],
+-   [
+-     "private",
+-     "开会
+- 请看日程",
+-   ],
+  ]
+
+ ❯ test/surface.test.ts:284:60
+    282|   await f.pair();
+    283|   await f.send("meeting", "会议改到十点", { chatType: "group" });
+    284|   await expect.poll(() => f.transport.sendText.mock.calls).toEqual([["…
+       |                                                            ^
+    285|   await expect.poll(() => f.feed.snapshot().notifications).toMatchObje…
+    286|     { kind: "message", pushedAt: f.clock.now }, { kind: "event", ref: …
+
+Caused by: Error: Matcher did not succeed in time.
+ ❯ test/surface.test.ts:284:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  test/surface.test.ts > sends one Feishu reply when the user's turn incorporates a fast task report
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ test/surface.test.ts:307:49
+    305|   await f.pair();
+    306|   await f.send("work", "delegate");
+    307|   await expect.poll(() => !!worker && !!status).toBe(true);
+       |                                                 ^
+    308|   toolCall(worker!, "finish", { summary: "verified", refs: [] });
+    309|   await expect.poll(() => f.feed.snapshot().ledger.length).toBe(1);
+
+Caused by: Error: Matcher did not succeed in time.
+ ❯ test/surface.test.ts:307:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  test/surface.test.ts > delivers a standalone task result and quiet-hour replies, and keeps the initiating web turn local
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/surface.test.ts:316:1
+    314| });
+    315|
+    316| it("delivers a standalone task result and quiet-hour replies, and keep…
+       | ^
+    317|   let worker: ServerResponse | undefined;
+    318|   const f = await setup(({ model, messages }, res) => {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+$ vitest run

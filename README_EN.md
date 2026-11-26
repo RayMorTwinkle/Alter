@@ -75,6 +75,8 @@ Both baseline calendar failures involve the same missing Friday, approached from
 | [gateway](packages/gateway) / [node](packages/node) / [node-protocol](packages/node-protocol) / [adapters](packages/adapters) | Gateway, execution node, protocol and tool adapters |
 | [evals](packages/evals) | Task, permission, prompt-injection and triage evaluation fixtures |
 
+On the same network-isolated Linux arm64 image, the full suite passed 555/555 on the baseline and 561/561 after the refactor. Both revisions passed type checking and the web build. With default concurrency on macOS, the same local adapter test hit its two-second deadline on both revisions. [Environment and failure logs](docs/evals/refactor-1126-report.md)
+
 Run `pnpm test` for package tests and `pnpm typecheck` for workspace type checks. Model-backed commands such as `eval:e2e` and `eval:triage` have separate service requirements. Use `pnpm demo` for the offline path.
 
 ## Static project page

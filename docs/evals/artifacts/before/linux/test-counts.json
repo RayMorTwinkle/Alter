@@ -1,0 +1,49 @@
+{
+  "packages": {
+    "adapters": {
+      "passed": 3
+    },
+    "plugin-sdk": {
+      "passed": 8
+    },
+    "web": {
+      "passed": 22
+    },
+    "core": {
+      "passed": 210
+    },
+    "node": {
+      "passed": 44
+    },
+    "plugin-browser": {
+      "passed": 26
+    },
+    "plugin-calendar": {
+      "passed": 11
+    },
+    "plugin-feishu": {
+      "passed": 44
+    },
+    "plugin-mail": {
+      "passed": 35
+    },
+    "plugin-runtime": {
+      "passed": 43
+    },
+    "plugin-sources": {
+      "passed": 8
+    },
+    "evals": {
+      "passed": 23
+    },
+    "server": {
+      "passed": 72
+    },
+    "gateway": {
+      "passed": 6
+    }
+  },
+  "total": {
+    "passed": 555
+  }
+}

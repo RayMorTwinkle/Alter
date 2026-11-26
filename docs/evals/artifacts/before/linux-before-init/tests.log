@@ -1,0 +1,185 @@
+$ pnpm -r test
+Scope: 15 of 16 workspace projects
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/adapters
+
+ ✓ test/engine.test.ts (3 tests) 80ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  09:44:36
+   Duration  403ms (import 39%, transform 34%, tests 25%, worker 1%)
+
+$ echo "no tests"
+no tests
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-sdk
+
+ ✓ test/poller.test.ts (8 tests) 45ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:44:36
+   Duration  177ms (tests 45%, transform 38%, import 14%, worker 3%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/web
+
+ ✓ test/store.test.ts (9 tests) 12ms
+ ✓ test/ui.test.ts (6 tests) 13ms
+ ✓ test/markdown.test.ts (7 tests) 6ms
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  09:44:37
+   Duration  1.82s (import 88%, transform 10%, tests 2%, worker 1%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/core
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Unknown pre-compaction memory source
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Incomplete main compaction response: length
+
+ ✓ test/prototype.test.ts (57 tests) 7036ms
+   ✓ recovers a parked call after SIGKILL with no graceful close 496ms
+   ✓ renews the calendar lease on use and expires it at thirty idle turns 318ms
+   ✓ replays an interrupted mail_send from SQLite and finds the server copy before SMTP 693ms
+   ✓ summarizes a parked task, rejects live continuation, and delivers steering after approval across reopen 685ms
+   ✓ cancels a continued task during approval, removes the card, and stays cancelled after reopen 405ms
+ ✓ test/heartbeat.test.ts (25 tests) 8665ms
+   ✓ summarizes new digests including read items, goals, agenda and tasks, omitting a blank final answer live and on replay 447ms
+   ✓ runs an empty first inspection, then skips recently active and unfunded inspections without consuming new digest input 429ms
+   ✓ attributes a final reply and its feedback once per inspection, preserving EWMA and the schedule on restart 376ms
+   ✓ consumes at most 20 delivered notices atomically, even on retry, tied delivery times and restart 329ms
+   ✓ retains only the latest 50 interval decisions across a restart 3269ms
+   ✓ forks the user's conversation and supplies only the last three completed conclusions after restart 380ms
+ ✓ test/gateway.test.ts (32 tests) 2588ms
+   ✓ falls back before output on no headers and records both attempts 319ms
+   ✓ falls back before output on role only and records both attempts 317ms
+   ✓ stops the deadline at first output, even for a slow completion 316ms
+   ✓ routes a fork child separately and delivers approvals and reports to the idle REPL 304ms
+ ✓ test/proactive.test.ts (11 tests) 2209ms
+   ✓ recovers the cursor and unprocessed evictions while an external call is in flight 535ms
+   ✓ retries an unnotified report with new arrivals and advances its cursor only on a delivered reply 313ms
+ ✓ test/approval.test.ts (17 tests) 3115ms
+   ✓ checks writes against the dispatch snapshot and brief, then asks for out-of-scope and irreversible calls 435ms
+   ✓ keeps a deferred approval across restart and allows rewritten arguments for ten minutes 414ms
+   ✓ ends a main capability grant with the lease that prompted it 339ms
+ ✓ test/feedback.test.ts (11 tests) 1045ms
+   ✓ reviews a batch once and validates option mappings (valid=true) 343ms
+ ✓ test/scheduled-tasks.test.ts (8 tests) 1989ms
+   ✓ calculates local, weekly, interval and signed event times and follows live calendar edits outside the agenda 388ms
+ ✓ test/watch.test.ts (7 tests) 1632ms
+   ✓ creates through main, batches for 30s, sleeps, then finishes in the same conversation 345ms
+   ✓ keeps polling during a parked send and task_stop withdraws the approval 397ms
+ ✓ test/memory-consolidation.test.ts (6 tests) 356ms
+ ✓ test/memory.test.ts (5 tests) 131ms
+ ✓ test/scheduler.test.ts (4 tests) 894ms
+   ✓ sleeps durably, fires once per occurrence, catches up once and resumes registered kinds 484ms
+ ✓ test/tool-validation.test.ts (6 tests) 54ms
+ ✓ test/stats.test.ts (7 tests) 219ms
+ ✓ test/eval.test.ts (3 tests) 5661ms
+   ✓ leases once and renames the same calendar event across three user turns 3305ms
+   ✓ waits for the dispatched list and its final reply, and counts usage attempts by role 2265ms
+ ✓ test/debug-traces.test.ts (2 tests) 63ms
+ ✓ test/timeline.test.ts (6 tests) 5ms
+ ✓ test/node-adapters.test.ts (1 test) 107ms
+ ✓ test/permissions.test.ts (2 tests) 752ms
+   ✓ runs the annotated permission calls and fails on missed protections or runner errors 749ms
+
+ Test Files  18 passed (18)
+      Tests  210 passed (210)
+   Start at  09:44:39
+   Duration  42.03s (tests 90%, import 7%, transform 2%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/node
+
+ ❯ test/connection.test.ts (31 tests | 5 failed) 40001ms
+   ✓ hello, ping, roots and unavailable harness 97ms
+   ✓ Codex bridges approval, replays the pending request with its original seq, queues the next turn and resumes 451ms
+   ✓ codex drives native stdio, denial, finish MCP, and a crash 1260ms
+   ✓ claude-code drives native stdio, denial, finish MCP, and a crash 845ms
+   ✓ Claude uses streaming input for a follow-up and checks error flags on success results 308ms
+   × stop kills the codex process tree before the report 5013ms
+   × stop kills the claude-code process tree before the report 5008ms
+   × stop kills the dsh process tree before the report 5008ms
+   × stop kills the opencode process tree before the report 5013ms
+   ✓ timeout settles exactly once 288ms
+   ✓ an offline terminal report is persisted before welcome and replayed from the hub cursor 596ms
+   × node shutdown interrupts a task and persists the terminal report 5002ms
+   ✓ silent hub triggers reconnect and rejection terminates without leaking the supplied reason 84ms
+   ✓ CLI run advertises detected shims, reports live status and drains on shutdown 763ms
+   ✓ dsh maps ACP updates, reports and stop reasons 1437ms
+   ✓ opencode maps ACP updates, reports and stop reasons 1361ms
+   ✓ ACP resume, load replay, follow-up and occupied sessions 1258ms
+   ✓ ACP permissions restricted / read 172ms
+   ✓ ACP permissions restricted / search 176ms
+   ✓ ACP permissions auto / read 169ms
+   ✓ ACP permissions auto / edit 205ms
+   ✓ ACP permissions auto / fetch 157ms
+   ✓ ACP permissions auto / move 172ms
+   ✓ ACP permissions auto / delete 174ms
+   ✓ ACP permissions auto / execute 170ms
+   ✓ ACP permissions full / execute 152ms
+   ✓ ACP permissions full / missing 156ms
+   ✓ sessions.list paginates, filters by real cwd and roots before sorting and limiting 456ms
+   ✓ a timed out sessions.list replies with an error and releases its process 1450ms
+   ✓ manages live node adapters through the socket and local CLI, redacts outputs and restores discovery on reconnect 2485ms
+   ✓ handshakes during slow discovery and aborts a running CLI on disconnect 113ms
+ ✓ test/platform.test.ts (8 tests) 1983ms
+   ✓ pair/status/roots through CLI, durable identity, mode and token secrecy 1310ms
+   ✓ falls back to a desktop app's bundled CLI and honours a configured path 398ms
+ ✓ test/sessions.test.ts (2 tests) 146ms
+ ✓ test/service.test.ts (2 tests) 5ms
+ ✓ test/acp.test.ts (1 test) 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/connection.test.ts > stop kills the codex process tree before the report
+ FAIL  test/connection.test.ts > stop kills the claude-code process tree before the report
+ FAIL  test/connection.test.ts > stop kills the dsh process tree before the report
+ FAIL  test/connection.test.ts > stop kills the opencode process tree before the report
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/connection.test.ts:131:64
+    129| });
+    130|
+    131| test.each(["codex", "claude-code", "dsh", "opencode"] as const)("stop …
+       |                                                                ^
+    132|   const f = await setup();
+    133|   f.start("long", "hold", harness);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  test/connection.test.ts > node shutdown interrupts a task and persists the terminal report
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/connection.test.ts:168:1
+    166| });
+    167|
+    168| test("node shutdown interrupts a task and persists the terminal report…
+       | ^
+    169|   const f = await setup();
+    170|   f.start("exit", "hold");
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  5 failed | 39 passed (44)
+   Start at  09:45:21
+   Duration  43.51s (tests 98%, import 2%, transform 1%)
+
+/study/before/packages/node:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @alter/node@0.0.0 test: `vitest run`
+Exit status 1
+[ELIFECYCLE] Test failed. See above for more details.

@@ -1,0 +1,43 @@
+Scope: 15 of 16 workspace projects
+packages/node-protocol test$ echo "no tests"
+packages/adapters test$ vitest run
+packages/web test$ vitest run
+packages/plugin-sdk test$ vitest run
+packages/node-protocol test: no tests
+packages/node-protocol test: Done
+packages/plugin-sdk test:  RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-sdk
+packages/adapters test:  RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/adapters
+packages/web test:  RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/web
+packages/web test:  ✓ test/stream-replay.test.ts (3 tests) 3ms
+packages/web test:  ✓ test/store.test.ts (9 tests) 8ms
+packages/plugin-sdk test:  ✓ test/poller.test.ts (8 tests) 30ms
+packages/plugin-sdk test:  Test Files  1 passed (1)
+packages/plugin-sdk test:       Tests  8 passed (8)
+packages/plugin-sdk test:    Start at  09:40:03
+packages/plugin-sdk test:    Duration  215ms (tests 52%, import 25%, transform 17%, worker 6%)
+packages/plugin-sdk test: Done
+packages/web test:  ✓ test/markdown.test.ts (7 tests) 5ms
+packages/web test:  ✓ test/ui.test.ts (6 tests) 11ms
+packages/web test:  Test Files  4 passed (4)
+packages/web test:       Tests  25 passed (25)
+packages/web test:    Start at  09:40:03
+packages/web test:    Duration  1.68s (import 95%, transform 3%, tests 2%, worker 1%)
+packages/web test: Done
+packages/adapters test:  ❯ test/engine.test.ts (3 tests | 1 failed) 2062ms
+packages/adapters test:    ✓ validates credential templates and keeps GitHub preset tokens separate from transport settings 3ms
+packages/adapters test:    ✓ shares discovery, effect overrides, atomic configuration and secret redaction 48ms
+packages/adapters test:    × withholds custom credential headers from a different origin advertised by an OpenAPI document 2009ms
+packages/adapters test: ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+packages/adapters test:  FAIL  test/engine.test.ts > withholds custom credential headers from a different origin advertised by an OpenAPI document
+packages/adapters test: TimeoutError: The operation was aborted due to timeout
+packages/adapters test: ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+packages/adapters test:  Test Files  1 failed (1)
+packages/adapters test:       Tests  1 failed | 2 passed (3)
+packages/adapters test:    Start at  09:40:03
+packages/adapters test:    Duration  2.44s (tests 91%, import 7%, transform 2%)
+packages/adapters test: Failed
+/private/tmp/refactor-1126/Alter/packages/adapters:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @alter/adapters@0.0.0 test: `vitest run`
+Exit status 1
+[ELIFECYCLE] Test failed. See above for more details.
+$ pnpm -r test

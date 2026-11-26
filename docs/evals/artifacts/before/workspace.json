@@ -1,0 +1,39 @@
+{
+  "revision": "9dcd6c17ad2087e2f8d6ee09d541ebfd6479c8d3",
+  "node": "v24.21.0",
+  "pnpm": "11.3.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "scheduling": "pnpm and Vitest workspace defaults",
+  "runs": [
+    {
+      "name": "tests",
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "exit": 1,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "command": [
+        "pnpm",
+        "typecheck"
+      ],
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "web-build",
+      "command": [
+        "pnpm",
+        "--filter",
+        "@alter/web",
+        "build"
+      ],
+      "exit": 0,
+      "signal": null
+    }
+  ]
+}

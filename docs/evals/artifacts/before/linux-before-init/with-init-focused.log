@@ -1,0 +1,10 @@
+
+ RUN  v5.1.1 /study/before/packages/node
+
+ ✓ test/connection.test.ts (31 tests | 26 skipped) 886ms
+
+ Test Files  1 passed (1)
+      Tests  5 passed | 26 skipped (31)
+   Start at  09:46:23
+   Duration  1.28s (tests 74%, import 22%, transform 4%)
+

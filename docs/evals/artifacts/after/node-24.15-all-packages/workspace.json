@@ -1,0 +1,41 @@
+{
+  "revision": "ced83c52a743f563422128a8f932aa29316a044b",
+  "node": "v24.15.0",
+  "pnpm": "11.3.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "packageConcurrency": 1,
+  "vitestWorkers": 1,
+  "bail": false,
+  "runs": [
+    {
+      "name": "tests",
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "typecheck",
+      "command": [
+        "pnpm",
+        "typecheck"
+      ],
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "web-build",
+      "command": [
+        "pnpm",
+        "--filter",
+        "@alter/web",
+        "build"
+      ],
+      "exit": 0,
+      "signal": null
+    }
+  ]
+}

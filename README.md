@@ -75,6 +75,8 @@ flowchart LR
 | [gateway](packages/gateway) / [node](packages/node) / [node-protocol](packages/node-protocol) / [adapters](packages/adapters) | 网关、本地执行节点、协议与工具适配器 |
 | [evals](packages/evals) | 端到端任务、权限、提示注入与分诊样本 |
 
+同一断网 Linux arm64 镜像中，全仓测试从基线的 555/555 通过，到本版的 561/561 通过，两版类型检查和 Web 构建也通过。macOS 默认并发下，两版均有一项本地适配器测试触及 2 秒期限。[运行环境与失败日志](docs/evals/refactor-1126-report.md)
+
 运行工作区测试用 `pnpm test`，运行类型检查用 `pnpm typecheck`。历史 `eval:e2e`、`eval:triage` 等命令需要相应模型或服务配置。离线演示单独使用 `pnpm demo`。
 
 ## 静态项目页

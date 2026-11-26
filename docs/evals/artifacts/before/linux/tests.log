@@ -1,0 +1,472 @@
+$ pnpm -r test
+Scope: 15 of 16 workspace projects
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/adapters
+
+ ✓ test/engine.test.ts (3 tests) 63ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  09:46:43
+   Duration  321ms (import 58%, tests 28%, transform 13%, worker 1%)
+
+$ echo "no tests"
+no tests
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-sdk
+
+ ✓ test/poller.test.ts (8 tests) 31ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:46:43
+   Duration  130ms (tests 59%, import 25%, transform 10%, worker 5%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/web
+
+ ✓ test/ui.test.ts (6 tests) 12ms
+ ✓ test/store.test.ts (9 tests) 5ms
+ ✓ test/markdown.test.ts (7 tests) 6ms
+
+ Test Files  3 passed (3)
+      Tests  22 passed (22)
+   Start at  09:46:44
+   Duration  1.59s (import 94%, transform 4%, tests 2%, worker 1%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/core
+
+ ✓ test/heartbeat.test.ts (25 tests) 7408ms
+   ✓ summarizes new digests including read items, goals, agenda and tasks, omitting a blank final answer live and on replay 320ms
+   ✓ runs an empty first inspection, then skips recently active and unfunded inspections without consuming new digest input 342ms
+   ✓ retains only the latest 50 interval decisions across a restart 2957ms
+   ✓ forks the user's conversation and supplies only the last three completed conclusions after restart 355ms
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Unknown pre-compaction memory source
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Incomplete main compaction response: length
+
+ ✓ test/prototype.test.ts (57 tests) 6464ms
+   ✓ recovers a parked call after SIGKILL with no graceful close 483ms
+   ✓ replays an interrupted mail_send from SQLite and finds the server copy before SMTP 682ms
+   ✓ summarizes a parked task, rejects live continuation, and delivers steering after approval across reopen 374ms
+   ✓ cancels a continued task during approval, removes the card, and stays cancelled after reopen 386ms
+ ✓ test/eval.test.ts (3 tests) 5582ms
+   ✓ leases once and renames the same calendar event across three user turns 3252ms
+   ✓ waits for the dispatched list and its final reply, and counts usage attempts by role 2259ms
+ ✓ test/approval.test.ts (17 tests) 3067ms
+   ✓ checks writes against the dispatch snapshot and brief, then asks for out-of-scope and irreversible calls 366ms
+   ✓ keeps a deferred approval across restart and allows rewritten arguments for ten minutes 396ms
+   ✓ resumes statement authorizations from SQLite without asking again for an in-scope call 304ms
+   ✓ ends a main capability grant with the lease that prompted it 325ms
+ ✓ test/gateway.test.ts (32 tests) 2449ms
+   ✓ falls back before output on no headers and records both attempts 329ms
+   ✓ falls back before output on role only and records both attempts 326ms
+   ✓ stops the deadline at first output, even for a slow completion 314ms
+ ✓ test/proactive.test.ts (11 tests) 1825ms
+   ✓ recovers the cursor and unprocessed evictions while an external call is in flight 433ms
+   ✓ retries an unnotified report with new arrivals and advances its cursor only on a delivered reply 301ms
+ ✓ test/scheduled-tasks.test.ts (8 tests) 1559ms
+ ✓ test/watch.test.ts (7 tests) 1444ms
+   ✓ creates through main, batches for 30s, sleeps, then finishes in the same conversation 336ms
+ ✓ test/feedback.test.ts (11 tests) 643ms
+ ✓ test/scheduler.test.ts (4 tests) 892ms
+   ✓ sleeps durably, fires once per occurrence, catches up once and resumes registered kinds 484ms
+ ✓ test/permissions.test.ts (2 tests) 594ms
+   ✓ runs the annotated permission calls and fails on missed protections or runner errors 591ms
+ ✓ test/memory-consolidation.test.ts (6 tests) 320ms
+ ✓ test/stats.test.ts (7 tests) 213ms
+ ✓ test/memory.test.ts (5 tests) 140ms
+ ✓ test/node-adapters.test.ts (1 test) 107ms
+ ✓ test/debug-traces.test.ts (2 tests) 52ms
+ ✓ test/tool-validation.test.ts (6 tests) 50ms
+ ✓ test/timeline.test.ts (6 tests) 5ms
+
+ Test Files  18 passed (18)
+      Tests  210 passed (210)
+   Start at  09:46:45
+   Duration  37.04s (tests 92%, import 7%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/node
+
+ ✓ test/connection.test.ts (31 tests) 15007ms
+   ✓ Codex bridges approval, replays the pending request with its original seq, queues the next turn and resumes 423ms
+   ✓ codex drives native stdio, denial, finish MCP, and a crash 1193ms
+   ✓ claude-code drives native stdio, denial, finish MCP, and a crash 875ms
+   ✓ an offline terminal report is persisted before welcome and replayed from the hub cursor 574ms
+   ✓ CLI run advertises detected shims, reports live status and drains on shutdown 645ms
+   ✓ dsh maps ACP updates, reports and stop reasons 1291ms
+   ✓ opencode maps ACP updates, reports and stop reasons 1262ms
+   ✓ ACP resume, load replay, follow-up and occupied sessions 1164ms
+   ✓ sessions.list paginates, filters by real cwd and roots before sorting and limiting 417ms
+   ✓ a timed out sessions.list replies with an error and releases its process 1434ms
+   ✓ manages live node adapters through the socket and local CLI, redacts outputs and restores discovery on reconnect 2412ms
+ ✓ test/platform.test.ts (8 tests) 1992ms
+   ✓ pair/status/roots through CLI, durable identity, mode and token secrecy 1346ms
+   ✓ falls back to a desktop app's bundled CLI and honours a configured path 382ms
+ ✓ test/sessions.test.ts (2 tests) 149ms
+ ✓ test/service.test.ts (2 tests) 6ms
+ ✓ test/acp.test.ts (1 test) 3ms
+
+ Test Files  5 passed (5)
+      Tests  44 passed (44)
+   Start at  09:47:23
+   Duration  18.29s (tests 96%, import 4%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-browser
+
+(node:1369) ExperimentalWarning: vm.USE_MAIN_CONTEXT_DEFAULT_LOADER is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ test/browser.test.ts (20 tests) 122ms
+ ✓ test/runner.test.ts (6 tests) 197ms
+
+ Test Files  2 passed (2)
+      Tests  26 passed (26)
+   Start at  09:47:41
+   Duration  1.21s (transform 50%, tests 31%, import 19%, worker 1%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-calendar
+
+ ✓ test/calendar.test.ts (11 tests) 257ms
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  09:47:43
+   Duration  1.10s (transform 53%, tests 25%, import 22%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-feishu
+
+ ✓ test/connector.test.ts (18 tests) 383ms
+stdout | test/surface.test.ts > locks five wrong attempts until rotation, rejects an expired code and persists the owner privately
+Alter Feishu 配对码 231118（10 分钟有效）
+
+stdout | test/surface.test.ts > locks five wrong attempts until rotation, rejects an expired code and persists the owner privately
+Alter Feishu 配对码 861776（10 分钟有效）
+
+stdout | test/surface.test.ts > keeps strangers and groups in external events and deduplicates concurrent and restarted deliveries
+Alter Feishu 配对码 121117（10 分钟有效）
+
+stdout | test/surface.test.ts > routes completed replies by placed input even with a queued follow-up (web first=true)
+Alter Feishu 配对码 027100（10 分钟有效）
+
+stdout | test/surface.test.ts > routes completed replies by placed input even with a queued follow-up (web first=false)
+Alter Feishu 配对码 142095（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via once
+Alter Feishu 配对码 327755（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via capability
+Alter Feishu 配对码 613851（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via always
+Alter Feishu 配对码 881713（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via deny
+Alter Feishu 配对码 098165（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via web
+Alter Feishu 配对码 024140（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via cancel
+Alter Feishu 配对码 966866（10 分钟有效）
+
+stdout | test/surface.test.ts > keeps the most recent 500 message receipts across restart
+Alter Feishu 配对码 368505（10 分钟有效）
+
+stdout | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu 配对码 458747（10 分钟有效）
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card update failed for permission-82: simulated update failure
+
+stdout | test/surface.test.ts > delivers only unread now notifications to the paired owner and remembers IDs across restarts
+Alter Feishu 配对码 455260（10 分钟有效）
+
+stdout | test/surface.test.ts > pushes only the main session's final reply for an urgent external event
+Alter Feishu 配对码 749364（10 分钟有效）
+
+stdout | test/surface.test.ts > sends one Feishu reply when the user's turn incorporates a fast task report
+Alter Feishu 配对码 459883（10 分钟有效）
+
+stdout | test/surface.test.ts > delivers a standalone task result and quiet-hour replies, and keeps the initiating web turn local
+Alter Feishu 配对码 140548（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (before)
+Alter Feishu 配对码 712974（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (after)
+Alter Feishu 配对码 689947（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (normal)
+Alter Feishu 配对码 581907（10 分钟有效）
+
+stdout | test/surface.test.ts > updates an already queued report when its dispatching turn chooses silence
+Alter Feishu 配对码 675385（10 分钟有效）
+
+stdout | test/surface.test.ts > forwards an actionable heartbeat reply after a Feishu turn and records its gateway usage once
+Alter Feishu 配对码 654270（10 分钟有效）
+
+stdout | test/surface.test.ts > accepts existing owner feedback forms and syncs Web skips while issuance is paused
+Alter Feishu 配对码 399732（10 分钟有效）
+
+stdout | test/surface.test.ts > closes a feedback card whose question left the bank with a schema 2.0 update
+Alter Feishu 配对码 322255（10 分钟有效）
+
+ ✓ test/surface.test.ts (25 tests) 4693ms
+   ✓ locks five wrong attempts until rotation, rejects an expired code and persists the owner privately 410ms
+   ✓ restores the pending card and resolves it once via once 381ms
+   ✓ restores the pending card and resolves it once via capability 310ms
+   ✓ restores the pending card and resolves it once via deny 300ms
+ ✓ test/settings.test.ts (1 test) 41ms
+
+ Test Files  3 passed (3)
+      Tests  44 passed (44)
+   Start at  09:47:44
+   Duration  7.08s (tests 75%, import 14%, transform 11%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-mail
+
+ ✓ test/mail.test.ts (18 tests) 1198ms
+   ✓ coalesces EXISTS, catches up by UID after reconnect, and stops during backoff 1067ms
+ ✓ test/tools.test.ts (16 tests) 136ms
+ ✓ test/settings.test.ts (1 test) 6ms
+
+ Test Files  3 passed (3)
+      Tests  35 passed (35)
+   Start at  09:47:51
+   Duration  2.95s (tests 49%, import 31%, transform 19%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-runtime
+
+ ✓ test/runtime.test.ts (18 tests) 105ms
+ ✓ test/user-process.test.ts (6 tests) 1859ms
+   ✓ rejects all outstanding calls on timeout or crash, and starts a fresh process on demand 901ms
+   ✓ reaps a worker even if the close hook blocks its event loop 531ms
+ ✓ test/http.test.ts (9 tests) 95ms
+ ✓ test/packages.test.ts (4 tests) 931ms
+   ✓ installs locked dependencies before approval and runs the approved snapshot with the installed modules 489ms
+   ✓ rejects missing or inconsistent locks without replacing a valid pending proposal 435ms
+ ✓ test/examples.test.ts (5 tests) 468ms
+   ✓ terminates a stalled worker on timeout and measures RSS while the plugin event loop is blocked 316ms
+stdout | test/benchmark.test.ts > measures 20 cold versus 1 cold + 19 warm calls, and a tool during a blocked source
+Runtime benchmark (ms) {"cold":{"total":485.543042,"first":25.860208,"p50":24.165249999999986,"mean":24.276197950000004},"persistent":{"total":31.972500000000082,"first":22.503832999999986,"p50":0.48508300000003146,"mean":1.597864600000014},"concurrentToolMs":0.5017910000000256}
+
+ ✓ test/benchmark.test.ts (1 test) 623ms
+   ✓ measures 20 cold versus 1 cold + 19 warm calls, and a tool during a blocked source 622ms
+
+ Test Files  6 passed (6)
+      Tests  43 passed (43)
+   Start at  09:47:54
+   Duration  4.93s (tests 91%, import 5%, transform 3%)
+
+    Isolate  6 workers spawned · ~68ms startup each (spawn + environment, per file)
+             at least ~338ms faster with isolate: false — reuses workers across files instead of one per file
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/plugin-sources
+
+ ✓ test/sources.test.ts (8 tests) 748ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:48:00
+   Duration  1.47s (tests 54%, transform 32%, import 14%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/evals
+
+stdout | test/injection.test.ts > skips cases whose channels are missing and writes the report
+web-exfil-hidden 1/1 skip · ALTER_BROWSER=off
+
+stdout | test/injection.test.ts > skips cases whose channels are missing and writes the report
+mail-send-system 1/1 skip · 缺少邮箱配置
+
+stdout | test/injection.test.ts > skips cases whose channels are missing and writes the report
+报告已写入 /tmp/alter-injection-report-QXaqgX
+
+ ✓ test/injection.test.ts (11 tests) 8641ms
+   ✓ denies calendar-tamper and preserves the private event 1250ms
+   ✓ deletes a local event and opens a URL within the user’s stated scope 1232ms
+   ✓ opens the invitation URL and follows links without approval, including suffix ?extra=1 1231ms
+   ✓ opens the invitation URL and follows links without approval, including suffix /extra 1242ms
+   ✓ scores a denied mail_send as blocked and sends nothing 1308ms
+   ✓ scores a plain summary as not attempted 1135ms
+   ✓ keeps a denied mail_send out of the captured transport 1232ms
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+mail-read 1/2 skip · 缺少 ALTER_MAIL_ADDRESS 或 ALTER_MAIL_AUTH_CODE
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-calendar 1/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-read 1/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+mail-read 2/2 skip · 缺少 ALTER_MAIL_ADDRESS 或 ALTER_MAIL_AUTH_CODE
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-calendar 2/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-read 2/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+报告已写入 /tmp/alter-e2e-report-MzEplu
+
+ ✓ test/e2e.test.ts (9 tests) 9858ms
+   ✓ checks actual calendar state, removes each database, and excludes incorrect runs from cost medians 2501ms
+   ✓ answers a parked user request once and waits for the child report (allow=false) 1236ms
+   ✓ answers a parked user request once and waits for the child report (allow=true) 1229ms
+   ✓ requires a soft-deleted original and an intact sibling for the deletion oracle 1220ms
+   ✓ rejects a mail-reply result if a sibling task has a receipt despite a denied send 1331ms
+   ✓ cannot pass a reschedule by creating the final event only on the second turn 2259ms
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-call 1/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+interview-link 1/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-paper 1/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-sale 1/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-code 1/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-reading 1/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-call 2/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+interview-link 2/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-paper 2/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-sale 2/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-code 2/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-reading 2/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+报告已写入 /tmp/alter-triage-4nlcNe
+
+stdout | test/triage.test.ts > distinguishes legal production fallbacks from valid model output
+advisor-paper 1/1 fail · 测试
+
+stdout | test/triage.test.ts > distinguishes legal production fallbacks from valid model output
+报告已写入 /tmp/alter-triage-invalid-anovYr
+
+ ✓ test/triage.test.ts (2 tests) 139ms
+ ✓ test/judge-context.test.ts (1 test) 3ms
+
+ Test Files  4 passed (4)
+      Tests  23 passed (23)
+   Start at  09:48:01
+   Duration  20.69s (tests 91%, import 5%, transform 3%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/server
+
+stderr | test/web.test.ts > authenticates start and disconnect, accepting only a live single-use state on the cookie-free callback
+Feishu OAuth callback failed: Error  
+
+ ✓ test/web.test.ts (26 tests) 5416ms
+   ✓ delivers live cumulative text, replays it on reconnect, and queues messages with stable echo IDs 787ms
+   ✓ stops only the active turn and continues an already queued input 322ms
+   ✓ authenticates memory routes and streams full lists for tool writes, expiry and web edits 473ms
+   ✓ publishes heartbeat starts, finishes and schedule changes and serves direct run feedback 331ms
+   ✓ creates a schedule from main, lists, pauses and deletes it over HTTP and replaces the SSE list 301ms
+   ✓ shares an always grant across models and restarts, then asks again after API revocation 354ms
+ ✓ test/adapters.test.ts (9 tests) 3976ms
+   ✓ discovers paginated MCP tools, reconnects and reconciles authenticated CRUD and secrets 1993ms
+   ✓ collects CLI help, preserves argv and stdin, bounds output, reports exit codes and enforces timeouts 337ms
+   ✓ reports gh login failure and obtains fresh credentials on reconnect and refresh 1108ms
+ ✓ test/nodes.test.ts (12 tests) 2651ms
+   ✓ authenticates the instance token separately from browser login, binds the device and revokes live connections 336ms
+   ✓ steers and interrupts a live task, resumes its native session, and wakes main for each report source 341ms
+   ✓ uses the existing approval model, four decisions, once window and durable replies after reconnect 394ms
+   ✓ cancels a queued task and delivers offline steering only to the surviving task 321ms
+ ✓ test/plugin-settings.test.ts (5 tests) 1393ms
+   ✓ serves all installed plugins with partial credentials and changes the live calendar registration 393ms
+   ✓ keeps an active mail watch polling with the saved settings after reload 358ms
+   ✓ keeps an active feishu watch polling with the saved settings after reload 353ms
+ ✓ test/service.test.ts (11 tests) 653ms
+ ✓ test/custom-plugin.test.ts (1 test) 685ms
+   ✓ hosts a new messaging and agenda plugin across authenticated HTTP, SSE, SQLite and live replacement 684ms
+ ✓ test/sources.test.ts (2 tests) 542ms
+   ✓ serves template previews, baselines on create, and routes only fresh messages through triage after plugin reload 411ms
+ ✓ test/ext-plugins.test.ts (3 tests) 625ms
+   ✓ approves the proposed bytes only via authenticated plugin management and preserves the generic plugin list 355ms
+ ✓ test/node-adapters.test.ts (1 test) 776ms
+   ✓ leases node tools through the Broker, parks writes until granted, and withdraws tools and pending RPCs on disconnect 775ms
+ ✓ test/debug.test.ts (1 test) 288ms
+ ✓ test/secrets.test.ts (1 test) 7ms
+
+ Test Files  11 passed (11)
+      Tests  72 passed (72)
+   Start at  09:48:22
+   Duration  23.63s (tests 75%, import 21%, transform 5%)
+
+$ vitest run
+
+ RUN  v5.1.1 /study/before/packages/gateway
+
+stderr | test/gateway.test.ts > HTTP, incremental SSE, session and node WebSocket proxying and child recovery
+Instance exited, retrying 2CrrvSbuzGM7 1 100
+
+Alter web listening on { address: '127.0.0.1', family: 'IPv4', port: 27285 }
+Alter web listening on { address: '127.0.0.1', family: 'IPv4', port: 27286 }
+Alter web listening on { address: '127.0.0.1', family: 'IPv4', port: 27285 }
+ ✓ test/gateway.test.ts (3 tests) 4695ms
+   ✓ admin authorization, registration, revocation, login throttle and static login page 1089ms
+   ✓ HTTP, incremental SSE, session and node WebSocket proxying and child recovery 626ms
+   ✓ production gateway starts a real restricted server, reopens accounts and retains the shared secret 2979ms
+ ✓ test/accounts.test.ts (3 tests) 352ms
+
+ Test Files  2 passed (2)
+      Tests  6 passed (6)
+   Start at  09:48:46
+   Duration  5.36s (tests 97%, transform 2%, import 1%)
+

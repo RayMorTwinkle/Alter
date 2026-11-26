@@ -1,0 +1,168 @@
+Scope: 15 of 16 workspace projects
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/adapters
+
+ ✓ test/engine.test.ts (3 tests) 78ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  09:38:08
+   Duration  350ms (import 60%, tests 31%, transform 7%, worker 1%)
+
+no tests
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-sdk
+
+ ✓ test/poller.test.ts (8 tests) 27ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:38:09
+   Duration  142ms (tests 57%, import 24%, transform 13%, worker 6%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/web
+
+ ✓ test/ui.test.ts (6 tests) 11ms
+ ✓ test/store.test.ts (9 tests) 5ms
+ ✓ test/markdown.test.ts (7 tests) 5ms
+ ✓ test/stream-replay.test.ts (3 tests) 3ms
+
+ Test Files  4 passed (4)
+      Tests  25 passed (25)
+   Start at  09:38:09
+   Duration  1.76s (import 96%, transform 2%, tests 2%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/core
+
+ ✓ test/heartbeat.test.ts (25 tests) 5711ms
+   ✓ retains only the latest 50 interval decisions across a restart 2781ms
+   ✓ forks the user's conversation and supplies only the last three completed conclusions after restart 314ms
+ ✓ test/prototype.test.ts (57 tests) 5220ms
+   ✓ recovers a parked call after SIGKILL with no graceful close 397ms
+   ✓ replays an interrupted mail_send from SQLite and finds the server copy before SMTP 556ms
+ ✓ test/eval.test.ts (3 tests) 5390ms
+   ✓ leases once and renames the same calendar event across three user turns 3136ms
+   ✓ waits for the dispatched list and its final reply, and counts usage attempts by role 2177ms
+ ✓ test/watch.test.ts (7 tests) 1148ms
+ ❯ test/feedback.test.ts (11 tests | 2 failed) 20873ms
+   ✓ rejects missing or unusable effects and reduces the rank of frequently skipped questions 35ms
+   ✓ applies scoped rule-derived parameters, report frequency and preference memory, and records metric denominators 21ms
+   ✓ sends due checkins only after recent activity and doubles the interval after two fully skipped visits 13ms
+   ✓ uses only unanswered proactive output, applies the heartbeat bias and compares measured adoption before and after 10ms
+   ✓ defers an active main turn and withholds a weekly batch with fewer than three eligible questions 22ms
+   ✓ recovers a committed memory write after restart and reconciles undo from the memory API 93ms
+   ✓ requires both a real release and recent use, shows the display name, and caps feature and fixed metric questions per batch 9ms
+   × reviews a batch once and validates option mappings (valid=true) 10079ms
+   × reviews a batch once and validates option mappings (valid=false) 10495ms
+   ✓ expires a pending preference when memory supplies the answer 61ms
+   ✓ retires legacy ID-only feature questions and excess pending metrics on startup without losing history 34ms
+ ✓ test/scheduler.test.ts (4 tests) 744ms
+   ✓ sleeps durably, fires once per occurrence, catches up once and resumes registered kinds 399ms
+ ✓ test/approval.test.ts (17 tests) 2242ms
+ ❯ test/gateway.test.ts (32 tests | 1 failed) 5212ms
+   × falls back before output on 500 and records both attempts 3370ms
+   ✓ falls back before output on 503 and records both attempts 15ms
+   ✓ falls back before output on 429 and records both attempts 9ms
+   ✓ falls back before output on 401 and records both attempts 7ms
+   ✓ falls back before output on 403 and records both attempts 14ms
+   ✓ falls back before output on reset and records both attempts 7ms
+   ✓ falls back before output on no headers and records both attempts 307ms
+   ✓ falls back before output on role only and records both attempts 307ms
+   ✓ preserves partial text output without switching on disconnect 30ms
+   ✓ preserves partial thinking output without switching on disconnect 32ms
+   ✓ preserves partial tool output without switching on disconnect 30ms
+   ✓ stops the deadline at first output, even for a slow completion 306ms
+   ✓ exhausts the chain once in order and aggregates failures and incoming fallbacks 54ms
+   ✓ distinguishes a configured same-model retry from switching models 11ms
+   ✓ surfaces a bad request without fallback 4ms
+   ✓ propagates caller cancellation without fallback 57ms
+   ✓ routes a fresh child separately and delivers approvals and reports to the idle REPL 125ms
+   ✓ routes a fork child separately and delivers approvals and reports to the idle REPL 145ms
+   ✓ prints a queued report once when the in-flight answer already relays it=false 73ms
+   ✓ prints a queued report once when the in-flight answer already relays it=true 73ms
+   ✓ summarizes nearest-rank latency and failure rate over all attempts for a model 2ms
+   ✓ counts user aborts separately from provider failures 1ms
+   ✓ records and sends the effective task reasoning effort (undefined) 32ms
+   ✓ records and sends the effective task reasoning effort (medium) 30ms
+   ✓ records and sends the effective task reasoning effort (max) 31ms
+   ✓ rejects an unknown thinking level 1ms
+   ✓ reads the configurable approval timeout in minutes 0ms
+   ✓ uses Shanghai as the default time zone and reads ALTER_TZ 0ms
+   ✓ accounts for a single tool-free task-model attempt per event, including gateway errors 62ms
+   ✓ keeps goals available to heartbeat without launching a daily research worker 61ms
+   ✓ resolves exact, aliased and cross-provider catalog entries before defaults 0ms
+   ✓ merges chain limits, persists overrides and sends each fallback's own reasoning format and output budget 14ms
+ ✓ test/scheduled-tasks.test.ts (8 tests) 1248ms
+ ✓ test/proactive.test.ts (11 tests) 1309ms
+   ✓ recovers the cursor and unprocessed evictions while an external call is in flight 315ms
+ ✓ test/memory-consolidation.test.ts (6 tests) 214ms
+ ✓ test/permissions.test.ts (2 tests) 450ms
+   ✓ runs the annotated permission calls and fails on missed protections or runner errors 447ms
+ ✓ test/stats.test.ts (7 tests) 167ms
+ ✓ test/memory.test.ts (5 tests) 55ms
+ ✓ test/debug-traces.test.ts (2 tests) 21ms
+ ✓ test/node-adapters.test.ts (1 test) 105ms
+ ✓ test/tool-validation.test.ts (6 tests) 48ms
+ ✓ test/calendar-weekday.test.ts (3 tests) 18ms
+ ✓ test/timeline.test.ts (6 tests) 5ms
+
+ Test Files  2 failed | 17 passed (19)
+      Tests  3 failed | 210 passed (213)
+   Start at  09:38:11
+   Duration  54.59s (tests 95%, import 5%)
+
+/private/tmp/refactor-1126/Alter/packages/core:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @alter/core@0.0.0 test: `vitest run`
+Exit status 1
+[ELIFECYCLE] Test failed. See above for more details.
+$ pnpm -r test
+$ vitest run
+$ echo "no tests"
+$ vitest run
+$ vitest run
+$ vitest run
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Unknown pre-compaction memory source
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Incomplete main compaction response: length
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/feedback.test.ts > reviews a batch once and validates option mappings (valid=true)
+ FAIL  test/feedback.test.ts > reviews a batch once and validates option mappings (valid=false)
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/feedback.test.ts:221:23
+    219| });
+    220|
+    221| it.each([true, false])("reviews a batch once and validates option mapp…
+       |                       ^
+    222|   const dir = await mkdtemp(join(tmpdir(), "alter-feedback-quality-"));
+    223|   clean.push(() => rm(dir, { force: true, recursive: true }));
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  test/gateway.test.ts > falls back before output on 500 and records both attempts
+AssertionError: expected [ { model: 'backup/main', …(3) } ] to have a length of 2 but got 1
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ test/gateway.test.ts:63:24
+     61|   expect(await stream.result()).toMatchObject({ model: backup, content…
+     62|   const [a, b] = app.requests;
+     63|   expect(app.requests).toHaveLength(2);
+       |                        ^
+     64|   expect(a).toMatchObject({ stream: true, model: primary });
+     65|   expect(b).toEqual({ ...a, model: backup });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+$ vitest run

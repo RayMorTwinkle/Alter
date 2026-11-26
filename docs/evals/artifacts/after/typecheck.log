@@ -1,0 +1,32 @@
+Scope: 15 of 16 workspace projects
+packages/adapters typecheck$ tsc --noEmit
+packages/plugin-sdk typecheck$ tsc --noEmit
+packages/node-protocol typecheck$ tsc --noEmit
+packages/web typecheck$ tsc --noEmit
+packages/plugin-sdk typecheck: Done
+packages/node-protocol typecheck: Done
+packages/adapters typecheck: Done
+packages/web typecheck: Done
+packages/node typecheck$ tsc --noEmit
+packages/core typecheck$ tsc --noEmit
+packages/node typecheck: Done
+packages/core typecheck: Done
+packages/plugin-browser typecheck$ tsc --noEmit
+packages/plugin-calendar typecheck$ tsc --noEmit
+packages/plugin-mail typecheck$ tsc --noEmit
+packages/plugin-feishu typecheck$ tsc --noEmit
+packages/plugin-calendar typecheck: Done
+packages/plugin-runtime typecheck$ tsc --noEmit
+packages/plugin-mail typecheck: Done
+packages/plugin-sources typecheck$ tsc --noEmit
+packages/plugin-browser typecheck: Done
+packages/plugin-feishu typecheck: Done
+packages/plugin-runtime typecheck: Done
+packages/plugin-sources typecheck: Done
+packages/evals typecheck$ tsc --noEmit
+packages/server typecheck$ tsc --noEmit
+packages/evals typecheck: Done
+packages/server typecheck: Done
+packages/gateway typecheck$ tsc --noEmit
+packages/gateway typecheck: Done
+$ pnpm -r typecheck

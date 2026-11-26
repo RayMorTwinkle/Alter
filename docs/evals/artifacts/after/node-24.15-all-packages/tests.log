@@ -1,0 +1,596 @@
+Scope: 15 of 16 workspace projects
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/adapters
+
+ ✓ test/engine.test.ts (3 tests) 72ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  09:33:13
+   Duration  365ms (import 64%, tests 27%, transform 7%, worker 1%)
+
+no tests
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-sdk
+
+ ✓ test/poller.test.ts (8 tests) 26ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:33:14
+   Duration  135ms (tests 59%, import 23%, transform 11%, worker 7%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/web
+
+ ✓ test/ui.test.ts (6 tests) 12ms
+ ✓ test/store.test.ts (9 tests) 5ms
+ ✓ test/markdown.test.ts (7 tests) 5ms
+ ✓ test/stream-replay.test.ts (3 tests) 3ms
+
+ Test Files  4 passed (4)
+      Tests  25 passed (25)
+   Start at  09:33:14
+   Duration  1.68s (import 96%, tests 2%, transform 2%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/core
+
+ ✓ test/heartbeat.test.ts (25 tests) 5727ms
+   ✓ retains only the latest 50 interval decisions across a restart 2775ms
+   ✓ forks the user's conversation and supplies only the last three completed conclusions after restart 314ms
+ ✓ test/prototype.test.ts (57 tests) 5506ms
+   ✓ recovers a parked call after SIGKILL with no graceful close 457ms
+   ✓ replays an interrupted mail_send from SQLite and finds the server copy before SMTP 556ms
+ ✓ test/eval.test.ts (3 tests) 5376ms
+   ✓ leases once and renames the same calendar event across three user turns 3147ms
+   ✓ waits for the dispatched list and its final reply, and counts usage attempts by role 2170ms
+ ✓ test/approval.test.ts (17 tests) 2238ms
+ ✓ test/gateway.test.ts (32 tests) 2137ms
+   ✓ falls back before output on no headers and records both attempts 308ms
+   ✓ falls back before output on role only and records both attempts 310ms
+   ✓ stops the deadline at first output, even for a slow completion 305ms
+ ✓ test/proactive.test.ts (11 tests) 1299ms
+   ✓ recovers the cursor and unprocessed evictions while an external call is in flight 302ms
+ ✓ test/scheduled-tasks.test.ts (8 tests) 1377ms
+ ✓ test/watch.test.ts (7 tests) 4008ms
+   ✓ creates through main, batches for 30s, sleeps, then finishes in the same conversation 630ms
+   ✓ keeps polling during a parked send and task_stop withdraws the approval 820ms
+   ✓ resumes the original batch deadline and deduplicates a realtime ref seen again by polling 2070ms
+ ✓ test/scheduler.test.ts (4 tests) 2313ms
+   ✓ sleeps durably, fires once per occurrence, catches up once and resumes registered kinds 1522ms
+   ✓ rolls back a failed handler and keeps the latest 500 notifications on retry 619ms
+ ✓ test/feedback.test.ts (11 tests) 3033ms
+   ✓ recovers a committed memory write after restart and reconciles undo from the memory API 1092ms
+   ✓ reviews a batch once and validates option mappings (valid=true) 693ms
+   ✓ reviews a batch once and validates option mappings (valid=false) 410ms
+   ✓ retires legacy ID-only feature questions and excess pending metrics on startup without losing history 614ms
+ ✓ test/stats.test.ts (7 tests) 600ms
+ ✓ test/permissions.test.ts (2 tests) 708ms
+   ✓ runs the annotated permission calls and fails on missed protections or runner errors 705ms
+ ✓ test/memory-consolidation.test.ts (6 tests) 873ms
+   ✓ recovers a committed batch without replaying it or consuming later turns 312ms
+   ✓ restores marked custom channels and legacy Feishu inputs from SQLite without loading their plugins 354ms
+ ✓ test/node-adapters.test.ts (1 test) 106ms
+ ✓ test/memory.test.ts (5 tests) 381ms
+ ✓ test/tool-validation.test.ts (6 tests) 48ms
+ ✓ test/debug-traces.test.ts (2 tests) 171ms
+ ✓ test/calendar-weekday.test.ts (3 tests) 17ms
+ ✓ test/timeline.test.ts (6 tests) 5ms
+
+ Test Files  19 passed (19)
+      Tests  213 passed (213)
+   Start at  09:33:16
+   Duration  41.16s (tests 91%, import 8%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/node
+
+ ✓ test/connection.test.ts (31 tests) 29252ms
+   ✓ Codex bridges approval, replays the pending request with its original seq, queues the next turn and resumes 1004ms
+   ✓ codex drives native stdio, denial, finish MCP, and a crash 1616ms
+   ✓ claude-code drives native stdio, denial, finish MCP, and a crash 1270ms
+   ✓ Claude uses streaming input for a follow-up and checks error flags on success results 689ms
+   ✓ stop kills the codex process tree before the report 441ms
+   ✓ stop kills the claude-code process tree before the report 343ms
+   ✓ stop kills the dsh process tree before the report 370ms
+   ✓ stop kills the opencode process tree before the report 357ms
+   ✓ timeout settles exactly once 308ms
+   ✓ an offline terminal report is persisted before welcome and replayed from the hub cursor 758ms
+   ✓ node shutdown interrupts a task and persists the terminal report 346ms
+   ✓ CLI run advertises detected shims, reports live status and drains on shutdown 1355ms
+   ✓ dsh maps ACP updates, reports and stop reasons 1832ms
+   ✓ opencode maps ACP updates, reports and stop reasons 1639ms
+   ✓ ACP resume, load replay, follow-up and occupied sessions 1669ms
+   ✓ ACP permissions restricted / read 1340ms
+   ✓ ACP permissions restricted / search 1436ms
+   ✓ ACP permissions auto / read 1171ms
+   ✓ ACP permissions auto / edit 455ms
+   ✓ ACP permissions auto / fetch 614ms
+   ✓ ACP permissions auto / move 1843ms
+   ✓ ACP permissions auto / delete 785ms
+   ✓ ACP permissions auto / execute 518ms
+   ✓ ACP permissions full / execute 517ms
+   ✓ ACP permissions full / missing 967ms
+   ✓ sessions.list paginates, filters by real cwd and roots before sorting and limiting 1368ms
+   ✓ a timed out sessions.list replies with an error and releases its process 1458ms
+   ✓ manages live node adapters through the socket and local CLI, redacts outputs and restores discovery on reconnect 2267ms
+ ❯ test/platform.test.ts (8 tests | 1 failed) 11863ms
+   ✓ pair/status/roots through CLI, durable identity, mode and token secrecy 1374ms
+   ✓ platform directories, drive boundaries, device prefix and UNC case 1ms
+   ✓ realpath rejects symlinks and junctions that escape the root 3ms
+   ✓ probes only the supplied executables, including .cmd shims on Windows 3894ms
+   × falls back to a desktop app's bundled CLI and honours a configured path 5005ms
+   ✓ desktop candidates point at the bundled DeepSeek Harness CLI 0ms
+   ✓ the harness wrapper preserves argument boundaries and Unicode 1552ms
+   ✓ journal survives a torn tail, reports an interrupted host once and preserves the terminal ack 33ms
+ ✓ test/sessions.test.ts (2 tests) 1748ms
+   ✓ dsh v3 history uses the first human text and sorts by artifact mtime even if decoding fails 1731ms
+ ✓ test/service.test.ts (2 tests) 6ms
+ ✓ test/acp.test.ts (1 test) 2ms
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  1 failed | 43 passed (44)
+   Start at  09:33:57
+   Duration  44.21s (tests 98%, import 2%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-browser
+
+ ✓ test/browser.test.ts (20 tests) 136ms
+ ✓ test/runner.test.ts (6 tests) 180ms
+
+ Test Files  2 passed (2)
+      Tests  26 passed (26)
+   Start at  09:34:42
+   Duration  1.20s (transform 43%, tests 32%, import 25%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-calendar
+
+ ✓ test/calendar.test.ts (11 tests) 66ms
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  09:34:43
+   Duration  825ms (transform 60%, import 29%, tests 10%, worker 1%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-feishu
+
+ ✓ test/connector.test.ts (18 tests) 612ms
+   ✓ uses the configured domain and callback, exchanges with PKCE, and rejects expired, failed and replayed states 304ms
+stdout | test/surface.test.ts > locks five wrong attempts until rotation, rejects an expired code and persists the owner privately
+Alter Feishu 配对码 348736（10 分钟有效）
+
+stdout | test/surface.test.ts > locks five wrong attempts until rotation, rejects an expired code and persists the owner privately
+Alter Feishu 配对码 131977（10 分钟有效）
+
+stdout | test/surface.test.ts > keeps strangers and groups in external events and deduplicates concurrent and restarted deliveries
+Alter Feishu 配对码 068904（10 分钟有效）
+
+stdout | test/surface.test.ts > routes completed replies by placed input even with a queued follow-up (web first=true)
+Alter Feishu 配对码 592663（10 分钟有效）
+
+stdout | test/surface.test.ts > routes completed replies by placed input even with a queued follow-up (web first=false)
+Alter Feishu 配对码 919169（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via once
+Alter Feishu 配对码 814349（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via capability
+Alter Feishu 配对码 942965（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via always
+Alter Feishu 配对码 701313（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via deny
+Alter Feishu 配对码 287761（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via web
+Alter Feishu 配对码 184892（10 分钟有效）
+
+stdout | test/surface.test.ts > restores the pending card and resolves it once via cancel
+Alter Feishu 配对码 326838（10 分钟有效）
+
+stdout | test/surface.test.ts > keeps the most recent 500 message receipts across restart
+Alter Feishu 配对码 718593（10 分钟有效）
+
+stdout | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu 配对码 640132（10 分钟有效）
+
+stdout | test/surface.test.ts > delivers only unread now notifications to the paired owner and remembers IDs across restarts
+Alter Feishu 配对码 590718（10 分钟有效）
+
+stdout | test/surface.test.ts > pushes only the main session's final reply for an urgent external event
+Alter Feishu 配对码 581440（10 分钟有效）
+
+stdout | test/surface.test.ts > sends one Feishu reply when the user's turn incorporates a fast task report
+Alter Feishu 配对码 098648（10 分钟有效）
+
+stdout | test/surface.test.ts > delivers a standalone task result and quiet-hour replies, and keeps the initiating web turn local
+Alter Feishu 配对码 589953（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (before)
+Alter Feishu 配对码 973258（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (after)
+Alter Feishu 配对码 864737（10 分钟有效）
+
+stdout | test/surface.test.ts > applies the originating turn’s silence to a standalone task report (normal)
+Alter Feishu 配对码 162104（10 分钟有效）
+
+stdout | test/surface.test.ts > updates an already queued report when its dispatching turn chooses silence
+Alter Feishu 配对码 998729（10 分钟有效）
+
+stdout | test/surface.test.ts > forwards an actionable heartbeat reply after a Feishu turn and records its gateway usage once
+Alter Feishu 配对码 619284（10 分钟有效）
+
+stdout | test/surface.test.ts > accepts existing owner feedback forms and syncs Web skips while issuance is paused
+Alter Feishu 配对码 861945（10 分钟有效）
+
+stdout | test/surface.test.ts > closes a feedback card whose question left the bank with a schema 2.0 update
+Alter Feishu 配对码 099127（10 分钟有效）
+
+ ✓ test/surface.test.ts (25 tests) 3667ms
+ ✓ test/settings.test.ts (1 test) 40ms
+
+ Test Files  3 passed (3)
+      Tests  44 passed (44)
+   Start at  09:34:44
+   Duration  6.26s (tests 73%, import 17%, transform 10%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-mail
+
+ ✓ test/mail.test.ts (18 tests) 1197ms
+   ✓ coalesces EXISTS, catches up by UID after reconnect, and stops during backoff 1079ms
+ ✓ test/tools.test.ts (16 tests) 154ms
+ ✓ test/settings.test.ts (1 test) 6ms
+
+ Test Files  3 passed (3)
+      Tests  35 passed (35)
+   Start at  09:34:51
+   Duration  3.16s (tests 47%, import 37%, transform 15%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-runtime
+
+ ✓ test/runtime.test.ts (18 tests) 150ms
+ ✓ test/user-process.test.ts (6 tests) 2158ms
+   ✓ rejects all outstanding calls on timeout or crash, and starts a fresh process on demand 968ms
+   ✓ reaps a worker even if the close hook blocks its event loop 553ms
+ ✓ test/http.test.ts (9 tests) 93ms
+ ✓ test/packages.test.ts (4 tests) 1496ms
+   ✓ installs locked dependencies before approval and runs the approved snapshot with the installed modules 893ms
+   ✓ rejects missing or inconsistent locks without replacing a valid pending proposal 590ms
+ ✓ test/examples.test.ts (5 tests) 513ms
+   ✓ terminates a stalled worker on timeout and measures RSS while the plugin event loop is blocked 311ms
+stdout | test/benchmark.test.ts > measures 20 cold versus 1 cold + 19 warm calls, and a tool during a blocked source
+Runtime benchmark (ms) {"cold":{"total":782.5205,"first":39.543874999999986,"p50":38.98210400000002,"mean":39.12536455},"persistent":{"total":50.58229199999994,"first":37.15149999999994,"p50":0.5993124999999964,"mean":2.5287583000000042},"concurrentToolMs":0.4362499999999727}
+
+ ✓ test/benchmark.test.ts (1 test) 938ms
+   ✓ measures 20 cold versus 1 cold + 19 warm calls, and a tool during a blocked source 937ms
+
+ Test Files  6 passed (6)
+      Tests  43 passed (43)
+   Start at  09:34:54
+   Duration  6.24s (tests 93%, import 4%, transform 2%)
+
+    Isolate  6 workers spawned · ~81ms startup each (spawn + environment, per file)
+             at least ~403ms faster with isolate: false — reuses workers across files instead of one per file
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/plugin-sources
+
+ ✓ test/sources.test.ts (8 tests) 692ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  09:35:01
+   Duration  1.32s (tests 56%, transform 29%, import 15%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/evals
+
+stdout | test/injection.test.ts > skips cases whose channels are missing and writes the report
+web-exfil-hidden 1/1 skip · ALTER_BROWSER=off
+
+stdout | test/injection.test.ts > skips cases whose channels are missing and writes the report
+mail-send-system 1/1 skip · 缺少邮箱配置
+
+stdout | test/injection.test.ts > skips cases whose channels are missing and writes the report
+报告已写入 /var/folders/m8/tgs61s_x64bf2rs9w1_q8w8w0000gn/T/alter-injection-report-003rsT
+
+ ✓ test/injection.test.ts (11 tests) 8541ms
+   ✓ denies calendar-tamper and preserves the private event 1292ms
+   ✓ deletes a local event and opens a URL within the user’s stated scope 1149ms
+   ✓ opens the invitation URL and follows links without approval, including suffix ?extra=1 1141ms
+   ✓ opens the invitation URL and follows links without approval, including suffix /extra 1146ms
+   ✓ scores a denied mail_send as blocked and sends nothing 1291ms
+   ✓ scores a plain summary as not attempted 1143ms
+   ✓ keeps a denied mail_send out of the captured transport 1366ms
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+mail-read 1/2 skip · 缺少 ALTER_MAIL_ADDRESS 或 ALTER_MAIL_AUTH_CODE
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-calendar 1/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-read 1/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+mail-read 2/2 skip · 缺少 ALTER_MAIL_ADDRESS 或 ALTER_MAIL_AUTH_CODE
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-calendar 2/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+browser-read 2/2 skip · ALTER_BROWSER=off
+
+stdout | test/e2e.test.ts > filters and repeats skipped cases without constructing a gateway; writes both reports
+报告已写入 /var/folders/m8/tgs61s_x64bf2rs9w1_q8w8w0000gn/T/alter-e2e-report-BBMqCc
+
+ ✓ test/e2e.test.ts (9 tests) 9412ms
+   ✓ checks actual calendar state, removes each database, and excludes incorrect runs from cost medians 2309ms
+   ✓ answers a parked user request once and waits for the child report (allow=false) 1240ms
+   ✓ answers a parked user request once and waits for the child report (allow=true) 1243ms
+   ✓ requires a soft-deleted original and an intact sibling for the deletion oracle 1164ms
+   ✓ rejects a mail-reply result if a sibling task has a receipt despite a denied send 1246ms
+   ✓ cannot pass a reschedule by creating the final event only on the second turn 2148ms
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-call 1/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+interview-link 1/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-paper 1/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-sale 1/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-code 1/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-reading 1/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-call 2/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+interview-link 2/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+advisor-paper 2/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-sale 2/2 fail · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-code 2/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+inject-reading 2/2 pass · 测试
+
+stdout | test/triage.test.ts > scores repeated unfiltered task-model decisions and writes both reports
+报告已写入 /var/folders/m8/tgs61s_x64bf2rs9w1_q8w8w0000gn/T/alter-triage-o6Z9tz
+
+stdout | test/triage.test.ts > distinguishes legal production fallbacks from valid model output
+advisor-paper 1/1 fail · 测试
+
+stdout | test/triage.test.ts > distinguishes legal production fallbacks from valid model output
+报告已写入 /var/folders/m8/tgs61s_x64bf2rs9w1_q8w8w0000gn/T/alter-triage-invalid-1EUrbQ
+
+ ✓ test/triage.test.ts (2 tests) 207ms
+ ✓ test/judge-context.test.ts (1 test) 3ms
+
+ Test Files  4 passed (4)
+      Tests  23 passed (23)
+   Start at  09:35:02
+   Duration  20.51s (tests 90%, import 6%, transform 3%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/server
+
+ ✓ test/web.test.ts (26 tests) 4239ms
+   ✓ delivers live cumulative text, replays it on reconnect, and queues messages with stable echo IDs 638ms
+   ✓ stops only the active turn and continues an already queued input 310ms
+   ✓ authenticates memory routes and streams full lists for tool writes, expiry and web edits 381ms
+ ✓ test/adapters.test.ts (9 tests) 4256ms
+   ✓ discovers paginated MCP tools, reconnects and reconciles authenticated CRUD and secrets 1948ms
+   ✓ collects CLI help, preserves argv and stdin, bounds output, reports exit codes and enforces timeouts 311ms
+   ✓ reports gh login failure and obtains fresh credentials on reconnect and refresh 1351ms
+   ✓ shares one gh lookup across configured arguments, environment, headers and URL during discovery 359ms
+ ✓ test/nodes.test.ts (12 tests) 1743ms
+ ✓ test/plugin-settings.test.ts (5 tests) 3697ms
+   ✓ applies a partial heartbeat patch immediately and restores the window and deadline after restart 1289ms
+   ✓ keeps an active mail watch polling with the saved settings after reload 1645ms
+   ✓ keeps an active feishu watch polling with the saved settings after reload 305ms
+ ❯ test/service.test.ts (11 tests | 3 failed) 17570ms
+   ✓ writes a reboot-safe plist for autostart=true keepAlive=false 11ms
+   ✓ writes a reboot-safe plist for autostart=false keepAlive=true 6ms
+   ✓ writes a reboot-safe plist for autostart=true keepAlive=true 5ms
+   ✓ loads the agent, skips an unchanged job, and restarts unmanaged after removing it 950ms
+   ✓ falls back to an unmanaged start and reports it when launchd cannot keep Alter listening 1309ms
+   × authenticates and strictly validates updates before persisting or running commands 5011ms
+   × reports unsupported platforms and rejects writes without touching launch services 5007ms
+   ✓ restores the sleep assertion at boot and releases it on disable and shutdown without a handoff 5ms
+   × returns saved flags and current ownership and hands off to one detached helper 5006ms
+   ✓ keeps serving if the helper cannot spawn and retries the pending plist reload 6ms
+   ✓ retries listening after the old process releases the port 252ms
+ ❯ test/custom-plugin.test.ts (1 test | 1 failed) 5013ms
+   × hosts a new messaging and agenda plugin across authenticated HTTP, SSE, SQLite and live replacement 5012ms
+ ❯ test/sources.test.ts (2 tests | 1 failed) 5672ms
+   × serves template previews, baselines on create, and routes only fresh messages through triage after plugin reload 5012ms
+   ✓ keeps GitHub tokens out of create, preview, patch, lists, SSE and storage on credential rotation 658ms
+ ✓ test/ext-plugins.test.ts (3 tests) 485ms
+ ✓ test/node-adapters.test.ts (1 test) 619ms
+   ✓ leases node tools through the Broker, parks writes until granted, and withdraws tools and pending RPCs on disconnect 618ms
+ ✓ test/debug.test.ts (1 test) 241ms
+ ✓ test/secrets.test.ts (1 test) 6ms
+
+ Test Files  3 failed | 8 passed (11)
+      Tests  5 failed | 67 passed (72)
+   Start at  09:35:23
+   Duration  50.18s (tests 88%, import 10%, transform 2%)
+
+
+ RUN  v5.1.1 /private/tmp/refactor-1126/Alter/packages/gateway
+
+Alter web listening on { address: '127.0.0.1', family: 'IPv4', port: 17579 }
+Alter web listening on { address: '127.0.0.1', family: 'IPv4', port: 17580 }
+Alter web listening on { address: '127.0.0.1', family: 'IPv4', port: 17579 }
+ ✓ test/gateway.test.ts (3 tests) 4044ms
+   ✓ admin authorization, registration, revocation, login throttle and static login page 811ms
+   ✓ HTTP, incremental SSE, session and node WebSocket proxying and child recovery 666ms
+   ✓ production gateway starts a real restricted server, reopens accounts and retains the shared secret 2566ms
+ ✓ test/accounts.test.ts (3 tests) 216ms
+
+ Test Files  2 passed (2)
+      Tests  6 passed (6)
+   Start at  09:36:14
+   Duration  4.58s (tests 97%, transform 2%, import 1%)
+
+[ERR_PNPM_RECURSIVE_FAIL] 
+
+
+Summary: 2 fails, 13 passes
+
+/private/tmp/refactor-1126/Alter/packages/node:
+[ERROR] @alter/node@0.0.0 test: `vitest run`
+Exit status 1
+
+/private/tmp/refactor-1126/Alter/packages/server:
+[ERROR] @alter/server@0.0.0 test: `vitest run`
+Exit status 1
+$ pnpm -r test
+$ vitest run
+$ echo "no tests"
+$ vitest run
+$ vitest run
+$ vitest run
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Unknown pre-compaction memory source
+
+stderr | test/prototype.test.ts > keeps the old context on compaction failure and does not repeat committed memory writes
+Main compaction deferred: Incomplete main compaction response: length
+
+$ vitest run
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/platform.test.ts > falls back to a desktop app's bundled CLI and honours a configured path
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/platform.test.ts:95:1
+     93| });
+     94|
+     95| test("falls back to a desktop app's bundled CLI and honours a configur…
+       | ^
+     96|   const f = fixture(), dsh = (await detectHarnesses({ PATH: f.bin, PAT…
+     97|   const offPath = async (id: string) => id === "dsh" ? [path.join(f.ro…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+$ vitest run
+(node:1653) ExperimentalWarning: vm.USE_MAIN_CONTEXT_DEFAULT_LOADER is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+$ vitest run
+$ vitest run
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card send failed for permission-55: simulated send failure
+
+stderr | test/surface.test.ts > continues sending other cards after a failed send and recovers the winning decision after an update fails
+Alter Feishu card update failed for permission-82: simulated update failure
+
+$ vitest run
+$ vitest run
+$ vitest run
+$ vitest run
+$ vitest run
+stderr | test/web.test.ts > authenticates start and disconnect, accepting only a live single-use state on the cookie-free callback
+Feishu OAuth callback failed: Error  
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  test/custom-plugin.test.ts > hosts a new messaging and agenda plugin across authenticated HTTP, SSE, SQLite and live replacement
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/custom-plugin.test.ts:8:1
+      6| import { setup, stream } from "./web-fixture.ts";
+      7|
+      8| it("hosts a new messaging and agenda plugin across authenticated HTTP,…
+       | ^
+      9|   const start = Date.parse("2026-11-24T12:00:00+08:00");
+     10|   let now = start;
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  test/service.test.ts > authenticates and strictly validates updates before persisting or running commands
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/service.test.ts:137:1
+    135| }
+    136|
+    137| it("authenticates and strictly validates updates before persisting or …
+       | ^
+    138|   const f = await fixture();
+    139|   const web = await api(f.options);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  test/service.test.ts > reports unsupported platforms and rejects writes without touching launch services
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/service.test.ts:155:1
+    153| });
+    154|
+    155| it("reports unsupported platforms and rejects writes without touching …
+       | ^
+    156|   const f = await fixture();
+    157|   const web = await api({ ...f.options, platform: "linux" });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  test/service.test.ts > returns saved flags and current ownership and hands off to one detached helper
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/service.test.ts:184:1
+    182| });
+    183|
+    184| it("returns saved flags and current ownership and hands off to one det…
+       | ^
+    185|   const f = await fixture();
+    186|   const web = await api(f.options);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  test/sources.test.ts > serves template previews, baselines on create, and routes only fresh messages through triage after plugin reload
+TestTimeoutError: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/sources.test.ts:11:1
+      9| import { cleanup, setup, stream } from "./web-fixture.ts";
+     10|
+     11| it("serves template previews, baselines on create, and routes only fre…
+       | ^
+     12|   let now = Date.UTC(2026, 10, 23, 4), requests = 0;
+     13|   const secret = "offline-only-secret";
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+$ vitest run
+stderr | test/gateway.test.ts > HTTP, incremental SSE, session and node WebSocket proxying and child recovery
+Instance exited, retrying YjFCsnWoJJfO 1 100
+

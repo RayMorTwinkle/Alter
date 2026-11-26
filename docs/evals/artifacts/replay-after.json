@@ -1,0 +1,116 @@
+{
+  "ref": "refactor/1126",
+  "commit": "132cae3203567781439db94f0be4da70744dc9ea",
+  "sources": {
+    "packages/web/src/store.ts": "a54acdae8d5b1c73b603a51bde19789e8f65a3336f79ee81947c406695a663b4",
+    "packages/core/src/calendar-time.ts": "0a19c644a2cc086a716f44fb9e65555977f84b6648ccfc00cdd49bee7e219ebc"
+  },
+  "node": "v24.15.0",
+  "icu": "78.2",
+  "tzdata": "2026a",
+  "timeline": {
+    "historyLength": 200,
+    "fragments": 256,
+    "duplicates": 32,
+    "historyIdReads": 200,
+    "duplicateStateChanges": 0,
+    "orderedAppendTimestampReads": 398,
+    "retainedFullText": true,
+    "lateDeltaIgnored": true,
+    "orderedAppendCorrect": true,
+    "timestampCorrectionOrdered": true
+  },
+  "schedule": {
+    "passed": 7,
+    "cases": [
+      {
+        "name": "missing Friday",
+        "zone": "Pacific/Apia",
+        "from": "2011-12-29T12:00",
+        "time": "09:00",
+        "days": [
+          5
+        ],
+        "expected": "2012-01-05T19:00:00.000Z",
+        "actual": "2012-01-05T19:00:00.000Z",
+        "local": "2012-01-06T09:00:00.000+14:00",
+        "pass": true
+      },
+      {
+        "name": "missing next Friday from last Friday",
+        "zone": "Pacific/Apia",
+        "from": "2011-12-23T12:00",
+        "time": "09:00",
+        "days": [
+          5
+        ],
+        "expected": "2012-01-05T19:00:00.000Z",
+        "actual": "2012-01-05T19:00:00.000Z",
+        "local": "2012-01-06T09:00:00.000+14:00",
+        "pass": true
+      },
+      {
+        "name": "unrestricted daily across missing Friday",
+        "zone": "Pacific/Apia",
+        "from": "2011-12-29T12:00",
+        "time": "09:00",
+        "expected": "2011-12-30T19:00:00.000Z",
+        "actual": "2011-12-30T19:00:00.000Z",
+        "local": "2011-12-31T09:00:00.000+14:00",
+        "pass": true
+      },
+      {
+        "name": "spring gap on allowed Sunday",
+        "zone": "America/New_York",
+        "from": "2026-03-08T01:00",
+        "time": "02:30",
+        "days": [
+          0
+        ],
+        "expected": "2026-03-08T07:30:00.000Z",
+        "actual": "2026-03-08T07:30:00.000Z",
+        "local": "2026-03-08T03:30:00.000-04:00",
+        "pass": true
+      },
+      {
+        "name": "autumn fold first occurrence",
+        "zone": "America/New_York",
+        "from": "2026-11-01T00:00",
+        "time": "01:30",
+        "days": [
+          0
+        ],
+        "expected": "2026-11-01T05:30:00.000Z",
+        "actual": "2026-11-01T05:30:00.000Z",
+        "local": "2026-11-01T01:30:00.000-04:00",
+        "pass": true
+      },
+      {
+        "name": "autumn fold after first occurrence",
+        "zone": "America/New_York",
+        "from": "2026-11-01T05:30Z",
+        "time": "01:30",
+        "days": [
+          0
+        ],
+        "expected": "2026-11-08T06:30:00.000Z",
+        "actual": "2026-11-08T06:30:00.000Z",
+        "local": "2026-11-08T01:30:00.000-05:00",
+        "pass": true
+      },
+      {
+        "name": "ordinary Monday",
+        "zone": "Asia/Shanghai",
+        "from": "2026-11-22T09:00",
+        "time": "09:00",
+        "days": [
+          1
+        ],
+        "expected": "2026-11-23T01:00:00.000Z",
+        "actual": "2026-11-23T01:00:00.000Z",
+        "local": "2026-11-23T09:00:00.000+08:00",
+        "pass": true
+      }
+    ]
+  }
+}

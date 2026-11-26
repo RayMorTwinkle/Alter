@@ -1,0 +1,8 @@
+Alter | Offline demo · scripted model · temporary SQLite
+Surface    Read the welcome note and tell me what it says.
+Main       dispatch_task → fresh / restricted
+Worker     notes_read → Remember the planning meeting.
+Ledger     note/welcome → Remember the planning meeting.
+Reply      Remember the planning meeting.
+PASS       Completed task, reference and main-session reply verified.
+$ node packages/evals/demo.ts

@@ -1,0 +1,18 @@
+{
+  "revision": "9dcd6c17ad2087e2f8d6ee09d541ebfd6479c8d3",
+  "node": "v24.15.0",
+  "command": [
+    "sandbox-exec",
+    "-p",
+    "(version 1) (allow default) (deny network*)",
+    "pnpm",
+    "demo"
+  ],
+  "osNetworkDenied": true,
+  "exits": [
+    1,
+    1,
+    1
+  ],
+  "identicalStdout": true
+}
