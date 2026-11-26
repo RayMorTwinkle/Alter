@@ -1,11 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { ApprovalRequest, HarnessId, Hello, HubMessage, NodeMessage, TaskEnd, TaskStart } from "@alter/node-protocol";
 import { runNode } from "../src/connection.ts";
 import { configDir, directory, pair, saveConfig } from "../src/config.ts";
@@ -21,7 +21,7 @@ function processExited(pid: number) {
     throw err;
   }
 }
-async function setup(timeoutMs?: number, retryMs = 30, listTimeoutMs?: number) {
+async function setup(timeoutMs?: number, retryMs = 30, listTimeoutMs?: number, prepare?: (dir: string) => void) {
   const f = workspace();
   const hub = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(hub, "listening");
@@ -38,6 +38,7 @@ async function setup(timeoutMs?: number, retryMs = 30, listTimeoutMs?: number) {
       if (m.type === "hello") send({ type: "welcome", protocol: 1, userId: "user", ackSeq });
     });
   });
+  prepare?.(f.dir);
   const node = runNode(f.dir, f.harnesses, { retryMs, timeoutMs, listTimeoutMs });
   cleanup.push(async () => {
     await node.stop();
@@ -331,4 +332,85 @@ test("a timed out sessions.list replies with an error and releases its process",
   const pid = await until(() => existsSync(path.join(f.root, "listing.pid")) ? Number(readFileSync(path.join(f.root, "listing.pid"), "utf8")) : undefined);
   expect(await until(() => f.messages.find(m => m.type === "sessions.result"))).toMatchObject({ requestId: "slow", sessions: [], error: "列出会话超时" });
   await until(() => processExited(pid) || undefined);
+});
+
+test("manages live node adapters through the socket and local CLI, redacts outputs and restores discovery on reconnect", async () => {
+  const f = await setup();
+  async function manage(m: import("@alter/node-protocol").AdapterManagement) {
+    const requestId = crypto.randomUUID();
+    f.send({ type: "adapters.manage", requestId, ...m });
+    return until(() => f.messages.filter(m => m.type === "adapters.manage.result").find(m => m.requestId === requestId));
+  }
+  async function call(expectedEffect: "read" | "write") {
+    const callId = crypto.randomUUID();
+    f.send({ type: "tool.call", callId, adapterId: "local", toolName: "run", expectedEffect, args: { args: [] } });
+    return until(() => f.messages.filter(m => m.type === "tool.result").find(m => m.callId === callId));
+  }
+  const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  async function command(...args: string[]) {
+    const proc = spawn(process.execPath, [cli, "adapter", ...args, "--dir", f.dir]);
+    let stdout = "", stderr = "";
+    proc.stdout.on("data", s => stdout += s); proc.stderr.on("data", s => stderr += s);
+    expect((await once(proc, "close"))[0], stderr).toBe(0);
+    return JSON.parse(stdout);
+  }
+  const secret = "example-private-key";
+  const payload = { id: "local", name: "Laptop", kind: "cli", config: { command: process.execPath,
+    help: "read token", env: { TOKEN: "{{secret:TOKEN}}" }, args: ["-p", "process.env.TOKEN"] }, secrets: { TOKEN: secret } };
+  expect(await manage({ action: "create", payload })).toMatchObject({ ok: true, data: { state: "ok", tools: [{ effect: "write" }] } });
+  expect(await manage({ action: "list" })).toMatchObject({ data: [{ id: "local" }] });
+  expect(await manage({ action: "presets" })).toMatchObject({ data: [{ id: "github" }] });
+  expect(await manage({ action: "preset.create", presetId: "github", payload: { auth: "token" } })).toMatchObject({ status: 400 });
+  const github = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unavailable: " + secret));
+  try {
+    expect(await manage({ action: "preset.create", presetId: "github", payload: { auth: "token", token: secret } }))
+      .toMatchObject({ ok: true, data: { id: "github", state: "error" } });
+    expect(github).toHaveBeenCalled();
+    expect(await manage({ action: "remove", adapterId: "github" })).toMatchObject({ ok: true });
+  } finally { github.mockRestore(); }
+  expect(await command("effect", "local", "run", "read")).toMatchObject({ effects: { run: "read" } });
+  expect(await call("write")).toMatchObject({ ok: false });
+  expect(await call("read")).toMatchObject({ ok: true, content: expect.stringContaining("[redacted]") });
+  expect(await command("disable", "local")).toMatchObject({ state: "off" });
+  expect(await command("enable", "local")).toMatchObject({ state: "ok" });
+  expect(await command("refresh", "local")).toMatchObject({ state: "ok" });
+  expect(await command("list")).toMatchObject([{ name: "Laptop" }]);
+  f.reconnect({});
+  await until(() => f.messages.filter(m => m.type === "hello")[1]?.adapters?.length || undefined);
+  expect(JSON.stringify(f.messages)).not.toContain(secret);
+  expect(f.messages.some(m => m.type === "adapters.state" && m.adapters.some(a => a.state === "connecting"))).toBe(true);
+  for (const name of ["adapters.json", "adapter-secrets.json", "adapter.key"]) {
+    const file = path.join(f.dir, name);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readFileSync(file, "utf8")).not.toContain(secret);
+  }
+  await f.node.stop();
+  expect(await command("refresh", "local")).toMatchObject({ state: "ok", effects: { run: "read" } });
+  expect(await command("remove", "local")).toBeNull();
+  expect(await command("list")).toEqual([]);
+  const file = path.join(f.base, "definition.json");
+  writeFileSync(file, JSON.stringify(payload));
+  expect(await command("add", "--file", file)).toMatchObject({ id: "local", state: "ok" });
+  expect(await command("presets")).toMatchObject([{ id: "github" }]);
+}, 30_000);
+
+test("handshakes during slow discovery and aborts a running CLI on disconnect", async () => {
+  const f = await setup(undefined, 30, undefined, dir => {
+    const fixture = `const fs = require("node:fs");
+      if (process.argv.includes("--help")) {
+        const timer = setInterval(() => { if (fs.existsSync("ready")) { clearInterval(timer); console.log("help"); } }, 20);
+      } else { fs.writeFileSync("call.pid", String(process.pid)); setInterval(() => {}, 1000); }`;
+    writeFileSync(path.join(dir, "adapters.json"), JSON.stringify([{ id: "slow", name: "Slow discovery", kind: "cli",
+      config: { command: process.execPath, cwd: dir, args: ["-e", fixture, "--"] }, enabled: true, tools: [], effects: {} }]));
+  });
+  expect(f.hello.adapters).toMatchObject([{ state: "connecting" }]);
+  f.send({ type: "adapters.manage", requestId: "first", action: "list" });
+  writeFileSync(path.join(f.dir, "ready"), "");
+  await until(() => f.messages.find(m => m.type === "adapters.state" && m.adapters[0]?.state === "ok"));
+  f.send({ type: "tool.call", callId: "hang", adapterId: "slow", toolName: "run", args: { args: [] } });
+  const pidFile = path.join(f.dir, "call.pid");
+  const pid = await until(() => existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : undefined);
+  f.reconnect({});
+  await until(() => processExited(pid) || undefined);
+  expect(f.messages.some(m => m.type === "tool.result" && m.callId === "hang")).toBe(false);
 });

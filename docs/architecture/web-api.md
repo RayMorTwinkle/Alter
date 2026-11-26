@@ -650,3 +650,23 @@ WebSocket 消息结构以 `packages/node-protocol/src/index.ts` 为准。任务�
 成功返回 200 和按更新时间从新到旧排列的数组，每项含 `sessionId`、`cwd`，以及可选的 `title`、`updatedAt`（Unix 毫秒）。空列表为 `[]`。harness 缺失或无效返回 400，节点未知返回 404，代理不支持查询返回 409，节点报告查询失败返回 502，电脑离线返回 503，等待节点回复超过 25 秒返回 504。
 
 主会话用 `node_sessions` 查到的 `sessionId` 可作为 `dispatch_task` 的 `runner.session`。任务记录保留此次指定的会话，后续 `continue_from` 使用任务结束时返回的 `nativeSessionId`。
+
+## 用户节点转接器（#172）
+
+管理员与普通用户均可管理自己配对的节点。API 通过网页会话鉴权。公网使用 HTTPS，创建、预设安装和补丁中的密钥只在请求期间经过 Brain，持久化由节点负责。宿主 `/api/adapters` 系列在普通用户实例返回 403。节点接口不启动宿主适配器。
+
+| 方法和路径 | 请求体 | 成功结果 |
+|---|---|---|
+| GET /api/nodes/adapter-presets | — | 200，静态预设数组，可离线查看 |
+| GET /api/nodes/:id/adapters | — | 200，`{online, adapters: NodeAdapterSummary[]}`，离线时数组为空 |
+| POST /api/nodes/:id/adapters | `{id, name, kind, config, secrets?}` | 201，节点摘要 |
+| POST /api/nodes/:id/adapters/presets/:presetId | `{auth, token?, variant?, id?, name?}` | 201，节点摘要 |
+| PATCH /api/nodes/:id/adapters/:adapterId | `{name?, enabled?, config?, effects?, secrets?}` | 200，节点摘要 |
+| POST /api/nodes/:id/adapters/:adapterId/refresh | `{}` | 200，重新发现后的摘要 |
+| DELETE /api/nodes/:id/adapters/:adapterId | 可省略 | 204，清理节点配置、对应密钥与连接 |
+
+字段、效果覆写和密钥模板沿用宿主转接器格式。节点摘要包含 `id, name, kind, capabilityId, enabled, state, detail?, tools, effects`。连接状态直接位于 `state`。发现失败时，已成功保存的转接器返回 `state: "error"`。只有在线节点报告非空摘要时，`GET /api/nodes` 的该条记录才附加 `adapters`。SSE 的 `nodes` 事件携带更新后的完整节点列表，可用 GET 重新取得快照。
+
+未知节点、转接器或预设返回 404，配置无效返回 400。离线、旧节点缺少管理协议或 ID 冲突返回 409。节点回包无效返回 502，等待超过 120 秒返回 504。管理和工具调用均不会进入离线队列。工具调用需经过 Alter 的能力注册与 Broker 审批，Web 管理接口只管理配置。
+
+OpenAPI 的远程文档可能声明另一来源的服务器。发现引擎仅向配置的文档来源发送自定义请求头。跨来源的重定向或文档推导出的 API 地址不会携带这些头；如需向另一 API 来源提供凭据，显式配置 `baseUrl`。远程文档也不能通过 server URL 请求插入本机密钥。

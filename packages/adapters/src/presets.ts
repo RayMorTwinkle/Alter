@@ -1,4 +1,4 @@
-import { HttpError } from "../static.ts";
+import { AdapterError } from "./types.ts";
 import { check, fields } from "./config.ts";
 import type { AdapterPreset } from "./types.ts";
 
@@ -9,7 +9,7 @@ export const adapterPresets: AdapterPreset[] = [
 
 export function presetConfig(presetId: string, input: Record<string, unknown>) {
   const preset = adapterPresets.find(p => p.id === presetId);
-  if (!preset) throw new HttpError(404, "Unknown adapter preset");
+  if (!preset) throw new AdapterError(404, "Unknown adapter preset");
   fields(input, "auth token variant id name");
   const { auth, token, variant = "readonly", id = preset.id, name = preset.name } = input;
   check(auth === "gh" || auth === "token", "Expected gh or token authentication");

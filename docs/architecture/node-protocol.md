@@ -59,3 +59,37 @@
 - `dispatch_task` 增加可选 `runner: { node: <节点名或 id>, harness: "claude-code" | "codex" | "opencode" | "dsh", session?: <已有会话 id> }`，可选 `cwd`。主会话用 `node_sessions` 工具列出某代理的已有会话。不填 `runner` 时照旧用内置任务。
 - 节点离线：任务状态为 `queued`，主会话收到"已排队，电脑上线后开始"；节点 `hello` 后 hub 按派发顺序发 `task.start`。
 - 节点事件写进任务记录，网页任务详情与内置任务一样显示；`task.end` 照常形成任务报告唤醒主会话。
+
+## 节点转接器（#172，协议 1 扩展）
+
+支持此功能的节点在 `hello.adapters` 中发送完整摘要数组，空数组也表示支持。支持它的 hub 在 `welcome` 返回 `adapterRpc: true`。节点收到确认后补发当前快照，覆盖握手期间完成的发现。旧节点可省略该字段，旧 hub 仍能接收 hello 并继续派发代理任务。远程转接器要求 WSS，本地回环地址也可用 WS。
+
+| 方向 | 消息 | 语义 |
+|---|---|---|
+| 节点 → hub | `adapters.state {adapters}` | 完整替换在线快照。工具发现异步进行，状态为 off、connecting、ok 或 error。 |
+| hub → 节点 | `tool.call {callId, adapterId, toolName, args, expectedEffect?}` | 使用节点本地的转接器 ID 和工具名。Brain 携带 Broker 所见的效果，节点拒绝效果已变更的调用。 |
+| 节点 → hub | `tool.result {callId, ok, content?, isError?, error?}` | content 为脱敏后的文本。成功完成传输的工具仍可返回 isError。 |
+| hub → 节点 | `tool.cancel {callId}` | 中止当前连接上的调用。节点也会在 WS 断开或本地截止时间到时中止。 |
+| hub → 节点 | `adapters.manage {requestId, action, adapterId?, presetId?, payload?}` | action 支持 list、presets、create、preset.create、patch、refresh、remove。创建与补丁采用 Web API 的请求体。 |
+| 节点 → hub | `adapters.manage.result {requestId, ok, data?, error?, status?}` | list 返回摘要数组，presets 返回目录，创建、修改、刷新返回摘要，删除返回 null。失败可附 HTTP 状态码。 |
+
+转接器摘要含 `id, name, kind, capabilityId, enabled, state, detail?, tools, effects`。每个工具含 `name, description, effect, defaultEffect, inputSchema?`。配置、密钥和运行参数留在节点。hub 用配对记录 ID 派生实例内的 capabilityId；网页以 hub 返回的值为准。只有 enabled 且 state 为 ok 的工具才注册。注册沿用普通插件入口，主会话租约、任务工具、Broker 的只读放行、写操作审批和始终允许授权均沿用现有规则。
+
+以上 RPC 按当前认证连接关联，不进入任务日志、seq 或 ack。hub 等待最多 120 秒，断线、撤销或替换连接时立即结束等待。管理超时也可能已经保存配置，重连后先查询摘要。节点默认保存 `adapters.json`、AES-256-GCM 加密的 `adapter-secrets.json` 与随机本机密钥 `adapter.key`，POSIX 权限为 0600。
+
+### 本机管理
+
+`alter-node adapter presets` 列出预设。`adapter add` 从标准输入或 `--file FILE` 读取 JSON，适用于所有三种转接器和两种 MCP 传输。以下示例保存一个包装本机 Git 的 CLI 转接器。
+
+```sh
+echo '{"id":"git","name":"Git","kind":"cli","config":{"command":"git","help":"Run git with an argv array"}}' | alter-node adapter add
+echo '{"auth":"gh","variant":"readonly"}' | alter-node adapter add --preset github
+alter-node adapter list
+alter-node adapter effect git run irreversible
+alter-node adapter disable git
+alter-node adapter enable git
+alter-node adapter refresh git
+alter-node adapter remove git
+```
+
+所有子命令接受 `--dir DIR`。运行中的守护进程通过私有本地套接字处理命令。守护进程停止时，CLI 获取同一写锁保存更改，下次启动自动加载。离线 list 展示已保存的工具，启用项的 connecting 状态表示尚未在当前进程建立连接。

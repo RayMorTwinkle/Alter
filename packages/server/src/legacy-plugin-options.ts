@@ -6,10 +6,13 @@ import { sourcesWeb } from "@alter/plugin-sources";
 export type { Agenda };
 export type LegacyPluginOptions = { calendar?: Agenda; feishu?: { pairing(): FeishuPairing }; feishuAccount?: FeishuAccount };
 
-export function legacyPluginWeb(options: LegacyPluginOptions, standalone: boolean): PluginWebExtensions[] {
+export function legacyPluginWeb(options: LegacyPluginOptions, standalone: boolean, allowFeishu = true): PluginWebExtensions[] {
   const web = [];
   if (options.calendar) web.push(calendarWeb(options.calendar));
-  if (options.feishu || options.feishuAccount) web.push(feishuWeb(options.feishu, options.feishuAccount));
-  if (standalone) web.push(feishuSetupWeb(), sourcesWeb());
+  if (allowFeishu && (options.feishu || options.feishuAccount)) web.push(feishuWeb(options.feishu, options.feishuAccount));
+  if (standalone) {
+    if (allowFeishu) web.push(feishuSetupWeb());
+    web.push(sourcesWeb());
+  }
   return web;
 }

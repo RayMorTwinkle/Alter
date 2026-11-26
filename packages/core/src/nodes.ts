@@ -1,6 +1,7 @@
+import { NodeAdapters, NodeRpcError } from "./node-adapters.ts";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { parseNodeToken, protocolVersion, type ApprovalRequest, type HarnessId, type Hello, type HubMessage, type NativeSession, type NodeMessage, type SessionsResult } from "@alter/node-protocol";
+import { parseNodeToken, protocolVersion, type AdapterManagement, type ApprovalRequest, type HarnessId, type Hello, type HubMessage, type NativeSession, type NodeMessage, type SessionsResult } from "@alter/node-protocol";
 import { obj, opt, str } from "@earendil-works/pi-schema";
 import { harnessSchema, NodeRuns } from "./node-state.ts";
 import { context, conversationDoc, defineTask, defineTool, reply, type Conversation, type JsonObject, type Tx } from "./runtime.ts";
@@ -13,10 +14,7 @@ type NodeRecord = Pick<Hello, "name" | "harnesses" | "roots"> & {
 const Nodes = conversationDoc<{ records: NodeRecord[] }>("paired-nodes", () => ({ records: [] }));
 const hash = (secret: string) => createHash("sha256").update(secret).digest();
 export class PairingError extends Error {}
-export class NodeSessionsError extends Error {
-  status: number;
-  constructor(status: number, message: string) { super(message); this.status = status; }
-}
+export { NodeRpcError as NodeSessionsError };
 export type NodePeer = { send(message: HubMessage): void; close(): void; open(): boolean };
 type RequestApproval = (tx: Tx, task: TaskRecord, message: ApprovalRequest) => Promise<void>;
 
@@ -29,7 +27,10 @@ export class NodeHub {
   private main: () => Conversation;
   private now: () => number;
   private requestApproval: RequestApproval;
-  constructor(main: () => Conversation, now: () => number, requestApproval: RequestApproval) {
+  readonly adapters: NodeAdapters;
+  private labels = new Map<string, string>();
+  constructor(main: () => Conversation, now: () => number, requestApproval: RequestApproval, replace: ConstructorParameters<typeof NodeAdapters>[0]) {
+    this.adapters = new NodeAdapters(replace);
     this.main = main;
     this.now = now;
     this.requestApproval = requestApproval;
@@ -44,26 +45,37 @@ export class NodeHub {
 
   async list(tx: Tx) {
     const { records } = await tx.doc(Nodes, this.main().id);
-    return records.map(({ hash, deviceId, ...node }) => ({ ...node, roots: [...node.roots], harnesses: node.harnesses.map(h => ({ ...h })), online: !!this.peers.get(node.id)?.open() }));
+    return records.map(({ hash, deviceId, ...node }) => {
+      const online = !!this.peers.get(node.id)?.open();
+      const adapters = this.adapters.list(node.id);
+      return { ...node, online, roots: [...node.roots], harnesses: node.harnesses.map(h => ({ ...h })),
+        ...(online && adapters.length ? { adapters } : {}) };
+    });
   }
   all() { return this.main().commit(tx => this.list(tx), context); }
+  async manageAdapters(id: string, command: AdapterManagement) {
+    if (!(await this.all()).some(node => node.id === id)) throw new NodeRpcError(404, "Unknown node");
+    const peer = this.peers.get(id);
+    if (!peer?.open()) throw new NodeRpcError(409, "Node is offline");
+    return this.adapters.manage(id, peer, command);
+  }
   async sessions(target: string, harness: HarnessId, cwd?: string): Promise<NativeSession[]> {
     const node = (await this.all()).find(n => n.id === target || n.name === target);
-    if (!node) throw new NodeSessionsError(404, "Unknown node: " + target);
+    if (!node) throw new NodeRpcError(404, "Unknown node: " + target);
     const peer = this.peers.get(node.id);
-    if (!peer?.open()) throw new NodeSessionsError(503, "电脑不在线");
+    if (!peer?.open()) throw new NodeRpcError(503, "电脑不在线");
     if (!node.harnesses.some(h => h.id === harness && h.available && h.sessions))
-      throw new NodeSessionsError(409, harness + " 不支持列出已有会话");
+      throw new NodeRpcError(409, harness + " 不支持列出已有会话");
 
     const requestId = randomUUID();
     let timer: NodeJS.Timeout | undefined;
     try {
       const result = await new Promise<SessionsResult>((resolve, reject) => {
-        timer = setTimeout(() => reject(new NodeSessionsError(504, "查询已有会话超时")), 25_000);
+        timer = setTimeout(() => reject(new NodeRpcError(504, "查询已有会话超时")), 25_000);
         this.pendingSessions.set(requestId, { peer, harness, resolve });
         peer.send({ type: "sessions.list", requestId, harness, ...(cwd && { cwd }) });
       });
-      if (result.error !== undefined) throw new NodeSessionsError(502, result.error);
+      if (result.error !== undefined) throw new NodeRpcError(502, result.error);
       return result.sessions;
     } finally {
       clearTimeout(timer);
@@ -110,14 +122,20 @@ export class NodeHub {
         }
         return true;
       }, context);
-      this.peers.get(id)?.close();
-      this.peers.delete(id);
+      const peer = this.peers.get(id);
+      if (peer) { peer.close(); await this.detach(id, peer); }
       return removed;
     });
   }
+  private async detach(id: string, peer: NodePeer) {
+    this.adapters.disconnect(peer);
+    this.peers.delete(id);
+    this.labels.delete(id);
+    await this.adapters.update(id, "", peer);
+  }
   disconnect(id: string, peer: NodePeer) {
     return this.serial(async () => {
-      if (this.peers.get(id) === peer) this.peers.delete(id);
+      if (this.peers.get(id) === peer) await this.detach(id, peer);
     });
   }
   private async touch(tx: Tx, id: string) {
@@ -134,7 +152,7 @@ export class NodeHub {
       const main = this.main();
       const remote = new Map(hello.tasks.map(t => [t.taskId, t]));
       const ended = new Set(hello.tasks.filter(t => t.state === "ended").map(t => t.taskId));
-      const replies = await main.commit(async tx => {
+      const { label, replies } = await main.commit(async tx => {
         const node = (await tx.doc(Nodes, main.id)).records.find(n => n.id === id);
         if (!node || (node.deviceId && node.deviceId !== hello.nodeId)) throw new PairingError("Invalid pairing");
         Object.assign(node, { deviceId: hello.nodeId, platform: hello.platform, harnesses: hello.harnesses, roots: hello.roots, lastSeen: this.now() });
@@ -158,13 +176,16 @@ export class NodeHub {
             } else await endNodeTask(tx, main, taskId, task, this.now(), "interrupted", { summary: "重连后节点已无此任务", refs: [] }, "failure");
           }
         }
-        return [{ type: "welcome", userId: this.userId, protocol: protocolVersion, ackSeq }, ...answers] satisfies HubMessage[];
+        return { label: node.name, replies: [{ type: "welcome", ...(hello.adapters && { adapterRpc: true }), userId: this.userId, protocol: protocolVersion, ackSeq }, ...answers] satisfies HubMessage[] };
       }, context);
       if (!peer.open()) return;
-      this.peers.get(id)?.close();
+      const previous = this.peers.get(id);
+      if (previous) { this.adapters.disconnect(previous); previous.close(); }
       this.peers.set(id, peer);
+      this.labels.set(id, label);
       this.sentStops.set(peer, new Set());
       for (const msg of replies) peer.send(msg);
+      await this.adapters.update(id, label, peer, hello.adapters);
       await this.drain(id, ended);
     });
   }
@@ -211,6 +232,8 @@ export class NodeHub {
   receive(id: string, peer: NodePeer, msg: Exclude<NodeMessage, Hello>) {
     return this.serial(async () => {
       if (this.peers.get(id) !== peer) throw new Error("Stale connection");
+      if (msg.type === "adapters.state") return this.adapters.update(id, this.labels.get(id)!, peer, msg.adapters);
+      if (msg.type === "adapters.manage.result" || msg.type === "tool.result") return this.adapters.receive(peer, msg);
       if (msg.type === "sessions.result") {
         const pending = this.pendingSessions.get(msg.requestId);
         if (pending?.peer === peer && pending.harness === msg.harness) pending.resolve(msg);
@@ -271,7 +294,7 @@ export const nodeSessionsTool = (nodes: NodeHub) => defineTool({
   async execute({ node, harness, cwd }) {
     try { return reply(JSON.stringify(await nodes.sessions(node, harness, cwd))); }
     catch (error) {
-      if (error instanceof NodeSessionsError) return reply(error.message, true);
+      if (error instanceof NodeRpcError) return reply(error.message, true);
       throw error;
     }
   },

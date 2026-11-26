@@ -1,3 +1,4 @@
+import { hostPolicy } from "./role-policy.ts";
 import type { AlterApp } from "@alter/core";
 import { browserDescription, browserInstance } from "@alter/plugin-browser";
 import { calendarDescription, calendarInstance } from "@alter/plugin-calendar";
@@ -12,7 +13,7 @@ import { createPluginManager, type PluginDefinition, type PluginManager } from "
 export type WebPluginManager = PluginManager & { ext?: ReturnType<typeof externalPlugins>; adapters?: ReturnType<typeof openAdapters> };
 
 export function installedPlugins(app: AlterApp, dataDir: string, env = process.env, options: Parameters<typeof openSources>[2] = {}) {
-  const restricted = env.ALTER_ROLE === "user";
+  const { restricted, allowsPlugin } = hostPolicy(env);
   const secrets = openSecrets(dataDir);
   const sources = openSources(secrets, app.timeZone, { now: app.now, ...options });
   const definitions: PluginDefinition[] = [
@@ -22,7 +23,7 @@ export function installedPlugins(app: AlterApp, dataDir: string, env = process.e
     { description: browserDescription, enabled: env.ALTER_BROWSER !== "off", open: () => browserInstance() },
     { description: sources.description, setupWeb: () => sourcesWeb(sources), open: () => ({ plugin: sources.plugin, status: () => ({ state: "ok" }) }) },
   ];
-  const manager = createPluginManager(app, dataDir, definitions.filter(def => !restricted || !["browser", "feishu"].includes(def.description.id)), env, secrets);
+  const manager = createPluginManager(app, dataDir, definitions.filter(def => allowsPlugin(def.description.id)), env, secrets);
   const ext = restricted ? undefined : externalPlugins(app, dataDir, secrets);
   const adapters = restricted ? undefined : openAdapters(app, dataDir, secrets);
   return { ...manager, sources, ext, adapters,

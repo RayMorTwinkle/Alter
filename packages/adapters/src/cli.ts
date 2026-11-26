@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { reply } from "@alter/core";
+import { reply } from "./types.ts";
 import { expandMap, type CliConfig, type Connection, type Expand } from "./types.ts";
 
 export async function discoverCli(config: CliConfig, name: string, expand: Expand, lifetime: AbortSignal): Promise<Connection> {

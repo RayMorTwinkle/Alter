@@ -143,7 +143,7 @@ export async function openAlter(
       const preferences = await harness.snapshot(Preferences, main.id, context);
       return judge(auxiliaryModels(currentModels(), dir, now, "judge", owner), taskModel, statement, call, metadata, preferences?.permissionNotes[call.tool]);
     }, (id, answer) => nodes.send(id, answer));
-  const nodes: NodeHub = new NodeHub(() => main, now, request);
+  const nodes: NodeHub = new NodeHub(() => main, now, request, replacePlugin);
   const taskExtensions = [extension, TaskTools, broker];
   const dispatch = createDispatcher(taskExtensions, taskModel, clock, (requested = thinking.task ?? "high") => {
     const model = currentModels().getModel(taskModel.provider, taskModel.modelId);

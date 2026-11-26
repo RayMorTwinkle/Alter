@@ -1,8 +1,8 @@
-import { HttpError } from "../static.ts";
+import { AdapterError } from "./types.ts";
 import { record, strings, type AdapterDefinition, type AdapterPatch } from "./types.ts";
 
 export function check(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new HttpError(400, message);
+  if (!condition) throw new AdapterError(400, message);
 }
 export function fields(obj: Record<string, unknown>, allowed: string) {
   check(Object.keys(obj).every(k => allowed.split(" ").includes(k)), "Unknown adapter field");
@@ -26,7 +26,7 @@ export function definition(kind: unknown, config: unknown): AdapterDefinition {
       check(config.baseUrl === undefined || typeof config.baseUrl === "string", "Expected baseUrl");
     } else check(typeof config.url === "string" && config.url.trim(), "Expected MCP URL");
     check(config.headers === undefined || strings(config.headers), "Expected string headers");
-  } else throw new HttpError(400, "Unknown adapter kind or transport");
+  } else throw new AdapterError(400, "Unknown adapter kind or transport");
   const credentialKey = /(?:authorization|cookie|password|secret|token|api[-_]?key)$/i;
   const placeholder = /\{\{(?:secret:[A-Za-z0-9_-]+|gh-token)\}\}/;
   function credential(value: string) {
@@ -43,7 +43,7 @@ export function definition(kind: unknown, config: unknown): AdapterDefinition {
     if (parsed.password) {
       let password: string;
       try { password = decodeURIComponent(parsed.password); }
-      catch { throw new HttpError(400, "Invalid URL password encoding"); }
+      catch { throw new AdapterError(400, "Invalid URL password encoding"); }
       credential(password);
     }
     for (const [key, value] of parsed.searchParams) if (credentialKey.test(key)) credential(value);

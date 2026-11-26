@@ -35,3 +35,4 @@ export { PluginConfigError, type PluginCheck, type PluginDescription, type Plugi
 export { isHeartbeatSettings, type HeartbeatSettings } from "./settings.ts";
 export { withAbortSignal } from "@earendil-works/chord/context";
 export { PluginHttpError, type PluginRoute, type PluginRouteContext, type PluginSseFeed, type PluginWebExtensions } from "./plugin-web.ts";
+export { nodeCapability } from "./node-adapters.ts";
