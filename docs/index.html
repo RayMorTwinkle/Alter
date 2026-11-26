@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Explore Alter, a proactive personal AI agent with a durable main session, delegated tasks and per-call permission checks. Run a credential-free offline demo.">
+  <title>Alter — A durable personal agent</title>
+  <script>
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem('alter-site-theme') ||
+        (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    } catch {}
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper:#f6f3ec; --surface:#fffcf5; --ink:#201e29; --mute:#5d5963; --rule:#cfcac3;
+      --accent:#993c26; --trace:#272839; --trace-line:#646579; --trace-ink:#f8f5ed;
+      --trace-soft:#c6c4d3; --signal:#ffc08d; --fill:#e7ded4;
+      --sans:"Inter","Helvetica Neue",Arial,sans-serif; --serif:"Instrument Serif",Iowan Old Style,Baskerville,Georgia,serif;
+      --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+    }
+    @media(prefers-color-scheme:dark) {
+      :root:not([data-theme=light]) { color-scheme:dark; --paper:#1b1b21; --surface:#24232b; --ink:#f4eee3; --mute:#c1b9b2; --rule:#48444a; --accent:#ffb086; --fill:#3b3130; }
+    }
+    :root[data-theme=dark] { color-scheme:dark; --paper:#1b1b21; --surface:#24232b; --ink:#f4eee3; --mute:#c1b9b2; --rule:#48444a; --accent:#ffb086; --fill:#3b3130; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:1rem; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:1rem/1.55 var(--sans); }
+    main,.nav,.foot { max-width:1344px; padding-inline:clamp(20px,5.7vw,82px); margin:auto; }
+    a { color:inherit; text-decoration-thickness:1px; text-underline-offset:.22em; }
+    a:hover { color:var(--accent); }
+    :focus-visible { outline:3px solid var(--accent); outline-offset:4px; }
+    .skip { position:fixed; top:-6rem; left:1rem; z-index:5; padding:.5rem; background:var(--surface); }
+    .skip:focus { top:1rem; }
+    .nav { display:flex; align-items:center; justify-content:space-between; gap:1rem; min-height:82px; }
+    .brand { display:inline-flex; align-items:center; gap:.65rem; font:600 1.6rem var(--sans); letter-spacing:-.08em; text-decoration:none; }
+    .mark { position:relative; width:23px; height:24px; flex:none; transform:skew(-16deg); }
+    .mark::before,.mark::after { content:""; position:absolute; width:8px; bottom:0; background:var(--accent); }
+    .mark::before { height:17px; left:2px; }.mark::after { height:24px; left:13px; }
+    .navlinks { display:flex; align-items:center; gap:clamp(.8rem,2.6vw,2rem); font-size:.86rem; }
+    .navlinks a { text-decoration:none; }.navlinks a:hover,.foot a:hover { text-decoration:underline; }
+    button { font:inherit; color:inherit; }
+    #theme { display:none; border:1px solid var(--rule); border-radius:100px; background:transparent; min-width:65px; padding:.39rem .65rem; cursor:pointer; }
+    .js #theme { display:inline-block; }.rule { border-top:1px solid var(--rule); }
+    .hero { display:grid; grid-template-columns:1fr .9fr; gap:clamp(28px,5vw,76px); padding-block:clamp(48px,6.5vw,94px); align-items:center; }
+    h1,h2,h3,p,figure { margin:0; }
+    h1,h2 { font-family:var(--serif); font-weight:400; text-wrap:balance; }
+    h1 { font-size:clamp(58px,6.2vw,92px); line-height:.98; letter-spacing:-.067em; margin:.2em 0 .28em; }
+    h1 em { font-weight:400; color:var(--accent); }
+    .label { color:var(--accent); font:600 .72rem/1.5 var(--mono); letter-spacing:.07em; text-transform:uppercase; }
+    .intro { max-width:46ch; font-size:clamp(1rem,1.55vw,1.21rem); color:var(--mute); line-height:1.65; }
+    .actions { display:flex; margin-top:1.65rem; gap:.8rem 1.3rem; align-items:center; flex-wrap:wrap; }
+    .primary { display:inline-block; padding:.68rem 1.1rem; color:var(--paper); background:var(--ink); border:1px solid var(--ink); text-decoration:none; border-radius:.25rem; font-size:.92rem; font-weight:600; }
+    .primary:hover { background:var(--accent); border-color:var(--accent); color:var(--paper); }
+    .actions>a:not(.primary) { font-size:.92rem; }
+    .schematic { position:relative; isolation:isolate; overflow:hidden; border-radius:7px; background:var(--trace); color:var(--trace-ink); padding:clamp(20px,3vw,40px); }
+    .schematic::before { content:""; position:absolute; z-index:-1; inset:0; opacity:.24; background-image:radial-gradient(#a6a4b6 1px,transparent 1px); background-size:13px 13px; }
+    .schematic figcaption { font:.72rem var(--mono); color:var(--trace-soft); padding-bottom:1.45rem; display:flex; align-items:center; justify-content:space-between; }
+    .schematic figcaption::after { content:""; width:27px; border-top:2px solid var(--signal); }
+    .wire { display:block; width:1px; height:16px; background:var(--trace-line); margin:auto; }
+    .node { background:#303142; text-align:center; border:1px solid var(--trace-line); border-radius:4px; padding:.5rem .35rem; font-size:.91rem; font-weight:600; line-height:1.3; }
+    .node b { display:block; font:inherit; }
+    .node small { display:block; margin-top:.22rem; color:var(--trace-soft); font:.68rem/1.35 var(--mono); }
+    .center-node { width:70%; margin:auto; }
+    .main-node { padding:.8rem .3rem; background:#423c44; border-color:var(--signal); }
+    .main-node b { font-family:var(--serif); font-size:1.55rem; font-weight:400; }
+    .split { display:grid; grid-template-columns:1fr 1fr; gap:14px; position:relative; }
+    .split::before,.split::after { content:""; position:absolute; left:calc(25% - 3px); right:calc(25% - 3px); height:8px; border-inline:1px solid var(--trace-line); }
+    .split::before { top:-8px; border-top:1px solid var(--trace-line); }.split::after { bottom:-8px; border-bottom:1px solid var(--trace-line); }
+    .join { height:17px; background:linear-gradient(to bottom,var(--trace-line) 55%,transparent 55%); }
+    .out { height:17px; background:linear-gradient(to bottom,transparent 45%,var(--trace-line) 45%); }
+    .broker { color:var(--signal); }
+    section.band { padding-block:clamp(42px,5.5vw,80px); }
+    .sectionhead { display:grid; grid-template-columns:1fr 1fr; align-items:end; gap:24px; margin-bottom:26px; }
+    h2 { font-size:clamp(38px,4.4vw,65px); letter-spacing:-.049em; line-height:1.02; }
+    .sectionhead p,.bodycopy { color:var(--mute); max-width:56ch; }
+    .cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; align-items:start; }
+    details.card { background:var(--surface); border:1px solid var(--rule); border-top:3px solid var(--ink); border-radius:3px; }
+    details.card[open] { border-top-color:var(--accent); }
+    summary { cursor:pointer; }
+    summary::marker { content:""; }summary::-webkit-details-marker { display:none; }
+    .card summary { position:relative; padding:18px 42px 18px 18px; font-weight:650; line-height:1.35; list-style:none; }
+    .card summary::after { content:"+"; font:1.3rem var(--mono); position:absolute; top:14px; right:15px; color:var(--accent); }
+    .card[open] summary::after { content:"−"; }
+    .card p { margin:0 18px 19px; color:var(--mute); font-size:.94rem; }
+    .evidence { display:grid; gap:12px; }.test { border:1px solid var(--rule); border-radius:3px; background:var(--surface); }
+    .test summary { display:grid; grid-template-columns:1.35fr 1fr auto; align-items:center; gap:15px; padding:14px 20px; list-style:none; }
+    .test summary::after { content:"+"; color:var(--accent); font:1.2rem var(--mono); }
+    .test[open] summary::after { content:"−"; }
+    .change { color:var(--accent); font:600 clamp(.85rem,1.65vw,1.18rem) var(--mono); }
+    .test p { margin:0 20px 19px; max-width:80ch; font-size:.95rem; color:var(--mute); }
+    .source { font-size:.88rem; margin-top:17px; }
+    .demo { display:grid; grid-template-columns:.85fr 1.15fr; gap:clamp(24px,5vw,80px); align-items:center; }
+    .demo .bodycopy { margin:18px 0; }.terminal { background:var(--trace); color:var(--trace-ink); padding:15px 18px; border-radius:4px; overflow:auto; line-height:1.8; font-size:.84rem; }
+    pre,code { font-family:var(--mono); }
+    .command-actions { display:flex; gap:8px 14px; align-items:center; flex-wrap:wrap; font-size:.82rem; }
+    #copy-commands { display:none; background:var(--surface); border:1px solid var(--rule); color:var(--ink); border-radius:4px; padding:.4rem .65rem; cursor:pointer; }
+    .js #copy-commands { display:inline-block; }
+    #copy-status { color:var(--mute); }
+    .video { min-width:0; }.video video { display:block; width:100%; aspect-ratio:16/9; border-radius:4px; background:var(--trace); }
+    .video figcaption { margin-top:9px; color:var(--mute); font-size:.79rem; }
+    .foot { display:flex; flex-wrap:wrap; align-items:center; gap:10px 22px; font-size:.85rem; padding-block:24px; color:var(--mute); }.foot span { margin-right:auto; }
+    @media(max-width:820px) {
+      .hero { grid-template-columns:1fr .86fr; gap:25px; }.cards { grid-template-columns:1fr; }
+      .demo { grid-template-columns:1fr 1fr; gap:20px; }.schematic { padding:19px; }
+    }
+    @media(max-width:660px) {
+      .nav { min-height:62px; }.navlinks { gap:12px; }.navlinks a[href="#architecture"],.navlinks a[href="#evidence"] { display:none; }
+      .hero,.demo,.sectionhead { grid-template-columns:1fr; }.hero { padding-block:37px; gap:27px; }
+      h1 { font-size:clamp(54px,11vw,72px); }.sectionhead { gap:11px; }
+      .schematic { padding:20px 24px; }.sectionhead p { max-width:none; }.test summary { grid-template-columns:1fr auto; gap:5px; padding-inline:15px; }.test summary::after { grid-area:1/2/3/3; }
+      .test .change { grid-column:1; }.terminal { font-size:.8rem; }.test p { margin-inline:15px; }.center-node { width:77%; }
+    }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="nav">
+    <a class="brand" href="#content" aria-label="Alter home"><span class="mark" aria-hidden="true"></span>Alter</a>
+    <nav class="navlinks" aria-label="Main navigation">
+      <a href="#architecture">Architecture</a><a href="#evidence">Evidence</a>
+      <a href="https://github.com/RayMorTwinkle/Alter">GitHub ↗</a><button type="button" id="theme" aria-label="Dark theme">Dark</button>
+    </nav>
+  </header>
+  <main id="content">
+    <section class="hero rule" aria-labelledby="hero-title">
+      <div>
+        <p class="label">Proactive personal agent</p>
+        <h1 id="hero-title">One conversation.<br><em>Durable work.</em></h1>
+        <p class="intro">Ask Alter to follow up, read a schedule or watch for an update. A persistent main session delegates the work, checks tool permissions and keeps a record of the result.</p>
+        <div class="actions"><a class="primary" href="#demo">Run the offline demo ↓</a><a href="#evidence">Inspect the evidence</a></div>
+      </div>
+      <figure class="schematic">
+        <figcaption>Request path · architecture</figcaption>
+        <div class="node center-node"><b>Verified surface</b><small>user request</small></div>
+        <i class="wire" aria-hidden="true"></i>
+        <div class="node center-node main-node"><b>Main session</b><small>control plane</small></div>
+        <i class="wire join" aria-hidden="true"></i>
+        <div class="split"><div class="node"><b>Subagent</b><small>delegated task</small></div><div class="node"><b>Tool lease</b><small>direct use</small></div></div>
+        <i class="wire out" aria-hidden="true"></i>
+        <div class="node center-node broker"><b>Capability broker</b><small>per-call decision</small></div>
+      </figure>
+    </section>
+    <section id="architecture" class="band rule">
+      <div class="sectionhead"><h2>Who can act?</h2><p>A message enters through a surface or a connector. Where it came from determines how the runtime handles it.</p></div>
+      <div class="cards">
+        <details class="card" open><summary>Surface &amp; connector</summary><p>A verified surface accepts user instructions. Mail and feed connectors supply external records for triage. Content can inform a task, while authority comes from the user and the runtime.</p></details>
+        <details class="card"><summary>Dispatch &amp; lease</summary><p>The main session delegates multi-step work and receives a compact result. For a short interaction, it can enable a capability or action on a sliding lease. The broker still checks the call.</p></details>
+        <details class="card"><summary>Effects &amp; approval</summary><p>The broker distinguishes reads, writes and irreversible actions. Prior grants and the scope of a request determine when Alter asks for a decision. Capability-wide grants can cover irreversible actions.</p></details>
+      </div>
+    </section>
+    <section id="evidence" class="band rule">
+      <div class="sectionhead"><h2>Replay the regressions.</h2><p>Same fixtures on the backup snapshot and the refactor. Expand a result to see what the probe actually counted.</p></div>
+      <div class="evidence" id="results">
+        <details class="test" open>
+          <summary><b>Draft updates · history ID reads</b><span class="change">51,200 → 200</span></summary>
+          <p>The fixture starts with 200 settled messages, then sends 256 cumulative text fragments for one new reply. Checking the history once when the draft starts preserves the guard against late fragments.</p>
+        </details>
+        <details class="test">
+          <summary><b>Exact replays · new reducer states</b><span class="change">32 → 0</span></summary>
+          <p>After the last fragment, the harness sends its complete text another 32 times. The reducer reuses the existing state when the draft ID and text match. This counts object identity changes.</p>
+        </details>
+        <details class="test">
+          <summary><b>Ordered inserts · timestamp reads</b><span class="change">39,800 → 398</span></summary>
+          <p>Across 200 chronological appends, a comparison with the last row replaces a full sort on the common path. Finding an existing ID and copying the timeline array still take linear work.</p>
+        </details>
+        <details class="test">
+          <summary><b>Calendar fixtures · correct next instant</b><span class="change">5/7 → 7/7</span></summary>
+          <p>Two different starting dates hit the same missing Friday in Pacific/Apia. A Friday-only reminder used to land on Saturday. The scheduler now checks the candidate’s actual local weekday and continues to Friday, January 6, 2012.</p>
+        </details>
+      </div>
+      <p class="source"><a href="evals/refactor-1126-report.md">Read the evaluation report ↗</a></p>
+    </section>
+    <section id="demo" class="band demo rule">
+      <div><h2>Try it locally.</h2><p class="bodycopy">In a checkout with Node 24 and pnpm 11, install the locked dependencies once. The demo runs a scripted model through the real task runtime and broker without credentials.</p>
+        <pre class="terminal"><code id="demo-commands">pnpm install --frozen-lockfile
+pnpm demo</code></pre>
+        <div class="command-actions"><button id="copy-commands" type="button">Copy commands</button><a href="https://github.com/RayMorTwinkle/Alter">Get the source ↗</a><span id="copy-status" role="status"></span></div>
+      </div>
+      <figure class="video"><video controls preload="none" playsinline poster="media/alter-poster.jpg" aria-label="Alter narrated architecture and evaluation walkthrough"><source src="media/alter-demo.mp4" type="video/mp4"></video><figcaption>Architecture walkthrough · narrated, with subtitles. <a href="media/alter-demo.mp4">Download MP4</a></figcaption></figure>
+    </section>
+  </main>
+  <footer class="foot rule"><span>Alter · RayMorTwinkle</span><a href="https://github.com/RayMorTwinkle/Alter/blob/HEAD/LICENSE">MIT license</a><a href="https://github.com/RayMorTwinkle/Alter/blob/HEAD/CONTRIBUTING.md">Contribute ↗</a></footer>
+  <script>
+    document.getElementById('copy-commands').addEventListener('click', async () => {
+      const code = document.getElementById('demo-commands');
+      const status = document.getElementById('copy-status');
+      try {
+        await navigator.clipboard.writeText(code.textContent);
+        status.textContent = 'Copied.';
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(code);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        status.textContent = 'Commands selected. Use your device’s Copy command.';
+      }
+    });
+    const toggle = document.getElementById('theme');
+    const root = document.documentElement;
+    root.classList.add('js');
+    function updateTheme(dark) {
+      root.dataset.theme = dark ? 'dark' : 'light';
+      toggle.textContent = dark ? 'Light' : 'Dark';
+      toggle.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+    }
+    updateTheme(root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches));
+    toggle.addEventListener('click', () => {
+      updateTheme(root.dataset.theme !== 'dark');
+      try { localStorage.setItem('alter-site-theme', root.dataset.theme); } catch {}
+    });
+  </script>
+</body>
+</html>
