@@ -60,11 +60,13 @@ export function calendarTime(timeZone: string) {
   }
   function nextDaily(after: number, daily: string, weekdays?: readonly number[]) {
     const today = Math.floor(wall(after) / dayMs) * dayMs + dailyMinutes(daily) * 60_000;
-    for (let days = 0; days <= 7; days++) {
+    // A time zone can skip an entire date (e.g. Apia's Friday in 2011).
+    // Include a second week in case the next requested weekday did not exist.
+    for (let days = 0; days <= 14; days++) {
       const local = today + days * dayMs;
       if (weekdays && !weekdays.includes(new Date(local).getUTCDay())) continue;
       const candidate = instant(local, true);
-      if (candidate > after) return candidate;
+      if (candidate > after && (!weekdays || weekdays.includes(new Date(wall(candidate)).getUTCDay()))) return candidate;
     }
     throw new Error("Expected at least one weekday from 0 to 6");
   }
