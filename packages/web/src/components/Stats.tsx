@@ -73,7 +73,7 @@ function usageDetail(usage: StatsUsage) {
   return `${compactNumber(usage.tokens)} · ${usage.calls}×`;
 }
 
-export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; onOpenFeedback?: () => void }) {
+export function StatsPanel({ onOpenFeedback }: { onOpenFeedback?: () => void }) {
   const all = useT();
   const t = all.stats;
   const [range, setRange] = useState<StatsRange>("7d");
@@ -89,7 +89,7 @@ export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; o
   const decisions = stats?.approvals.decisions;
 
   return (
-    <Sheet title={t.title} onClose={onClose}>
+    <>
       <div className="seg" role="tablist">
         {ranges.map(r => (
           <button key={r} role="tab" aria-selected={range === r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>
@@ -179,6 +179,14 @@ export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; o
           </section>
         )}
       </>}
+    </>
+  );
+}
+
+export function StatsSheet({ onClose, onOpenFeedback }: { onClose: () => void; onOpenFeedback?: () => void }) {
+  return (
+    <Sheet title={useT().stats.title} onClose={onClose}>
+      <StatsPanel onOpenFeedback={onOpenFeedback} />
     </Sheet>
   );
 }

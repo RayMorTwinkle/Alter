@@ -1,6 +1,6 @@
 import { ArrowUp, CheckCircle, Stop, WarningCircle, HandPalm, Wrench } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { clock } from "../format.ts";
+import { clock, pretty } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Markdown } from "../markdown.tsx";
 import type { State } from "../store.ts";
@@ -53,6 +53,34 @@ export function Chat({ state, onSend, onStop, onAnswer, onOpenTask }: Props) {
   );
 }
 
+export function formatArgs(raw?: string) {
+  if (!raw || raw === "{}") return "";
+  try { return pretty(JSON.parse(raw)); } catch { return raw; }
+}
+
+export function ToolCall({ item, onOpenTask }: { item: TimelineItem; onOpenTask: Props["onOpenTask"] }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const hasArgs = Boolean(item.args && item.args !== "{}");
+  return (
+    <div className={`tool-call-block ${item.isError ? "failed" : ""}`}>
+      <p className={`tool-call ${item.isError ? "failed" : ""}`}>
+        <Wrench /> <code>{item.tool}</code>
+        {hasArgs && <span className="tool-args">{item.args}</span>}
+        {item.isError && <span className="tool-error">{t.steps.failed}</span>}
+        {hasArgs && (
+          <button className="text-btn tool-toggle" aria-expanded={open} onClick={() => setOpen(v => !v)}>
+            {open ? t.toolCallDetail.hideArgs : t.toolCallDetail.showArgs}
+          </button>
+        )}
+        {item.taskId && <button className="link" onClick={() => onOpenTask(item.taskId!)}>{item.taskId}</button>}
+      </p>
+      {item.isError && item.errorDetail && <p className="tool-error-detail">{item.errorDetail}</p>}
+      {open && hasArgs && <pre className="tool-args-pre">{formatArgs(item.args)}</pre>}
+    </div>
+  );
+}
+
 function Item({ item, pending, onAnswer, onOpenTask }: {
   item: TimelineItem; pending: PermissionRequest[];
   onAnswer: Props["onAnswer"]; onOpenTask: Props["onOpenTask"];
@@ -86,14 +114,7 @@ function Item({ item, pending, onAnswer, onOpenTask }: {
         </details>
       );
     case "tool":
-      return (
-        <p className={`tool-call ${item.isError ? "failed" : ""}`}>
-          <Wrench /> <code>{item.tool}</code>
-          {item.args && item.args !== "{}" && <span className="tool-args">{item.args}</span>}
-          {item.isError && <span className="tool-error">{t.steps.failed}</span>}
-          {item.taskId && <button className="link" onClick={() => onOpenTask(item.taskId!)}>{item.taskId}</button>}
-        </p>
-      );
+      return <ToolCall item={item} onOpenTask={onOpenTask} />;
     case "report": {
       const failed = /^task \S+ failed/i.test(item.text);
       const body = item.text.replace(/^task \S+ (finished|failed):\s*/i, "");

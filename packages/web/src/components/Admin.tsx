@@ -59,7 +59,7 @@ function inviteState(invite: GatewayInvite, t: ReturnType<typeof useT>["gw"], us
   return usage + (invite.uses < invite.maxUses ? `${t.expires} ${clock(invite.expiresAt)}` : "");
 }
 
-export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () => void }) {
+export function AdminPanel({ selfId }: { selfId: string }) {
   const t = useT().gw;
   const [users, setUsers] = useState<GatewayAdminUser[] | null>(null);
   const [invites, setInvites] = useState<GatewayInvite[]>([]);
@@ -98,7 +98,7 @@ export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () =>
   const sorted = [...invites].sort((a, b) => Number(open(b)) - Number(open(a)) || b.createdAt - a.createdAt);
 
   return (
-    <Sheet title={t.admin} onClose={onClose}>
+    <>
       {error && <p className="form-error">{error}</p>}
       <section className="settings-block">
         <h3>{t.users}</h3>
@@ -140,6 +140,14 @@ export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () =>
           ))}
         </ul>
       </section>
+    </>
+  );
+}
+
+export function AdminSheet({ selfId, onClose }: { selfId: string; onClose: () => void }) {
+  return (
+    <Sheet title={useT().gw.admin} onClose={onClose}>
+      <AdminPanel selfId={selfId} />
     </Sheet>
   );
 }

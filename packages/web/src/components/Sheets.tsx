@@ -7,7 +7,9 @@ import { Markdown } from "../markdown.tsx";
 import type { Funnel, Notification, Task, TranscriptItem, UsageRow } from "../types.ts";
 import { StatusChip } from "./Panels.tsx";
 
-export function Sheet({ title, onClose, children, wide }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Sheet({ title, onClose, headerExtra, children, wide }: {
+  title: ReactNode; onClose: () => void; headerExtra?: ReactNode; children: ReactNode; wide?: boolean;
+}) {
   const t = useT();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -21,6 +23,7 @@ export function Sheet({ title, onClose, children, wide }: { title: ReactNode; on
           <h2>{title}</h2>
           <button className="icon-btn ghost" onClick={onClose} aria-label={t.close}><X /></button>
         </header>
+        {headerExtra}
         <div className="sheet-body">{children}</div>
       </aside>
     </div>
@@ -85,7 +88,7 @@ function TranscriptRow({ item }: { item: TranscriptItem }) {
     case "tool_result":
       return (
         <li className={`tr tr-result ${item.isError ? "error" : ""}`}>
-          <details>
+          <details open={item.isError}>
             <summary>{t.toolResult} <code>{item.tool}</code></summary>
             <pre>{item.text}</pre>
           </details>
