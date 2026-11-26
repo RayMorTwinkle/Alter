@@ -34,25 +34,34 @@ export const initialState: State = {
   timeline: [], tasks: [], pending: [], ledger: [], leases: [], busy: false, draft: null, connection: "connecting", agenda: null, memory: null, heartbeatTick: 0, extPlugins: [], feedback: null, nodes: null,
 };
 
+const byTime = (a: TimelineItem, b: TimelineItem) => a.at - b.at;
+
 function upsert(timeline: TimelineItem[], item: TimelineItem) {
   const index = timeline.findIndex(existing => existing.id === item.id);
-  if (index === -1) return [...timeline, item].sort((a, b) => a.at - b.at);
+  if (index === -1) {
+    const last = timeline.at(-1);
+    const next = [...timeline, item];
+    return !last || last.at <= item.at ? next : next.sort(byTime);
+  }
   const next = timeline.slice();
   next[index] = item;
-  return next;
+  return timeline[index]!.at === item.at ? next : next.sort(byTime);
 }
 
 export function reduce(state: State, action: Action): State {
   switch (action.type) {
     case "snapshot":
-      return { ...state, ...action.snapshot, draft: null };
+      return { ...state, ...action.snapshot, timeline: [...action.snapshot.timeline].sort(byTime), draft: null };
     case "timeline": {
       const draft = state.draft?.id === action.item.id ? null : state.draft;
       return { ...state, timeline: upsert(state.timeline, action.item), draft };
     }
     case "delta":
-      // A late delta for an answer that already settled must not resurrect the draft.
-      if (state.timeline.some(item => item.id === action.id)) return state;
+      // Settling this ID or replacing the snapshot clears the current draft.
+      // Only a switch to a different ID needs the late-delta check.
+      if (state.draft?.id === action.id) {
+        if (state.draft.text === action.text) return state;
+      } else if (state.timeline.some(item => item.id === action.id)) return state;
       return { ...state, draft: { id: action.id, text: action.text } };
     case "tasks":
       return { ...state, tasks: action.tasks };
