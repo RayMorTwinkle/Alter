@@ -59,8 +59,10 @@ function Item({ item, pending, onAnswer, onOpenTask }: {
 }) {
   const t = useT();
   switch (item.kind) {
-    case "user":
-      return <article className="msg user"><Markdown text={item.text} /><time>{item.source === "feishu" && `${t.viaFeishu} · `}{clock(item.at)}</time></article>;
+    case "user": {
+      const label = item.source === "feishu" ? t.viaFeishu : item.sourceLabel;
+      return <article className="msg user"><Markdown text={item.text} /><time>{label && `${label} · `}{clock(item.at)}</time></article>;
+    }
     case "message":
       return (
         <article className="msg assistant">

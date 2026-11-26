@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { defineTool, reply, schema, type AlterPlugin } from "@alter/core";
+import { defineTool, reply, schema, type AlterPlugin, type ScheduleEvents } from "@alter/core";
 import { calendarTime } from "./time.ts";
 
 const { bool, obj, opt, str } = schema;
@@ -114,6 +114,13 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
     return reply(JSON.stringify(display(row)));
   }
 
+  const scheduleEvents: ScheduleEvents = {
+    get(id) {
+      return db.prepare("SELECT start, end FROM events WHERE id = ? AND deletedAt IS NULL").get(id) as
+        Pick<AgendaEvent, "start" | "end"> | undefined;
+    },
+    subscribe,
+  };
   return {
     timeZone,
     describe({ tool, arguments: { id } }) {
@@ -121,13 +128,7 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
       const row = db.prepare("SELECT title, start, end FROM events WHERE id = ?").get(id) as Pick<Row, "title" | "start" | "end"> | undefined;
       if (row) return { id, title: row.title, start: time.describe(row.start).iso, end: time.describe(row.end).iso };
     },
-    calendarEvents: {
-      get(id) {
-        return db.prepare("SELECT start, end FROM events WHERE id = ? AND deletedAt IS NULL").get(id) as
-          Pick<AgendaEvent, "start" | "end"> | undefined;
-      },
-      subscribe,
-    },
+    scheduleEvents, calendarEvents: scheduleEvents,
     agenda(days = 7) {
       const from = time.midnight(now());
       return overlapping(from, time.midnight(from, days), false).map(row => ({
@@ -136,7 +137,7 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
       }));
     },
     subscribe,
-    capability: { id: "calendar", mainLeasable: true, actions: [
+    capability: { id: "calendar", summary: "calendar（日历，可管理标题、时间、地点、备注）", mainLeasable: true, actions: [
       { name: "list", effect: "read" }, { name: "create", effect: "write" }, { name: "update", effect: "write" },
       { name: "delete", effect: "write" }, { name: "restore", effect: "write" },
     ] },
@@ -179,4 +180,4 @@ export function createCalendarPlugin({ dataDir, timeZone, now = Date.now }: {
   };
 }
 
-export { calendarDescription, calendarInstance } from "./settings.ts";
+export { calendarDescription, calendarInstance, calendarWeb, type Agenda } from "./settings.ts";

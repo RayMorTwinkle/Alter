@@ -1,16 +1,5 @@
-import type { IncomingMessage } from "node:http";
 import { isApprovalMode, isCompactAtTokens, isHeartbeatSettings, type AlterApp } from "@alter/core";
-import type { PluginManager } from "./plugin-manager.ts";
 import { HttpError } from "./static.ts";
-
-export function redirectUri(req: IncomingMessage, plugins?: PluginManager) {
-  const configured = plugins?.list().find(p => p.id === "feishu")?.values.ALTER_FEISHU_REDIRECT_URI;
-  if (typeof configured === "string") return configured;
-  const protocol = "encrypted" in req.socket && req.socket.encrypted ? "https" : "http";
-  const host = req.headers.host;
-  if (!host || !/^(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])(?::\d{1,5})?$/.test(host)) throw new HttpError(400, "Invalid Host");
-  return protocol + "://" + host + "/api/feishu/oauth/callback";
-}
 
 export function settingsWriter(app: AlterApp) {
   let settingsWrite = Promise.resolve();

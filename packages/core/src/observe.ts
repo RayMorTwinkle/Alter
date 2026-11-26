@@ -15,7 +15,15 @@ import { startsTurn } from "./wake.ts";
 import { assistantId, queuedItem, timelineEntries, type TimelineItem } from "./timeline.ts";
 
 export type AlterApp = Awaited<ReturnType<typeof openAlter>>;
-export type AlterSurface = { id: string; start(app: AlterApp): Promise<() => Promise<void>> };
+export type AlterSurface = { id: string; label?: string; start(app: AlterApp): Promise<() => Promise<void>> };
+export async function startSurface(app: AlterApp, surface: AlterSurface) {
+  const unregister = app.registerUserChannel(surface);
+  try {
+    const stop = await surface.start(app);
+    return async () => { try { await stop(); } finally { unregister(); } };
+  } catch (error) { unregister(); throw error; }
+}
+
 export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "leaseId" | "checking"> & { arguments: unknown };
 type Task = Omit<TaskRecord, "watch" | "conversationId" | "worker" | "heartbeatReview" | "lastEntry" | "messages" | "wakeId" | "endedAt" | "status"> & {
   status: Exclude<TaskRecord["status"], "cancelled">;

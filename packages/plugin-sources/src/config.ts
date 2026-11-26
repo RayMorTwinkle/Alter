@@ -1,8 +1,7 @@
-import type { PluginField } from "@alter/core";
+import { PluginHttpError, type PluginField } from "@alter/core";
 
-export class SourceError extends Error {
-  status: number;
-  constructor(message: string, status = 400) { super(message); this.status = status; }
+export class SourceError extends PluginHttpError {
+  constructor(message: string, status = 400) { super(status, message); }
 }
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 export function keys(v: Record<string, unknown>, allowed: string[]) {

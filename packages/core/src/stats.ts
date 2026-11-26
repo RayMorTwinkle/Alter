@@ -102,8 +102,8 @@ function reviewStats(reviews: Record<string, Review>, askedUser: number, start: 
     byApprover: (["user", "judge", "timeout"] as const).map(approver => ({ approver, count: counts[approver] })) };
 }
 
-export async function stats(range: StatsRange, timeZone: string, { app, dir, feishu = false }: {
-  app: AlterApp; dir: string; feishu?: boolean;
+export async function stats(range: StatsRange, timeZone: string, { app, dir, feishu = false, hasExternalChannel = feishu }: {
+  app: AlterApp; dir: string; feishu?: boolean; hasExternalChannel?: boolean;
 }) {
   const at = app.now();
   const days = range === "day" ? 1 : range === "7d" ? 7 : range === "30d" ? 30 : undefined;
@@ -246,7 +246,7 @@ export async function stats(range: StatsRange, timeZone: string, { app, dir, fei
   const leases = leaseStats(leaseHistory?.byId ?? {}, includes);
   for (const item of leases.items) earliest = Math.min(earliest, item.at);
   const calendarDays = days ?? 1 + (Date.parse(dates.format(at)) - Date.parse(dates.format(earliest))) / 86_400_000;
-  const proactive = funnel(notices, timeZone, calendarDays, { at, feishu });
+  const proactive = funnel(notices, timeZone, calendarDays, { at, hasExternalChannel });
   const silent = Object.keys(wakes?.silent ?? {}).filter(id => wakeDetails.has(id)).length;
   return { range, timeZone, at, total, leases, silent, byRole: [...roles].map(([role, usage]) => ({ role, ...usage })),
     byModel: [...models].map(([model, usage]) => ({ model, ...usage })),

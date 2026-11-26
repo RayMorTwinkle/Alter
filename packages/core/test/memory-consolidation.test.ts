@@ -139,3 +139,53 @@ it("recovers a committed batch without replaying it or consuming later turns", a
     expect(next.memory.store.changes()).toHaveLength(1);
   } finally { await next.close(); }
 });
+
+it("restores marked custom channels and legacy Feishu inputs from SQLite without loading their plugins", async ({ onTestFinished }) => {
+  const dir = await mkdtemp(join(tmpdir(), "alter-channel-history-"));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  const open = async () => openAlter(await openNodeSqliteStorage(join(dir, "main.sqlite")), createModels(),
+    { provider: "offline", modelId: "unused" });
+  const app = await open();
+  await app.main.commit(async tx => {
+    for (const [id, metadata] of [
+      ["legacy", { source: "feishu" }], ["custom", { source: "wechat", userChannel: true }],
+      ["external", { source: "wechat" }], ["internal", { source: "feishu", userChannel: false }],
+    ] as const) {
+      await tx.appendEntry(app.main.id, { kind: "alter.user-input", data: { id, text: id, at: 1, ...metadata } });
+    }
+    delete (await tx.doc(MemoryInbox, app.main.id)).initialized;
+  }, context);
+  await app.close();
+  const restored = await open();
+  try {
+    expect((await restored.harness.snapshot(MemoryInbox, restored.main.id, context))?.messages.map(m => m.id))
+      .toEqual(["legacy", "custom"]);
+  } finally { await restored.close(); }
+});
+
+it("uses the host's registered surfaces and keeps labels separate from user-channel membership", async () => {
+  const open = (options: Parameters<typeof openAlter>[5] = {}) => openAlter(new MemoryStorage(), createModels(),
+    { provider: "offline", modelId: "unused" }, undefined, {}, options);
+  let stopped = false;
+  const owner = await open({ userChannels: [{ id: "terminal" }], surfaces: [{ id: "team-chat", label: "团队聊天",
+    async start(app) {
+      await submitMessage(app.main, "连接成功", "team-chat", "connected");
+      return async () => { stopped = true; };
+    } }] });
+  try {
+    const other = await open();
+    try {
+      await submitMessage(other.main, "外部摘要", "team-chat", "external", "团队聊天");
+      await submitMessage(owner.main, "用户输入", "terminal", "terminal-1", "远程终端");
+      await Promise.all([owner.main.waitForIdle(context), other.main.waitForIdle(context)]);
+      expect((await other.harness.snapshot(MemoryInbox, other.main.id, context))?.turns).toBe(0);
+      expect((await owner.harness.snapshot(MemoryInbox, owner.main.id, context))?.turns).toBe(2);
+      const entries = (await owner.main.entries({}, 30, undefined, context)).items.filter(e => e.kind === "alter.user-input");
+      expect(entries.map(e => e.data)).toEqual([
+        expect.objectContaining({ userChannel: true, sourceLabel: "远程终端" }),
+        expect.objectContaining({ userChannel: true, sourceLabel: "团队聊天" }),
+      ]);
+    } finally { await other.close(); }
+  } finally { await owner.close(); }
+  expect(stopped).toBe(true);
+});

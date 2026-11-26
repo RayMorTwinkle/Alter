@@ -1,3 +1,4 @@
+import { feishuWeb } from "./web.ts";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -67,5 +68,6 @@ export function feishuInstance(env: NodeJS.ProcessEnv, dir: string, changed: () 
     if (connection !== "connected") return { state: connection === "failed" ? "error" : "connecting", detail: "飞书长连接尚未建立。", checks };
     return paired && account.connected ? { state: "ok", checks } : { state: "needs-config", detail: account.detail ?? "请完成机器人配对和用户账号授权。", checks };
   }
-  return { plugin: connector.plugin, surface, account: connector.account, status };
+  return { plugin: connector.plugin, surface, status, ...feishuWeb(surface, connector.account, ctx =>
+    env.ALTER_FEISHU_REDIRECT_URI || ctx.origin() + "/api/feishu/oauth/callback") };
 }

@@ -2,7 +2,7 @@ import type { NodeHub } from "./nodes.ts";
 import { randomUUID } from "node:crypto";
 import { arr, bool, compile, int, lit, num, obj, oneOf, opt, str, union, type Static } from "@earendil-works/pi-schema";
 import { calendarTime } from "./calendar-time.ts";
-import type { AlterPlugin, Capability } from "./capabilities.ts";
+import type { ScheduleEvents, Capability } from "./capabilities.ts";
 import {
   context, conversationDoc, createRegistry, defineExtension, defineSignal, defineTask, defineTool, reply,
   ROOT_CONVERSATION_ID as root, type Conversation, type Harness, type TaskId, type Tx,
@@ -30,7 +30,7 @@ const changeSchema = compile(changes);
 const inputSchema = compile(parameters);
 type Input = Static<typeof parameters>;
 export type ScheduledTask = Input & {
-  action?: Input["type"]; id: string; createdAt: number; nextAt: number | null; paused: boolean;
+  eventSource?: string; action?: Input["type"]; id: string; createdAt: number; nextAt: number | null; paused: boolean;
   lastRun?: { dueAt: number; at: number; missed: boolean; skipped?: string; taskId?: string };
 };
 type Row = { item: ScheduledTask; worker: TaskId; wakeKey?: string };
@@ -47,10 +47,26 @@ function timestamp(ms: number) {
 }
 
 export function createScheduledTasks(main: () => Conversation, registry: ReturnType<typeof createRegistry>, timeZone: string,
-  now: () => number, getCalendar: () => AlterPlugin["calendarEvents"], services: () => Services) {
+  now: () => number, getEvents: () => ReadonlyMap<string, ScheduleEvents>, services: () => Services) {
   const time = calendarTime(timeZone);
   const openedAt = now();
-  function next(trigger: Input["trigger"], after: number, base: number) {
+  function sourceFor(trigger: Input["trigger"], legacy = false) {
+    if (trigger.kind !== "event") return;
+    const matches = [...getEvents()].filter(([, source]) => source.get(trigger.eventId));
+    if (matches.length > 1) {
+      if (legacy) return;
+      throw new Error("Ambiguous schedule event ID");
+    }
+    return matches[0]?.[0];
+  }
+  function eventSource(item: ScheduledTask) {
+    // Older rows only have an event ID. Bind them when the owning provider comes online.
+    const id = item.eventSource ?? sourceFor(item.trigger, true);
+    if (id === undefined) return;
+    item.eventSource = id;
+    return getEvents().get(id);
+  }
+  function next(trigger: Input["trigger"], after: number, base: number, sourceId?: string) {
     switch (trigger.kind) {
       case "at": return time.parse(trigger.at).ms;
       case "every": {
@@ -59,9 +75,7 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       }
       case "daily": return time.nextDaily(after, trigger.time, trigger.weekdays);
       case "event": {
-        const calendar = getCalendar();
-        if (!calendar) throw new Error("Calendar is unavailable");
-        const event = calendar.get(trigger.eventId);
+        const event = sourceId === undefined ? undefined : getEvents().get(sourceId)?.get(trigger.eventId);
         return event ? timestamp(event[trigger.anchor] + Math.round(trigger.offsetMinutes * minute)) : null;
       }
     }
@@ -123,13 +137,13 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       const item = row.item;
       item.type ??= item.action!;
       const at = runtime.now();
-      const calendar = getCalendar();
-      if (calendar && item.trigger.kind === "event" && item.nextAt !== null) {
-        const due = next(item.trigger, at, item.createdAt);
+      const activeSource = item.trigger.kind === "event" && eventSource(item);
+      if (activeSource && item.nextAt !== null) {
+        const due = next(item.trigger, at, item.createdAt, item.eventSource);
         if (due !== item.nextAt) await setEventTime(tx, item, due);
         if (due === null) return complete;
       }
-      const active = !item.paused && (item.trigger.kind !== "event" || !!calendar);
+      const active = !item.paused && (item.trigger.kind !== "event" || !!activeSource);
       if (active && item.nextAt !== null && item.nextAt <= at) {
         const settling = await fire(tx, item, item.nextAt, at);
         if (settling) return { status: "waiting", on: [settling], policy: "allSettled", checkpoint: { phase: "tick" } };
@@ -155,10 +169,11 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       if (Object.hasOwn(byId, id) || Object.hasOwn(removed, id)) return id;
       if (input.continue_from && !Object.hasOwn((await tx.doc(Tasks, root)).byId, input.continue_from)) throw new Error("Unknown task");
       const createdAt = now();
-      const nextAt = next(input.trigger, createdAt, createdAt);
+      const eventSource = sourceFor(input.trigger);
+      const nextAt = next(input.trigger, createdAt, createdAt, eventSource);
       if (nextAt === null) throw new Error("Unknown or deleted event");
       const task = await tx.createTask(worker, id, { ownership: { kind: "conversation" }, background: true });
-      byId[id] = { worker: task, item: { ...input, action: input.type, id, paused: false, nextAt, createdAt } };
+      byId[id] = { worker: task, item: { ...input, ...(eventSource && { eventSource }), action: input.type, id, paused: false, nextAt, createdAt } };
       return id;
     }, context);
   }
@@ -184,7 +199,8 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       const resumed = item.paused && status === "active";
       const at = now();
       if (trigger || (resumed && (item.trigger.kind === "every" || item.trigger.kind === "daily"))) {
-        const due = next(trigger ?? item.trigger, at, item.createdAt);
+        const source = trigger ? sourceFor(trigger) : item.eventSource;
+        const due = next(trigger ?? item.trigger, at, item.createdAt, source);
         if (due === null) throw new Error("Unknown or deleted event");
         await signal(tx, row);
         if (item.nextAt === null) {
@@ -192,6 +208,8 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
           delete row.wakeKey;
         }
         item.nextAt = due;
+        if (source) item.eventSource = source;
+        else delete item.eventSource;
       } else if (status && item.paused !== (status === "paused")) await signal(tx, row);
       if (trigger) item.trigger = trigger;
       if (status) item.paused = status === "paused";
@@ -210,8 +228,7 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       createdAt: item.createdAt, nextAt: item.status === "done" ? null : item.at, paused: false } };
   }
   async function start() {
-    const calendar = getCalendar();
-    function sync(eventId?: string, deleted = false) {
+    function sync(sourceId?: string, eventId?: string, deleted = false) {
       return main().commit(async tx => {
         const { byId } = await tx.doc(ScheduledTasks, root);
         const changes = [];
@@ -219,7 +236,9 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
           row.item.type ??= row.item.action!;
           const { trigger, nextAt, createdAt } = row.item;
           if (trigger.kind !== "event" || nextAt === null || (eventId && eventId !== trigger.eventId)) continue;
-          const due = deleted ? null : calendar ? next(trigger, now(), createdAt) : nextAt;
+          const source = eventSource(row.item);
+          if (sourceId !== undefined && sourceId !== row.item.eventSource) continue;
+          const due = deleted ? null : source ? next(trigger, now(), createdAt, row.item.eventSource) : nextAt;
           if (!eventId || due !== nextAt) changes.push({ row, due });
         }
         // Admit every signal read before the first table write, including timeline entries.
@@ -228,11 +247,15 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       }, context);
     }
     let pending = Promise.resolve();
-    const stop = calendar?.subscribe(id => {
-      pending = sync(id, !calendar.get(id)).catch(error => console.error("Schedule calendar refresh failed", error));
-    });
-    try { await sync(); } catch (error) { stop?.(); throw error; }
-    return async () => { stop?.(); await pending; };
+    const stops: (() => void)[] = [];
+    const stop = () => { for (const off of stops) off(); };
+    try {
+      for (const [sourceId, source] of getEvents()) stops.push(source.subscribe(id => {
+        pending = sync(sourceId, id, !source.get(id)).catch(error => console.error("Schedule event refresh failed", error));
+      }));
+      await sync();
+    } catch (error) { stop(); throw error; }
+    return async () => { stop(); await pending; };
   }
   const actions: Capability["actions"] = [
     { name: "create", effect: "write" }, { name: "list", effect: "read" },
@@ -247,8 +270,8 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
       parameters: changes, replay: "safe", execute: async args => await set(args) ? reply(args.id) : reply("Unknown or finished schedule", true) }),
   ];
   async function schedule() {
-    return (await list()).map(({ id, brief, type, trigger, paused, nextAt }) => {
-      const offline = trigger.kind === "event" && !getCalendar();
+    return (await list()).map(({ id, brief, type, trigger, paused, nextAt, eventSource }) => {
+      const offline = trigger.kind === "event" && (!eventSource || !getEvents().has(eventSource));
       let reason: string;
       switch (trigger.kind) {
         case "at": reason = `在 ${trigger.at} 执行一次`; break;
@@ -257,7 +280,7 @@ export function createScheduledTasks(main: () => Conversation, registry: ReturnT
         case "event": reason = `按日程 ${trigger.eventId} 的${trigger.anchor === "start" ? "开始" : "结束"}时间偏移 ${trigger.offsetMinutes} 分钟执行`; break;
       }
       return { id, brief, type, trigger, paused, nextAt: paused || offline ? null : nextAt,
-        reason: reason + (paused ? "，当前已暂停。" : offline ? "，等待日历可用。" : nextAt === null ? "，已结束。" : "。") };
+        reason: reason + (paused ? "，当前已暂停。" : offline ? "，等待日程来源可用。" : nextAt === null ? "，已结束。" : "。") };
     });
   }
   return { create, list, set, importReminder, start, actions, tools, schedule,

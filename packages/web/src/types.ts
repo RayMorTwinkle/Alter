@@ -26,6 +26,7 @@ export type TimelineItem = {
   status?: "queued";
   model?: string;
   source?: string;
+  sourceLabel?: string;
 };
 
 export type AlwaysAllowedCapabilities = { capabilities: string[] };
@@ -90,7 +91,7 @@ export type ScheduleTrigger =
 
 export type ScheduledTask = {
   // v1.13 snapshots only have action. v1.21 returns both fields.
-  id: string; brief: string; trigger: ScheduleTrigger; type?: "reminder" | "task" | "wake"; action: "reminder" | "task" | "wake";
+  id: string; brief: string; trigger: ScheduleTrigger; eventSource?: string; type?: "reminder" | "task" | "wake"; action: "reminder" | "task" | "wake";
   continue_from?: string; thinking?: "low" | "medium" | "high" | "max";
   createdAt: number; nextAt: number | null; paused: boolean;
   lastRun?: { dueAt: number; at: number; missed: boolean; skipped?: string; taskId?: string };
@@ -98,7 +99,7 @@ export type ScheduledTask = {
 
 export type Notification = {
   category?: string; // v1.20 external event kind.
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web" | "cli" | "feishu"; level: "now" | "digest" | "silent";
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: string; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing";
   status: "unread" | "read"; feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -144,7 +145,7 @@ export type TranscriptItem =
   | { kind: "tool_result"; tool: string; text: string; isError: boolean; at: number };
 
 export type Watch = {
-  id: string; brief: string; where: { channel: "feishu" | "mail"; chatId?: string; contact?: string };
+  id: string; brief: string; where: { channel: string; chatId?: string; contact?: string };
   createdAt: number; until: number; keywords: string[]; thinking: NonNullable<Task["thinking"]>;
   status: "running" | "completed" | "cancelled" | "failed"; wakes: number; pollError?: string;
 };

@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { context, type PluginView } from "@alter/core";
 import { browserDescription } from "@alter/plugin-browser";
 import { calendarDescription, calendarInstance } from "@alter/plugin-calendar";
-import { feishuDescription } from "@alter/plugin-feishu";
+import { feishuDescription, feishuSetupWeb } from "@alter/plugin-feishu";
 import { mailDescription } from "@alter/plugin-mail";
 import { say, toolCall } from "../../core/test/fixtures/gateway.ts";
 import { createPluginManager } from "../src/plugin-manager.ts";
@@ -57,7 +57,7 @@ it("serializes reloads, checks and masks saved and environment credentials on ev
   let checks = 0;
   const fallback = "offline-env-credential", saved = "offline-saved-credential";
   const web = await setup(undefined, false, undefined, Date.now, (app, dir) => createPluginManager(app, dir, [
-    { description: feishuDescription, open(env) {
+    { description: feishuDescription, setupWeb: feishuSetupWeb, open(env) {
       const secret = env.ALTER_FEISHU_APP_SECRET!;
       if (env.ALTER_FEISHU_APP_ID === "invalid") throw new Error("SDK included " + secret);
       return { plugin: { capability: { id: "feishu", actions: [], mainLeasable: false }, tools: [], async start() {

@@ -20,27 +20,34 @@ function mailEvent(row: FetchMessageObject, validity: bigint, at: number): Exter
 }
 
 export function mailWatchSource(config: MailConfig, clients: MailClients): WatchSource {
+  function validate(chatId?: string) {
+    if (chatId !== undefined) throw new Error("邮件盯梢不支持 chatId，请使用 contact");
+  }
   return {
-    async authorize() {
+    async authorize({ chatId }) {
+      validate(chatId);
       try { await withImap(config, clients, client => client.mailboxOpen("INBOX", { readOnly: true })); }
       catch { throw new Error("无法读取收件箱，请检查 IMAP 连接和授权"); }
     },
-    poll: ({ contact }, since, until) => withImap(config, clients, async client => {
-      const box = await client.mailboxOpen("INBOX", { readOnly: true });
-      const ids = await uids(client, { since: new Date(since - 86_400_000) });
-      const events: ExternalEvent[] = [];
-      for (let i = 0; i < ids.length; i += 100) {
-        for (const row of await client.fetchAll(ids.slice(i, i + 100), { envelope: true, internalDate: true }, { uid: true })) {
-          const at = receivedAt(row);
-          if (at === undefined) throw new Error("IMAP 未返回收件时间");
-          const event = mailEvent(row, box.uidValidity, at);
-          if (event.at < since || event.at >= until || (contact && ![event.contact, event.contactName].some(v => v?.toLowerCase() === contact.toLowerCase()))) continue;
-          event.text = event.summary + "\n" + (await read(client, row.uid)).text;
-          events.push(event);
+    async poll({ chatId, contact }, since, until) {
+      validate(chatId);
+      return withImap(config, clients, async client => {
+        const box = await client.mailboxOpen("INBOX", { readOnly: true });
+        const ids = await uids(client, { since: new Date(since - 86_400_000) });
+        const events: ExternalEvent[] = [];
+        for (let i = 0; i < ids.length; i += 100) {
+          for (const row of await client.fetchAll(ids.slice(i, i + 100), { envelope: true, internalDate: true }, { uid: true })) {
+            const at = receivedAt(row);
+            if (at === undefined) throw new Error("IMAP 未返回收件时间");
+            const event = mailEvent(row, box.uidValidity, at);
+            if (event.at < since || event.at >= until || (contact && ![event.contact, event.contactName].some(v => v?.toLowerCase() === contact.toLowerCase()))) continue;
+            event.text = event.summary + "\n" + (await read(client, row.uid)).text;
+            events.push(event);
+          }
         }
-      }
-      return events;
-    }),
+        return events;
+      });
+    },
   };
 }
 

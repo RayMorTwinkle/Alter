@@ -25,7 +25,8 @@ function Watches({ items, onCancel }: { items: Watch[]; onCancel: (id: string) =
               <div className="row-title">{w.brief}</div>
               <div className="row-meta">
                 <span className="chip">{t.status[w.status]}</span>
-                <span>{w.where.channel === "mail" ? t.mail : w.where.chatId ? t.chat(w.where.chatId) : w.where.contact ? t.contact(w.where.contact) : t.feishu}</span>
+                <span>{w.where.channel === "mail" ? t.mail : w.where.channel === "feishu" ? t.feishu : w.where.channel}
+                  {w.where.chatId ? ` · ${t.chat(w.where.chatId)}` : w.where.contact ? ` · ${t.contact(w.where.contact)}` : ""}</span>
                 {w.keywords.length > 0 && <span>{t.keywords(w.keywords.join("、"))}</span>}
                 <span>{w.status === "running" ? t.until(clock(w.until)) : t.ended(clock(w.until))}</span>
                 <span>{t.wakes(w.wakes)}</span>

@@ -170,7 +170,8 @@ test("production gateway starts a real restricted server, reopens accounts and r
   expect((await fetch("http://127.0.0.1:" + childPort + "/")).status).toBe(401);
   expect((await fetch("http://127.0.0.1:" + childPort + "/api/state", { headers: { "X-Alter-Gateway-Secret": "wrong", cookie } })).status).toBe(401);
   for (const path of ["/api/login", "/api/logout"]) expect((await call(path, "POST", {}, cookie)).status).toBe(404);
-  for (const path of ["/api/adapters/presets", "/api/ext-plugins", "/api/plugins/browser/check", "/api/plugins/cli-local/check", "/api/feishu"]) {
+  for (const path of ["/api/adapters/presets", "/api/ext-plugins", "/api/plugins/browser/check", "/api/plugins/cli-local/check",
+    "/api/feishu", "/api/plugins/feishu/guide", "/api/feishu/oauth/callback"]) {
     expect((await call(path, "GET", undefined, cookie)).status).toBe(403);
   }
   expect((await call("/api/service", "PUT", { autostart: true }, cookie)).status).toBe(403);

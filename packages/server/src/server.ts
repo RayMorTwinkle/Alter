@@ -7,16 +7,15 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import {
   AllowedCapabilities, answerUserPermission, approvalStats, parseApprovalDecision, context, funnel, interacted, observeSurface, readTranscript, stopMainTurn, submitMessage, updateNotification,
-  validModelOverrides, validHarness, FeedbackError, MemoryConflict, MemoryInputError, NodeSessionsError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification,
+  validModelOverrides, validHarness, FeedbackError, MemoryConflict, MemoryInputError, NodeSessionsError, schema, stats, subscribeHeartbeat, Tasks, usageSummary, type AlterApp, type Notification, PluginHttpError, type PluginSseFeed,
 } from "@alter/core";
-import { feishuGuide, type FeishuAccount, type FeishuPairing } from "@alter/plugin-feishu";
-import { templates, SourceError } from "@alter/plugin-sources";
+import { legacyPluginWeb, type LegacyPluginOptions } from "./legacy-plugin-options.ts";
 import { PluginError } from "@alter/plugin-runtime";
 import { adapterPresets, presetConfig } from "./adapters/presets.ts";
-import type { PluginManager } from "./plugin-manager.ts";
-import { redirectUri, settingsWriter } from "./settings-api.ts";
+import type { WebPluginManager } from "./plugins.ts";
+import { settingsWriter } from "./settings-api.ts";
 import { openService, type ServiceOptions } from "./service.ts";
-import { body, json, readCookie } from "./http.ts";
+import { body, json, readCookie, requestOrigin } from "./http.ts";
 import { trustedGateway } from "./gateway-trust.ts";
 import { HttpError, requestPath, serveStatic } from "./static.ts";
 
@@ -38,12 +37,10 @@ function legacyMemory(req: IncomingMessage) {
   return req.headers["sec-fetch-dest"] === "empty" && req.headers.accept === "*/*";
 }
 
-// Structural so the server does not depend on a calendar implementation.
-export type Agenda = { timeZone: string; agenda(): unknown[]; subscribe(listener: () => void): () => void };
+export type { Agenda } from "./legacy-plugin-options.ts";
 
-type WebOptions = {
-  password: string; dataDir: string; dist?: string; calendar?: Agenda; plugins?: PluginManager;
-  feishu?: { pairing(): FeishuPairing }; feishuAccount?: FeishuAccount;
+type WebOptions = LegacyPluginOptions & {
+  password: string; dataDir: string; dist?: string; plugins?: WebPluginManager;
   service?: ServiceOptions;
 };
 
@@ -81,36 +78,41 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     if (event === "notifications" && clients.size) webDelivery(data);
   });
   const { plugins } = options;
-  const feishu = () => plugins?.active("feishu")?.surface ?? options.feishu;
-  const account = () => plugins?.active("feishu")?.account ?? options.feishuAccount;
-  const calendar = () => plugins?.active("calendar")?.calendar ?? options.calendar;
-  const agenda = () => ({ timeZone: calendar()?.timeZone ?? app.timeZone, events: calendar()?.agenda() ?? [] });
+  const fallback = legacyPluginWeb(options, !plugins);
+  const extensions = () => [...plugins?.web() ?? [], ...fallback];
+  const hasExternalChannel = () => extensions().some(web => web.externalDelivery);
   function broadcast(event: string, data: unknown) {
     const message = frame(event, data);
     for (const res of clients.keys()) write(res, message);
   }
-  let attached = calendar();
-  let unsubscribe = attached?.subscribe(() => broadcast("calendar", agenda()));
-  const stopPlugins = plugins?.subscribe(() => {
-    const next = calendar();
-    if (attached !== next) {
-      unsubscribe?.();
-      attached = next;
-      unsubscribe = next?.subscribe(() => broadcast("calendar", agenda()));
-      broadcast("calendar", agenda());
+  const feeds = new Map<string, { feed: PluginSseFeed; stop(): void }>();
+  function bindFeeds() {
+    const next = new Map<string, PluginSseFeed>();
+    for (const web of extensions()) for (const feed of web.sse ?? []) {
+      if (!next.has(feed.event)) next.set(feed.event, feed);
     }
+    for (const [event, binding] of feeds) {
+      if (next.get(event) === binding.feed) continue;
+      binding.stop();
+      feeds.delete(event);
+      if (!next.has(event) && clients.size) broadcast(event, binding.feed.cleared ?? null);
+    }
+    for (const [event, feed] of next) {
+      if (feeds.has(event)) continue;
+      const publish = () => { if (clients.size && feeds.get(event)?.feed === feed) broadcast(event, feed.snapshot()); };
+      feeds.set(event, { feed, stop: feed.subscribe(publish) });
+      publish();
+    }
+  }
+  bindFeeds();
+  const stopPlugins = plugins?.subscribe(() => {
+    bindFeeds();
     if (clients.size) broadcast("plugins", plugins.list());
   });
   const adapters = plugins?.adapters;
   const ext = plugins?.ext;
   const stopExt = ext?.subscribe(() => {
     if (clients.size) { broadcast("ext-plugins", ext.list()); broadcast("plugins", plugins!.list()); }
-  });
-  const sources = plugins?.sources;
-  const stopSources = sources?.subscribe(namesChanged => {
-    if (!clients.size) return;
-    broadcast("sources", sources.list());
-    if (namesChanged) broadcast("plugins", plugins!.list());
   });
   const saveSettings = settingsWriter(app);
   const stopHeartbeat = await subscribeHeartbeat(app.harness, event => {
@@ -133,30 +135,18 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return serveStatic(options.dist ?? defaultDist, path, res);
     }
     res.setHeader("Cache-Control", "no-store");
-    const feishuAccount = account();
-    if (!restricted && method === "GET" && path === "/api/feishu/oauth/callback") {
-      res.setHeader("Referrer-Policy", "no-referrer");
-      if (!feishuAccount) throw new HttpError(404, "Feishu is not configured");
-      const params = new URL(req.url!, "http://localhost").searchParams;
-      const states = params.getAll("state");
-      const codes = params.getAll("code");
-      let message = "授权请求无效或已过期，请从 Web 设置重新连接。";
-      let status = 400;
-      try {
-        if (await feishuAccount.callback(states.length === 1 ? states[0]! : null, codes.length === 1 ? codes[0]! : null)) {
-          res.writeHead(302, { Location: "/" }).end();
-          return;
-        }
-      } catch (error) {
-        // SDK token errors carry only status, code and description, never the secret or tokens.
-        const { name, message: detail, code, statusCode: http } = error as Error & { code?: unknown; statusCode?: unknown };
-        console.error("Feishu OAuth callback failed:", name, http ?? "", code ?? "", detail);
-        status = 502;
-        message = "飞书账号连接失败，请检查应用权限和回调地址后重试。";
-      }
-      res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" })
-        .end(`<!doctype html><meta charset="utf-8"><title>飞书授权失败</title><p>${message}</p><a href="/">返回 Alter</a>`);
-      return;
+    const route = extensions().flatMap(web => web.routes ?? []).find(r =>
+      r.method === method && (typeof r.path === "string" ? r.path === path : r.path.test(path)));
+    const activity = () => app.main.commit(tx => interacted(tx, app.now()), context);
+    async function mutation(status: number, value?: unknown) {
+      await activity();
+      if (status === 204) res.writeHead(204).end();
+      else json(res, status, value);
+    }
+    const routeContext = { req, res, path, origin: () => requestOrigin(req), body: () => body(req),
+      json: (status: number, data: unknown) => json(res, status, data), mutation };
+    if (!restricted && route?.publicCallback && method === "GET" && typeof route.path === "string") {
+      return route.handle(routeContext);
     }
     const cookieName = cookieFor(req);
     const current = readCookie(req, cookieName);
@@ -176,11 +166,6 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     }
     if (method !== "GET" && method !== "HEAD" && req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       throw new HttpError(415, "Content-Type must be application/json");
-    }
-    const activity = () => app.main.commit(tx => interacted(tx, app.now()), context);
-    async function mutation(status: number, value: unknown) {
-      await activity();
-      return json(res, status, value);
     }
     if (login) {
       const { password } = await body(req);
@@ -261,7 +246,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (surface.partial) write(res, frame("delta", surface.partial));
       if (plugins) write(res, frame("plugins", plugins.list()));
       if (ext) write(res, frame("ext-plugins", ext.list()));
-      if (sources) write(res, frame("sources", sources.list()));
+      for (const { feed } of feeds.values()) if (feed.onConnect !== false) write(res, frame(feed.event, feed.snapshot()));
       write(res, frame("feedback", latestFeedback));
       return;
     } else if (method === "POST" && path === "/api/messages") {
@@ -330,22 +315,13 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
         if (typeof patch.paused !== "boolean" || Object.keys(patch).length !== 1) throw new HttpError(400, "Expected { paused: boolean }");
         if (!await app.schedules.pause(id, patch.paused)) throw new HttpError(404, "Unknown or finished schedule");
       } else if (!await app.schedules.cancel(id)) throw new HttpError(404, "Unknown schedule");
-    } else if (method === "GET" && path === "/api/calendar" && calendar()) {
-      return json(res, 200, agenda());
-    } else if (method === "GET" && path === "/api/feishu" && feishu()) {
-      return json(res, 200, { ...feishu()!.pairing(), account: await feishuAccount?.status() ?? { connected: false } });
-    } else if (method === "GET" && path === "/api/feishu/oauth/start" && feishuAccount) {
-      res.writeHead(302, { Location: feishuAccount.start(plugins ? redirectUri(req, plugins) : undefined) }).end();
-      return;
-    } else if (method === "POST" && path === "/api/feishu/account/disconnect" && feishuAccount) {
-      await feishuAccount.disconnect();
     } else if (method === "GET" && path === "/api/funnel") {
       const values = new URL(req.url!, "http://localhost").searchParams.getAll("days");
       const days = Number(values[0] ?? 7);
       if (values.length > 1 || !/^\d+$/.test(values[0] ?? "7") || !Number.isSafeInteger(days) || days < 1 || days > 366) {
         throw new HttpError(400, "days must be an integer between 1 and 366");
       }
-      return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), feishu: !!feishu() }));
+      return json(res, 200, funnel(surface.snapshot().notifications, app.timeZone, days, { at: app.now(), hasExternalChannel: hasExternalChannel() }));
     } else if (method === "GET" && path === "/api/watches") {
       return json(res, 200, await app.watches.list());
     } else if (method === "DELETE" && /^\/api\/watches\/[^/]+$/.test(path)) {
@@ -369,18 +345,6 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       return json(res, 200, await app.heartbeat.stats());
     } else if (method === "GET" && path === "/api/approvals/stats") {
       return json(res, 200, await approvalStats(app.main));
-    } else if (method === "GET" && path === "/api/sources/templates") {
-      return json(res, 200, templates);
-    } else if (method === "GET" && path === "/api/sources") {
-      return json(res, 200, sources?.list() ?? []);
-    } else if (sources && method === "POST" && path === "/api/sources/preview") {
-      return mutation(200, await sources.preview(await body(req)));
-    } else if (sources && method === "POST" && path === "/api/sources") {
-      return mutation(201, await sources.create(await body(req)));
-    } else if (sources && (method === "PATCH" || method === "DELETE") && /^\/api\/sources\/[^/]+$/.test(path)) {
-      const id = path.split("/")[3]!;
-      if (method === "PATCH") return mutation(200, await sources.patch(id, await body(req)));
-      await sources.remove(id);
     } else if (method === "GET" && path === "/api/adapters") {
       return json(res, 200, adapters?.list() ?? []);
     } else if (method === "GET" && path === "/api/adapters/presets") {
@@ -406,8 +370,6 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       await ext.action(path.split("/")[3]!, "delete", {});
     } else if (method === "GET" && path === "/api/plugins") {
       return json(res, 200, plugins?.list() ?? []);
-    } else if (method === "GET" && path === "/api/plugins/feishu/guide") {
-      return json(res, 200, feishuGuide(redirectUri(req, plugins)));
     } else if (plugins && method === "PATCH" && /^\/api\/plugins\/[^/]+$/.test(path)) {
       return mutation(200, await plugins.get(path.split("/")[3]!).patch(await body(req)));
     } else if (plugins && method === "POST" && /^\/api\/plugins\/[^/]+\/check$/.test(path)) {
@@ -444,10 +406,11 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
       if (values.length > 1 || (range !== "day" && range !== "7d" && range !== "30d" && range !== "all")) {
         throw new HttpError(400, "range must be day, 7d, 30d or all");
       }
-      return json(res, 200, await stats(range, app.timeZone, { app, dir: options.dataDir, feishu: !!feishu() }));
+      return json(res, 200, await stats(range, app.timeZone, { app, dir: options.dataDir, hasExternalChannel: hasExternalChannel() }));
     } else if (method === "GET" && path === "/api/usage") {
       return json(res, 200, await usageSummary(options.dataDir));
-    } else throw new HttpError(404, "Unknown endpoint");
+    } else if (route) return route.handle(routeContext);
+    else throw new HttpError(404, "Unknown endpoint");
     if (!logout) await activity();
     res.writeHead(204).end();
   }
@@ -456,7 +419,7 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     shouldUpgradeCallback: req => server.listenerCount("upgrade") > 0 && (!gatewayMode || trustedGateway(req)),
   }, (req, res) => {
     handle(req, res).catch((cause: unknown) => {
-      const error = cause instanceof FeedbackError || cause instanceof SourceError || cause instanceof PluginError || cause instanceof NodeSessionsError ? new HttpError(cause.status, cause.message)
+      const error = cause instanceof FeedbackError || cause instanceof PluginHttpError || cause instanceof PluginError || cause instanceof NodeSessionsError ? new HttpError(cause.status, cause.message)
         : cause instanceof MemoryConflict ? new HttpError(409, cause.message)
         : cause instanceof MemoryInputError ? new HttpError(400, cause.message) : cause;
       if (!(error instanceof HttpError)) console.error("Alter web request failed", error);
@@ -471,9 +434,9 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     clearInterval(ping);
     stopHeartbeat();
     stopPlugins?.();
-    stopSources?.();
     stopExt?.();
-    unsubscribe?.();
+    for (const binding of feeds.values()) binding.stop();
+    feeds.clear();
     surface.detach();
     for (const res of clients.keys()) res.end();
     clients.clear();
