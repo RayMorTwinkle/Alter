@@ -79,13 +79,20 @@ async function run(app: AlterApp) {
   }
 }
 
+// This CLI runs in its own process. An existing production setup must not
+// change its schedule, approval defaults or database location.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith("ALTER_")) delete process.env[key];
+}
+process.env.ALTER_HEARTBEAT = "off";
+const fixtureTime = Date.UTC(2026, 10, 26, 12);
 const directory = await mkdtemp(join(tmpdir(), "alter-demo-"));
 try {
   const storage = await openNodeSqliteStorage(join(directory, "main.sqlite"));
   let app: AlterApp | undefined;
   try {
     app = await openAlter(storage, scriptedModels(), { provider: "faux", modelId: "faux-1" },
-      undefined, {}, { demos: true, timeZone: "UTC" });
+      undefined, {}, { demos: true, timeZone: "UTC", now: () => fixtureTime });
     await run(app);
   } finally {
     if (app) await app.close();
