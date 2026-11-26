@@ -1,10 +1,12 @@
+import { runPollBatch, type PollerState } from "@alter/plugin-sdk/poller";
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { containsCredential, withholdCredentials } from "./credentials.ts";
 import { createProxy } from "./http.ts";
 import { check, fields, matches, record, type Effect } from "./manifest.ts";
-import { run, type Invoke } from "./process.ts";
-import { openStore, type Progress, type Version } from "./store.ts";
+import { createWorkerHost, WorkerReset, type run, type HostCall, type Invoke } from "./process.ts";
+import { openStore, freshProgress, type Version } from "./store.ts";
 
 export { PluginError, check, fields, record, type Effect, type Manifest } from "./manifest.ts";
 export type { Version } from "./store.ts";
@@ -16,7 +18,7 @@ type Host = {
   changed(): void;
 };
 type Caller = { signal?: AbortSignal; borrow(name: string, args: Record<string, unknown>, effect: Effect, signal: AbortSignal): Promise<unknown> };
-const fresh = (): Progress => ({ invalid: 0, paused: false, next: 0 });
+
 class InvalidItems extends Error {}
 function items(value: unknown) {
   if (!Array.isArray(value) || value.length > 4096) throw new InvalidItems("Invalid poll result");
@@ -29,17 +31,33 @@ function items(value: unknown) {
       summary: [item.repo, item.type, item.title, item.body, item.url].filter(Boolean).join(" — ").slice(0, 2000) };
   });
 }
-export function openRuntime(data: string, host: Host, adapters: { run?: typeof run; proxy?: typeof createProxy } = {}) {
-  const store = openStore(data);
-  const audit = (e: object) => appendFileSync(join(store.root, "audit.jsonl"), JSON.stringify({ at: Date.now(), ...e }) + "\n", { mode: 0o600 });
+type Session = {
+  secrets: Record<string, string>;
+  stop: AbortController; polls: Set<string>; jobs: Set<Promise<unknown>>;
+  worker?: ReturnType<typeof createWorkerHost>;
+};
+export function openRuntime(data: string, host: Host, adapters: { run?: typeof run; proxy?: typeof createProxy; timeZone?: string } = {}) {
+  const timeZone = adapters.timeZone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const store = openStore(data, timeZone, id => { void stop(id); });
+  const writeAudit = (e: object) => appendFileSync(join(store.root, "audit.jsonl"), JSON.stringify(e) + "\n", { mode: 0o600 });
+  const audit = (e: object) => writeAudit({ at: Date.now(), ...e });
   const proxy = (adapters.proxy ?? createProxy)(audit);
-  const running = new Map<string, AbortController>();
+  const sessions = new Map<string, Session>();
+  const draining = new Map<string, Promise<void>>();
   const timers = new Map<string, NodeJS.Timeout>();
-  const jobs = new Set<Promise<unknown>>();
+  const scheduled = new Set<string>();
   let closed = false;
   function stop(id: string) {
+    scheduled.delete(id);
     clearTimeout(timers.get(id)); timers.delete(id);
-    running.get(id)?.abort();
+    const session = sessions.get(id);
+    if (!session) return draining.get(id) ?? Promise.resolve();
+    sessions.delete(id);
+    const exit = session.worker?.close();
+    session.stop.abort();
+    const done = Promise.allSettled([...session.jobs, exit]).then(() => { draining.delete(id); });
+    draining.set(id, done);
+    return done;
   }
   function schedule(id: string) {
     clearTimeout(timers.get(id)); timers.delete(id);
@@ -47,127 +65,182 @@ export function openRuntime(data: string, host: Host, adapters: { run?: typeof r
     const version = store.active(id);
     if (version?.status !== "enabled") return;
     const names = version.manifest.secrets.map(s => s.name);
-    if (Object.keys(host.secrets(id, names)).length !== names.length) return;
-    const due = version.manifest.sources.filter(s => !version.sources[s.name]?.paused)
-      .sort((a, b) => (version.sources[a.name]?.next ?? 0) - (version.sources[b.name]?.next ?? 0))[0];
+    const configured = host.secrets(id, names);
+    if (!names.every(n => Object.hasOwn(configured, n))) return;
+    scheduled.add(id);
+    const stopping = draining.get(id);
+    if (stopping) {
+      void stopping.then(() => { if (scheduled.has(id)) schedule(id); });
+      return;
+    }
+    const next = (name: string) => version.sources[name]?.nextPollAt ?? 0;
+    const due = version.manifest.sources.filter(s => !version.sources[s.name]?.paused && !sessions.get(id)?.polls.has(s.name))
+      .sort((a, b) => next(a.name) - next(b.name))[0];
     if (!due) return;
-    const delay = Math.max(0, (version.sources[due.name]?.next ?? 0) - Date.now());
+    const at = next(due.name);
     timers.set(id, setTimeout(() => {
-      if (running.has(id)) { timers.set(id, setTimeout(() => schedule(id), 250).unref()); return; }
-      void invoke(id, version.sha, { kind: "sources", name: due.name, args: null }).catch(() => {}).finally(() => {
-        if (!closed && store.list().some(p => p.id === id)) schedule(id);
-      });
-    }, delay).unref());
+      if (Date.now() >= at && !sessions.get(id)?.polls.has(due.name)) {
+        void invoke(id, version.sha, { kind: "sources", name: due.name, args: null }).catch(() => {});
+      }
+      schedule(id);
+    }, Math.min(2_147_483_647, Math.max(0, at - Date.now()))).unref());
   }
-  async function execute(id: string, sha: string, call: Invoke, caller?: Caller) {
-    check(!closed, "Runtime closed");
-    const version = store.active(id);
-    check(version && version.sha === sha && version.status === "enabled", "Plugin is not enabled");
-    const m = version.manifest, source = call.kind === "sources";
+  function hostRequests(version: Version, call: Invoke, effect: Effect, signal: AbortSignal,
+    secrets: Record<string, string>, caller?: Caller): HostCall {
+    const m = version.manifest, id = m.id, sha = version.sha;
+    const values = Object.values(secrets), names = m.secrets.map(s => s.name);
+    async function request(method: string, p: unknown) {
+      signal.throwIfAborted();
+      if (method === "secrets.get") {
+        fields(p, "name");
+        check(typeof p.name === "string", "Invalid secret name");
+        writeAudit({ plugin: id, secret: containsCredential(p.name, values) ? "[redacted]" : p.name, caller: call.name });
+        check(names.includes(p.name), "Undeclared secret");
+        return Object.hasOwn(secrets, p.name) ? secrets[p.name] : undefined;
+      }
+      withholdCredentials(p, values);
+      if (method === "secrets.list") { fields(p, ""); return names; }
+      if (method === "http.request") return proxy(m, p, { effect, secrets, signal });
+      if (method === "borrow") {
+        fields(p, "tool args");
+        check(typeof p.tool === "string" && m.borrows.includes(p.tool) && record(p.args), "Undeclared or unavailable borrow");
+        audit({ plugin: id, borrow: p.tool, caller: call.name });
+        check(caller || call.kind === "sources" && host.borrowSource, "No broker context");
+        return caller ? await caller.borrow(p.tool, p.args, effect, signal) : await host.borrowSource!(id, p.tool, p.args, signal);
+      }
+      if (method === "log") {
+        fields(p, "message"); check(typeof p.message === "string", "Invalid log");
+        audit({ plugin: id, message: p.message.slice(0, 1024) }); return;
+      }
+      fields(p, method === "kv.list" ? "" : method === "kv.set" ? "key value" : "key");
+      const kv = store.active(id)!.kv;
+      if (method === "kv.list") return Object.keys(kv);
+      const key = p.key;
+      check(typeof key === "string" && key && key.length <= 256 && !Object.hasOwn(Object.prototype, key), "Invalid KV key");
+      if (method === "kv.get") return Object.hasOwn(kv, key) ? kv[key] : null;
+      check(method === "kv.delete" || method === "kv.set" && Object.hasOwn(p, "value"), "Unknown host request");
+      store.update(id, sha, v => {
+        if (method === "kv.delete") delete v.kv[key];
+        else { v.kv[key] = p.value; check(Buffer.byteLength(JSON.stringify(v.kv)) <= m.resources.storageKB * 1024, "KV quota exceeded"); }
+      });
+    }
+    return async (method, params) => {
+      const result = await request(method, params);
+      signal.throwIfAborted();
+      if (method !== "secrets.get") withholdCredentials(result, values);
+      return result;
+    };
+  }
+  async function execute(session: Session, version: Version, call: Invoke, caller?: Caller) {
+    const m = version.manifest, id = m.id, sha = version.sha, source = call.kind === "sources";
     const tool = m.tools.find(t => t.name === call.name);
     const spec = m.sources.find(s => s.name === call.name);
     check(source ? spec && !version.sources[call.name]?.paused : tool && matches(tool.inputSchema, call.args), "Undeclared call or invalid arguments");
-    check(!running.has(id), "Plugin is busy");
+    check(!source || !session.polls.has(call.name), "Source poll already in progress");
     const controller = new AbortController();
-    const signal = caller?.signal ? AbortSignal.any([controller.signal, caller.signal]) : controller.signal;
-    running.set(id, controller);
-    const update = (fn: (v: Version) => void) => { signal.throwIfAborted(); store.update(id, sha, fn); };
+    const signal = AbortSignal.any([session.stop.signal, controller.signal, ...(caller?.signal ? [caller.signal] : [])]);
+    const names = m.secrets.map(s => s.name);
+    const secrets = session.secrets;
+    const values = Object.values(secrets);
+    const safeReason = (cause: unknown) => cause instanceof Error && !containsCredential(cause.message, values)
+      ? cause.message : "Plugin invocation failed";
     const trip = async (status: "paused" | "quarantined", reason: string) => {
-      stop(id);
       store.update(id, sha, v => { v.status = status; });
       audit({ plugin: id, decision: status, reason }); host.changed();
       await host.notify(id, reason);
     };
-    const activeRequests = new Set<Promise<unknown>>();
+    if (source) session.polls.add(call.name);
     try {
       signal.throwIfAborted();
-      if (source) update(v => { (v.sources[call.name] ??= fresh()).next = Date.now() + spec!.minIntervalSeconds * 1000; });
       let dir: string;
       try { dir = store.directory(sha); }
       catch { await trip("quarantined", "代码包哈希校验失败"); throw new Error("Package integrity failure"); }
       const effect = source ? "read" : tool!.effect;
-      const secrets = host.secrets(id, m.secrets.map(s => s.name));
-      async function request(method: string, p: unknown) {
+      const dispatch = hostRequests(version, call, effect, signal, secrets, caller);
+      async function invokeWorker() {
+        withholdCredentials(call, values);
+        let result: unknown;
+        if (adapters.run) result = await adapters.run(dir, m.resources, call, dispatch, signal, values, names);
+        else {
+          if (!session.worker?.available) session.worker = createWorkerHost(dir, m.resources, values, names);
+          result = await session.worker.invoke(call, dispatch, signal);
+        }
         signal.throwIfAborted();
-        if (method === "http.request") {
-          return proxy(m, p, { effect, secrets, signal });
-        }
-        if (method === "borrow") {
-          fields(p, "tool args");
-          check(typeof p.tool === "string" && m.borrows.includes(p.tool) && record(p.args), "Undeclared or unavailable borrow");
-          audit({ plugin: id, borrow: p.tool, caller: call.name });
-          check(caller || source && host.borrowSource, "No broker context");
-          return caller ? await caller.borrow(p.tool, p.args, effect, signal) : await host.borrowSource!(id, p.tool, p.args, signal);
-        }
-        if (method === "log") {
-          fields(p, "message"); check(typeof p.message === "string", "Invalid log");
-          audit({ plugin: id, message: p.message.slice(0, 1024) }); return;
-        }
-        fields(p, method === "kv.list" ? "" : method === "kv.set" ? "key value" : "key");
-        const kv = store.active(id)!.kv;
-        if (method === "kv.list") return Object.keys(kv);
-        const key = p.key;
-        check(typeof key === "string" && key && key.length <= 256 && !Object.hasOwn(Object.prototype, key), "Invalid KV key");
-        if (method === "kv.get") return Object.hasOwn(kv, key) ? kv[key] : null;
-        check(method === "kv.delete" || method === "kv.set" && Object.hasOwn(p, "value"), "Unknown host request");
-        update(v => {
-          if (method === "kv.delete") delete v.kv[key];
-          else { v.kv[key] = p.value; check(Buffer.byteLength(JSON.stringify(v.kv)) <= m.resources.storageKB * 1024, "KV quota exceeded"); }
-        });
+        withholdCredentials(result, values);
+        return result;
       }
-      const result = await (adapters.run ?? run)(dir, m.resources, call, (method, p) => {
-        const work = request(method, p);
-        activeRequests.add(work);
-        return work.finally(() => activeRequests.delete(work));
-      }, signal, Object.values(secrets), m.secrets.map(s => s.name));
-      signal.throwIfAborted();
       if (source) {
-        const batch = items(result);
-        const prev = store.active(id)!.sources[call.name]!;
-        const seen = new Set(prev.seen);
-        const added = batch.filter(i => { if (seen.has(i.id)) return false; seen.add(i.id); return true; });
-        if (prev.seen) {
-          for (const row of added.slice(0, 20)) {
-            signal.throwIfAborted();
-            await host.emit({ source: "feed:" + call.name, kind: "new-message", at: Date.now(), author: "external", untrusted: true,
-              ref: "feed:" + id + "/" + call.name + "/" + row.id, summary: row.summary });
-          }
-          if (added.length > 20) {
-            signal.throwIfAborted();
-            await host.emit({ source: "feed:" + call.name, kind: "new-message", at: Date.now(), author: "external", untrusted: true,
-              ref: "feed:" + id + "/" + call.name + "/overflow/" + added[20]!.id, summary: '另外 ' + (added.length - 20) + ' 条更新' });
-          }
-        }
-        update(v => { v.sources[call.name] = { ...prev, invalid: 0, seen: [...seen].slice(-4096) }; v.failures = 0; });
-      } else {
-        check(!tool!.outputSchema || matches(tool!.outputSchema, result), "Invalid tool output");
-        if (store.active(id)!.failures) update(v => { v.failures = 0; });
-      }
-      return result;
-    } catch (e) {
-      if (!signal.aborted) {
-        update(v => {
-          v.failures++;
-          if (source) {
-            const progress = v.sources[call.name]!;
-            progress.invalid = e instanceof InvalidItems ? progress.invalid + 1 : 0;
-            if (progress.invalid >= 3) progress.paused = true;
-          }
+        const checkpoint = (state: PollerState) => {
+          if (store.isActive(id, sha)) store.update(id, sha, v => { v.sources[call.name] = state; });
+        };
+        const emit = (ref: string, summary: string) => host.emit({
+          source: "feed:" + call.name, kind: "new-message", at: Date.now(), author: "external", untrusted: true,
+          ref: "feed:" + id + "/" + call.name + "/" + ref, summary,
         });
-        audit({ plugin: id, decision: "failure", reason: e instanceof Error ? e.message : "Invocation failed" });
-        if (store.active(id)!.failures >= 5) await trip("paused", "连续失败 5 次，插件已暂停");
-        else if (source && store.active(id)!.sources[call.name]?.paused) await host.notify(id, "消息来源连续 3 次返回无效数据：" + call.name);
+        const outcome = await runPollBatch(version.sources[call.name] ?? freshProgress(), {
+          intervalMs: spec!.minIntervalSeconds * 1000, timeZone, signal, maxInvalid: 3,
+          async pull() {
+            const result = await invokeWorker();
+            return { items: items(result), metadata: result };
+          },
+          onItem: row => emit(row.id, row.summary),
+          coalesce: { after: 20, onRemainder: rows => emit("overflow/" + rows[0]!.id, "另外 " + rows.length + " 条更新") },
+          checkpoint,
+          classifyError: cause => ({ error: safeReason(cause), invalid: cause instanceof InvalidItems }),
+        });
+        // stop() drains this session before admitting new work; retain acknowledged deliveries on cancellation.
+        if (outcome) checkpoint(outcome.state);
+        signal.throwIfAborted();
+        check(outcome, "Source poll stopped");
+        if (outcome.state.paused) await host.notify(id, "消息来源连续 3 次返回无效数据：" + call.name);
+        if (outcome.status === "failed") throw new Error(outcome.state.error ?? "Source poll failed");
+        return outcome.status === "success" ? outcome.metadata : undefined;
       }
-      throw e;
+      const result = await invokeWorker();
+      signal.throwIfAborted();
+      check(!tool!.outputSchema || matches(tool!.outputSchema, result), "Invalid tool output");
+      if (store.active(id)!.failures) store.update(id, sha, v => { v.failures = 0; });
+      return result;
+    } catch (cause) {
+      const reason = safeReason(cause);
+      if (!signal.aborted && !(cause instanceof WorkerReset)) {
+        audit({ plugin: id, decision: "failure", reason });
+        if (!source) {
+          store.update(id, sha, v => { v.failures++; });
+          if (store.active(id)!.failures >= 5) await trip("paused", "工具连续失败 5 次，插件已暂停");
+        }
+      }
+      throw new Error(reason);
     } finally {
       controller.abort();
-      await Promise.allSettled(activeRequests);
-      running.delete(id); host.changed();
+      if (source) {
+        session.polls.delete(call.name);
+        if (scheduled.has(id)) schedule(id);
+      }
+      host.changed();
     }
   }
-  function invoke(id: string, sha: string, call: Invoke, caller?: Caller) {
-    const work = execute(id, sha, call, caller);
-    jobs.add(work); return work.finally(() => jobs.delete(work));
+  async function invoke(id: string, sha: string, call: Invoke, caller?: Caller): Promise<unknown> {
+    const previous = draining.get(id);
+    if (previous) await previous;
+    check(!closed, "Runtime closed");
+    const version = store.active(id);
+    check(version && version.sha === sha && version.status === "enabled", "Plugin is not enabled");
+    const names = version.manifest.secrets.map(s => s.name);
+    const configured = host.secrets(id, names);
+    let session = sessions.get(id);
+    if (session && names.some(name => session!.secrets[name] !== configured[name])) {
+      const reschedule = scheduled.has(id);
+      await stop(id);
+      if (reschedule && !closed && store.isActive(id, sha)) schedule(id);
+      return invoke(id, sha, call, caller);
+    }
+    session ??= { secrets: { ...configured }, stop: new AbortController(), polls: new Set(), jobs: new Set() };
+    sessions.set(id, session);
+    const work = execute(session, version, call, caller);
+    session.jobs.add(work);
+    try { return await work; }
+    finally { session.jobs.delete(work); }
   }
   return { store, invoke, schedule, stop,
     async start() {
@@ -184,6 +257,10 @@ export function openRuntime(data: string, host: Host, adapters: { run?: typeof r
         schedule(p.id);
       }
     },
-    async close() { closed = true; for (const p of store.list()) stop(p.id); await Promise.allSettled(jobs); },
+    async close() {
+      closed = true;
+      for (const id of new Set([...scheduled, ...sessions.keys()])) void stop(id);
+      await Promise.all(draining.values());
+    },
   };
 }

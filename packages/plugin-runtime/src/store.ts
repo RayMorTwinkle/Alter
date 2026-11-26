@@ -1,3 +1,4 @@
+import { localDay, type PollerState } from "@alter/plugin-sdk/poller";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -6,12 +7,14 @@ import { check, expanded, storedEffect, permissions, PluginError, type Manifest 
 import { activatePackage, preparePackage, verify } from "./packages.ts";
 
 export type Status = "enabled" | "disabled" | "paused" | "quarantined";
-export type Progress = { seen?: string[]; invalid: number; paused: boolean; next: number };
+export const freshProgress = (): PollerState => ({
+  seen: [], baseline: false, failures: 0, invalid: 0, paused: false, lastPollAt: 0, nextPollAt: 0, day: "", count: 0, error: null,
+});
 type Dependencies = Record<string, string>;
-export type Version = { installedAt?: number; userApproved?: boolean; dependencies?: Dependencies; manifest: Manifest; sha: string; kv: Record<string, unknown>; sources: Record<string, Progress>; status: Status; failures: number };
+export type Version = { installedAt?: number; userApproved?: boolean; dependencies?: Dependencies; manifest: Manifest; sha: string; kv: Record<string, unknown>; sources: Record<string, PollerState>; status: Status; failures: number };
 type Proposal = { manifest: Manifest; sha: string; path: string; staged?: string; dependencies?: Dependencies };
 type Entry = { pending?: Proposal; versions: Version[] };
-export function openStore(data: string) {
+export function openStore(data: string, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", onDeactivate?: (id: string) => void) {
   const root = join(data, "plugins"), packages = join(root, "packages"), file = join(root, "registry.json");
   mkdirSync(root, { mode: 0o700, recursive: true });
   let entries: Record<string, Entry> = {};
@@ -32,6 +35,14 @@ export function openStore(data: string) {
     const last = entry.versions.at(-1);
     const offerApproval = last && last.userApproved === undefined && last.status !== "quarantined";
     for (const version of entry.versions) {
+      for (const [name, progress] of Object.entries(version.sources)) {
+        if (progress.baseline !== undefined) continue;
+        // Keep all legacy IDs until the poller sees the actual feed order and computes its overflow fingerprint.
+        const legacy = progress as { seen?: string[]; invalid: number; paused: boolean; next?: number };
+        version.sources[name] = { ...freshProgress(), seen: legacy.seen ?? [], baseline: !!legacy.seen,
+          invalid: legacy.invalid, paused: legacy.paused, nextPollAt: legacy.next ?? 0 };
+        migrated = true;
+      }
       if (version.userApproved !== undefined) continue;
       migrated = true;
       version.userApproved = false;
@@ -54,8 +65,11 @@ export function openStore(data: string) {
     entries = next;
   }
   function change(id: string, fn: (e: Entry) => void) {
+    const before = active(id);
     const e = structuredClone(get(id));
     fn(e); save({ ...entries, [id]: e });
+    const after = active(id);
+    if (before && (before.sha !== after?.sha || before.status !== after?.status)) onDeactivate?.(id);
   }
   function discard(pending: Proposal | undefined) {
     if (pending?.staged) rmSync(pending.staged, { recursive: true, force: true });
@@ -66,7 +80,12 @@ export function openStore(data: string) {
     const previous = v ? [...permissions(v.manifest), ...dependencyLabels(v.dependencies)] : [];
     const requested = p ? [...permissions(p.manifest), ...dependencyLabels(p.dependencies)] : [];
     return { id, status: v?.status ?? "pending", active: v?.sha ?? null, manifest: v?.manifest ?? p!.manifest,
-      failures: v?.failures ?? 0, sources: Object.entries(v?.sources ?? {}).map(([name, s]) => ({ name, paused: s.paused, invalid: s.invalid, next: s.next })),
+      failures: v?.failures ?? 0, sources: (v?.manifest.sources ?? []).map(({ name }) => {
+        const s = v?.sources[name] ?? freshProgress();
+        return { name, paused: s.paused, invalid: s.invalid, next: s.nextPollAt, lastPollAt: s.lastPollAt,
+          nextPollAt: s.paused || v?.status !== "enabled" ? null : s.nextPollAt,
+          todayCount: s.count && s.day === localDay(Date.now(), timeZone) ? s.count : 0, error: s.error };
+      }),
       versions: e.versions.map(x => ({ sha: x.sha, version: x.manifest.version })),
       pending: p ? { manifest: p.manifest, sha: p.sha, directory: p.path, codeUrl: pathToFileURL(p.path).href,
         dependencies: p.dependencies ?? {}, permissions: requested, removed: previous.filter(s => !requested.includes(s)),
@@ -74,7 +93,7 @@ export function openStore(data: string) {
         summary: ["此插件以你的权限运行，可以读写文件、联网、执行命令", p.manifest.description, ...requested,
           ...p.manifest.secrets.map(s => s.name + " 用于" + s.purpose), "代码目录 " + p.path].join("\n") } : null };
   }
-  return { root, active, view, list: () => Object.keys(entries).map(view),
+  return { root, active, view, isActive: (id: string, sha: string) => entries[id]?.versions.at(-1)?.sha === sha, list: () => Object.keys(entries).map(view),
     secretNames: (id: string) => get(id).versions.flatMap(v => v.manifest.secrets.map(s => s.name)),
     async propose(path: string) {
       const pending = await preparePackage(root, path);
@@ -136,6 +155,7 @@ export function openStore(data: string) {
     remove(id: string) {
       const e = get(id), next = { ...entries };
       delete next[id]; save(next);
+      onDeactivate?.(id);
       discard(e.pending);
       for (const v of e.versions) rmSync(join(packages, v.sha), { force: true, recursive: true });
     },

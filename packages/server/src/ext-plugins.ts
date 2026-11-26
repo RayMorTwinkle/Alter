@@ -34,7 +34,7 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
       return app.borrowSource(id, name, args as Parameters<typeof app.borrowSource>[2], signal);
     },
     notify: (id, reason) => app.notifications.alert("ext-plugin:" + id, reason),
-  });
+  }, { timeZone: app.timeZone });
   const { store } = runtime;
   function plugin(v: Version): AlterPlugin {
     const { id, tools } = v.manifest;
@@ -85,7 +85,15 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
     check(v?.userApproved && v.status !== "quarantined", "No approved, non-quarantined version");
     store.update(id, v.sha, x => {
       x.status = enable ? "enabled" : "disabled";
-      if (enable) { x.failures = 0; for (const s of Object.values(x.sources)) { s.invalid = 0; s.paused = false; } }
+      if (enable) {
+        x.failures = 0;
+        for (const s of Object.values(x.sources)) {
+          s.invalid = s.failures = 0;
+          s.paused = false;
+          s.error = null;
+          s.nextPollAt = 0;
+        }
+      }
     });
   }
   return {
@@ -127,10 +135,11 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
         else if (action === "delete") {
           const e = store.view(id);
           const keys = new Set(store.secretNames(id));
+          await runtime.stop(id);
           store.remove(id);
           if (e.active) secrets.patch(Object.fromEntries([...keys].map(n => [secretKey(id, n), null])));
         } else throw new PluginError("Unknown plugin action", 404);
-        if (action !== "reject") runtime.stop(id);
+        if (action !== "reject") await runtime.stop(id);
         await reconcile();
         if (store.list().some(p => p.id === id)) runtime.schedule(id);
         changed();
@@ -148,7 +157,7 @@ export function externalPlugins(app: AlterApp, dir: string, secrets: ReturnType<
           }
           if ("enabled" in input) { check(typeof input.enabled === "boolean", "Invalid enabled flag"); toggle(key, input.enabled); }
           if (record(input.settings)) secrets.patch(Object.fromEntries(Object.entries(input.settings).map(([k, val]) => [secretKey(key, k), val as string | null])));
-          runtime.stop(key); await reconcile(); runtime.schedule(key); changed(); return view(key);
+          await runtime.stop(key); await reconcile(); runtime.schedule(key); changed(); return view(key);
         }) };
     },
   };

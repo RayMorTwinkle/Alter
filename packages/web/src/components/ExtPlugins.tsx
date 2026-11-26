@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
 import { api } from "../api.ts";
+import { clock } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import type { ExtPluginEffect, ExtPluginManifest, ExtPluginProposal, ExtPluginView } from "../types.ts";
 
@@ -78,7 +79,7 @@ function InstallCard({ id, proposal, upgrade }: { id: string; proposal: ExtPlugi
 }
 
 function InstalledCard({ plugin }: { plugin: ExtPluginView }) {
-  const t = useT().ext;
+  const { ext: t, sources } = useT();
   const [open, setOpen] = useState(false);
   const on = plugin.status === "enabled";
   const current = plugin.versions.find(v => v.sha === plugin.active);
@@ -103,6 +104,16 @@ function InstalledCard({ plugin }: { plugin: ExtPluginView }) {
       {plugin.failures > 0 && <p className="plugin-detail">{t.failures(plugin.failures)}</p>}
       {open && <>
         <Capabilities manifest={plugin.manifest} />
+        {plugin.sources.map(source => (
+          <div className="plugin-provides" key={source.name}>
+            <code>{source.name}</code>
+            {source.paused && <span className="plugin-state error">{t.status.paused}</span>}
+            <span><i>{sources.today}</i> {source.todayCount}</span>
+            {source.lastPollAt > 0 && <span><i>{sources.last}</i> {clock(source.lastPollAt)}</span>}
+            {!!source.nextPollAt && <span><i>{sources.next}</i> {clock(source.nextPollAt)}</span>}
+            {source.error && <span>{source.error}</span>}
+          </div>
+        ))}
         <div className="plugin-provides">
           {older.length > 0 && (
             <select className="ext-rollback" value="" onChange={e => e.target.value && act("rollback", { sha: e.target.value })} aria-label={t.rollback}>
