@@ -76,7 +76,8 @@ type TimelineItem = {
   runner?: NodeRunner;
   status?: "queued";          // 离线派发的工具结果
   taskId?: string;            // report / permission 关联的任务，或 dispatch_task 成功返回的任务 ID
-  source?: string;            // v1.4：user 项带来源；web / feishu，旧记录返回 web
+  source?: string;            // user 项的渠道 ID，缺少来源的旧记录返回 web
+  sourceLabel?: string;       // 非网页渠道可带消息写入时保存的显示名
   model?: string;             // assistant / thinking / message：产生该条目的模型
 };
 
@@ -125,13 +126,14 @@ type AgendaEvent = { id: string; title: string; start: number; end: number; allD
 type Agenda = { timeZone: string; events: AgendaEvent[] }; // 今天起 7 个本地日内的日程，按开始时间排序；全天日程 end 不含
 
 type Watch = {
-  id: string; brief: string; where: { channel: "feishu" | "mail"; chatId?: string; contact?: string };
+  id: string; brief: string; where: { channel: string; chatId?: string; contact?: string };
   createdAt: number; until: number; keywords: string[]; thinking: NonNullable<Task["thinking"]>;
   status: "running" | "completed" | "cancelled" | "failed"; wakes: number; pollError?: string;
 };
 
 type Notification = {
-  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: "web" | "cli" | "feishu"; level: "now" | "digest" | "silent";
+  category?: string; // 外部事件类型（v1.20）
+  id: string; at: number; kind: "reminder" | "event" | "digest" | "goal" | "notify" | "message"; channel?: string; level: "now" | "digest" | "silent";
   title: string; body?: string; source: string; ref?: string; filtered?: "duplicate" | "mute" | "marketing"; status: "unread" | "read";
   feedback?: "useful" | "useless"; pushedAt?: number; heartbeatAt?: number; heartbeatId?: string;
 };
@@ -160,7 +162,8 @@ type ScheduleTrigger =
   | { kind: "event"; eventId: string; offsetMinutes: number; anchor: "start" | "end" };
 
 type ScheduledTask = {
-  id: string; brief: string; trigger: ScheduleTrigger; action: "task" | "wake";
+  id: string; brief: string; trigger: ScheduleTrigger; eventSource?: string;
+  type?: "reminder" | "task" | "wake"; action: "reminder" | "task" | "wake"; // 兼容只含 action 的旧快照
   continue_from?: string; thinking?: "low" | "medium" | "high" | "max";
   createdAt: number; nextAt: number | null; paused: boolean;
   lastRun?: { dueAt: number; at: number; missed: boolean; skipped?: string; taskId?: string };
@@ -232,7 +235,9 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 
 ## 定时任务（v1.13）
 
-主会话通过 `schedule_task` 创建，网页可查看、暂停、恢复和删除。时间戳均为 Unix 毫秒。`at` 接受 ISO 时间，无偏移量时使用用户时区。`every` 按创建时刻对齐，间隔至少 5 分钟。`daily` 使用本地 `HH:mm`，可附非空的星期数组（0 为周日）。`event` 以当前日程的开始或结束时间加有符号的分钟数计算，日程改期后更新，删除日程会移除关联安排并在时间线留下通知。
+主会话通过 `schedule_create` 创建，网页可查看、暂停、恢复和删除。时间戳均为 Unix 毫秒。`at` 接受 ISO 时间，无偏移量时使用用户时区。`every` 按创建时刻对齐，间隔至少 5 分钟。`daily` 使用本地 `HH:mm`，可附非空的星期数组（0 为周日）。`event` 以插件提供的事件开始或结束时间加有符号的分钟数计算，改期后更新，删除事件会取消关联安排并在时间线留下通知。
+
+创建 `event` 安排时，`eventId` 必须由一个在线来源唯一识别，安排用 `eventSource` 保存该插件的能力 ID。来源停用时保留绑定，恢复后重新计算时间。旧记录没有 `eventSource` 时，等待可唯一识别该事件的来源再绑定。其他来源返回相同的事件 ID 时，已绑定的安排不会改用该来源。
 
 `nextAt` 为当前计划时间，已完成的一次性安排为 `null`。暂停期间停止执行。恢复周期任务时跳到下一个计划时刻，恢复已到点的一次性任务会执行一次。离线期间错过多次只补跑一次。`lastRun.dueAt` 是本次处理的原定时间，`at` 是实际处理时间。重启时已过期或运行中晚到至少一分钟记 `missed: true`。当日主动预算耗尽或接续目标仍在运行时，`skipped` 给出本次跳过原因。
 
@@ -295,7 +300,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 | event | data | 说明 |
 |---|---|---|
 | `watches` | `Watch[]` | 盯梢记录变化（v1.14） |
-| `ext-plugins` | `ExtPluginView[]` | 首连、重连、审批、运行状态或版本变更时整体替换（v1.17） |
+| `ext-plugins` | `ExtPluginView[]` | 首连、重连、审批、运行状态、版本或来源轮询状态变化时整体替换（v1.17） |
 | `sources` | `SourceView[]` | 首次连接、重连、实例配置或轮询状态变化时整体替换（v1.16） |
 | `snapshot` | 同 `/api/state` | 首次连接与重连时 |
 | `timeline` | `TimelineItem` | 按 id 新增或更新条目，含用户消息回显与工具结果状态 |
@@ -347,9 +352,11 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 
 `DELETE /api/watches/:id` 与 `task_cancel` 共用取消流程。请求使用 JSON Content-Type。取消和重复取消返回 204，未知 ID 返回 404，其他已结束的任务返回 409。
 
-主会话以 `watch({ brief, where: { channel, chatId?, contact? }, until, keywords?, thinking? })` 创建。渠道为 feishu 或 mail。飞书联系人建议使用发送者 open_id，邮件使用发件地址。`until` 接受未来 ISO 时间（无偏移时按用户时区）或从现在起的分钟数。默认 low。观察时段含起点、不含终点。关键词忽略大小写，任意一个子串命中即可。
+主会话以 `watch({ brief, where: { channel, chatId?, contact? }, until, keywords?, thinking? })` 创建。`channel` 是提供 `watchSource` 的已启用插件的能力 ID，为非空字符串，不限于内置的 `feishu` 和 `mail`。创建时调用对应来源的 `authorize(where)`，找不到来源时列出当前可用的盯梢渠道。`chatId` 按会话 ID 精确匹配，`contact` 忽略大小写，按来源提供的联系人 ID 或名称精确匹配。飞书建议填发送者 `open_id`，如 `ou_…`，也可以用 `chatId` 限定会话。邮件建议填发件地址，如 `sender@example.org`，不支持 `chatId`。
 
-飞书长连接和收件箱新邮件可直接触发，用户身份飞书历史和 IMAP 收件箱每 60 秒补拉。创建时检查渠道授权。首次命中开启固定合并窗，`ALTER_WATCH_BATCH_MS` 默认为 30000。到期收尾包含尚未交付的批次。重启时已到期的记录直接收尾。主动预算用完时暂存待处理批次，到期仍无余额则失败并记账。统计按 `watch` 记录任务用量，每日主动预算计入实际 token 和每个唤醒批次一次。报告唤醒主会话时 `wakeSource` 为 `watch`。
+`until` 接受未来 ISO 时间（无偏移时按用户时区）或从现在起的分钟数。`thinking` 默认 `low`。观察时段含起点、不含终点。关键词忽略大小写，任意一个子串命中即可。
+
+飞书长连接和收件箱新邮件可直接触发，宿主每 60 秒调用当前来源的 `poll(where, since, until)` 补拉，例如用户身份的飞书消息历史或 IMAP 收件箱。首次命中开启固定合并窗，`ALTER_WATCH_BATCH_MS` 默认为 30000。到期收尾包含尚未交付的批次。重启时已到期的记录直接收尾。主动预算用完时暂存待处理批次，到期仍无余额则失败并记账。统计按 `watch` 记录任务用量，每日主动预算计入实际 token 和每个唤醒批次一次。报告唤醒主会话时 `wakeSource` 为 `watch`。
 
 ## 设置与插件（v1.15）
 
@@ -365,7 +372,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 
 `compactAtTokens` 是正整数，默认 400,000 token。小窗口模型会按实际窗口预留回复空间。在 1,000,000 token 窗口下使用默认值时，估算上下文超过 395,904 token 可启动后台压缩，超过 400,000 token 时下一次生成等待压缩。盯梢任务关闭自动压缩。
 
-插件视图含 `id, name, provides, settings, enabled, values, status`。三组 `provides.channels/capabilities/sources` 使用标识符数组。Web 为内置渠道。飞书、邮件、浏览器、日历、模板消息来源的标识符依次为 `feishu, mail, browser, calendar, sources`。每个表单字段含 `key, label, type, required, help`，select 附 `options`。提交示例：
+插件视图含 `id, name, provides, settings, enabled, values, status`。三组 `provides.channels/capabilities/sources` 分别描述用户渠道、工具能力和消息来源，均为字符串数组。飞书、邮件、浏览器、日历、模板消息来源的标识符依次为 `feishu, mail, browser, calendar, sources`。每个表单字段含 `key, label, type, required, help`，可带 `default`，select 可附 `options`。提交示例：
 
 ```json
 {"enabled":true,"settings":{"ALTER_FEISHU_APP_ID":"cli_example","ALTER_FEISHU_APP_SECRET":"example-only"}}
@@ -377,7 +384,14 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 
 `plugins` SSE 事件携带与 GET 相同的完整数组，首次连接、重连或插件状态变化时发送。客户端整体替换。巡检保存后即时更新原有 `heartbeat` 视图和调度事件。时间使用服务配置的时区，格式为 `HH:MM`，支持跨午夜，起止必须不同；停用后 `nextAt` 为 null。审批模式支持 `on / off`，默认开启。
 
-活跃盯梢保留原任务 ID 和拉取进度。邮件或飞书插件重新配置后，下次补拉使用当前插件实例。停用期间拉取失败会记录 `pollError`；在观察期内重新启用并授权后，从上次成功拉取的位置继续。
+原生插件按声明接入宿主，见 [ADR-0027](../adr/0027-plugin-host-decoupling.md)。
+
+- 用户渠道由 `surface` 声明稳定的 `id` 和可选的 `label`。宿主在启动 Surface 前注册，在启动失败或停止后注销。网页和命令行内置，飞书插件注册 `feishu`，邮件插件只提供能力和消息来源，不注册用户输入渠道。用户输入写入时保存渠道身份和标签，不随插件停用而改变。`Notification.channel` 存渠道 ID，不限于内置渠道。
+- HTTP 由插件声明 `routes` 的方法、路径和处理器，`setupWeb` 可在缺少凭证或停用时提供配置入口。宿主统一执行网关、会话、受限角色和 JSON 写入检查。管理员实例的精确路径 `GET` 回调可声明 `publicCallback` 免会话 Cookie，网关模式下仍需通过网关认证。飞书插件自行验证一次性 OAuth state。
+- SSE 由插件声明 `sse` 的事件名、快照和订阅函数。首连默认发送快照，也可关闭首连推送，由客户端先走 HTTP（如日历）。替换或卸载时解除旧订阅，并向已连接的客户端发送新快照或清空值，默认清空值为 `null`。`externalDelivery` 声明外发能力，用于确定通知漏斗是否等待外发回执。
+- `watchSource` 提供盯梢鉴权和补拉，`agenda(days)` 提供巡检日程（只读首个可用插件），`scheduleEvents.get/subscribe` 提供事件定时任务的查询和订阅。兼容旧的 `calendarEvents` 声明。
+
+活跃盯梢保留原任务 ID 和拉取进度。来源插件重新配置后，下次补拉使用当前实例。停用期间拉取失败会记录 `pollError`，在观察期内重新启用且授权可用时，从上次成功拉取的位置继续。
 
 ## 模板消息来源（v1.16）
 
@@ -408,9 +422,11 @@ JSON 请求头可引用本实例的命名密钥。例如：
 
 实例与进度使用数据目录中的插件加密存储。对外视图中，GitHub token 和 JSON 的每个请求头值、密钥值均以 `{"set":true}` 表示。PATCH 省略字段会保留旧值，提交 `headers` 或 `secrets` 会整体替换对应的映射，空对象可清除映射。
 
-每批按 ID 去重。实例保存最近 1000 个 ID，大列表另外保留超出窗口部分的摘要，用于识别连续多次返回的相同历史条目。如果上游重排了窗口之外的历史，已淘汰的 ID 可能再次进入分诊。启用状态下，新建实例的试拉同时建立基线，首次拉取不推送。单独重新启用实例或修改拉取参数后，下一次成功拉取重建基线。重启服务或热重载整个插件会继续使用已保存的基线、最近 1000 个 ID 和下次轮询时间。新消息携带 `source = "feed:<实例名>"`、`author = "external"` 和 `untrusted = true`，经已有分诊流程处理。
+模板来源与自写插件来源复用 `@alter/plugin-sdk/poller`。每批按 ID 去重，最多保留 1000 个已确认的 ID。对本批已知但不在窗口内的条目，保存首个 ID、条数和按顺序计算的 SHA-256 指纹。下一批滤去窗口内的 ID 后，匹配同样的连续片段即可去重。上游重排窗口外的历史时，已淘汰的 ID 仍可能再次进入分诊。
 
-`status.lastPollAt` 和 `status.nextPollAt` 为 Unix 毫秒。实例停用时 `nextPollAt` 为 null。全插件停用会暂停计时器。`todayCount` 是按服务时区计算的当日已送入分诊条数。`error` 在成功后为 null，失败时返回安全的错误原因。连续失败按实例间隔的 2、4、8 倍退避，最高 64 倍。GitHub 保存 Last-Modified 供下次条件请求使用，304 只更新状态，调度时间同时满足 X-Poll-Interval。
+启用状态下，新建实例的试拉同时建立基线，不推送已有条目。单独重新启用实例或修改拉取参数后，下一次成功拉取重建基线。重启服务或热重载整个插件会继续使用已保存的基线、去重记录和下次轮询时间。新条目逐条投递，携带 `source = "feed:<实例名>"`、`author = "external"` 和 `untrusted = true`。轮询结束时保存已确认进度，投递中途失败也保留本轮已确认的条目。模板来源不会合并大批次，也不会因连续返回无效数据而自动暂停。
+
+`status.lastPollAt` 和 `status.nextPollAt` 为 Unix 毫秒。实例停用时 `nextPollAt` 为 null。全插件停用会暂停计时器。`todayCount` 是按服务时区计算的当日已送入分诊条数。`error` 在成功后为 null，失败时返回安全的错误原因。连续失败按实例间隔的 2、4、8 倍退避，最高 64 倍。GitHub 仅在整批成功后更新供下次条件请求使用的 `Last-Modified`，304 不投递新条目。调度间隔同时不得低于 `X-Poll-Interval`。
 
 SSE 在连接、重连、实例配置或轮询状态变化时发送 `sources`，数据与 `GET /api/sources` 相同。增删或重命名实例也更新 `plugins` 事件，模板插件的 `provides.sources` 按创建顺序列出实例名称。
 
@@ -431,9 +447,22 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 借用能力的 broker 审计记录含 `borrower`，值为清单中的插件 ID。
 密钥经已有的 `PATCH /api/plugins/ext-<id>` 写入 `settings`，读取只返回 `{set:boolean}`。
 
-包入口是 `index.mjs`，从 `@alter/plugin-sdk` 导入 `definePlugin`，默认导出工具和来源处理器。
-工具签名为 `(args,ctx)`，来源为 `(ctx)`，返回含 `id,title` 和可选 `url,body,repo,type,publishedAt` 的条目数组。
-来源首次轮询建立基线，后续事件标记为外部、不可信。每批最多发送 20 条明细，超出部分合并通知。
+```ts
+type ExtPluginView = {
+  id: string; status: "pending" | "enabled" | "disabled" | "paused" | "quarantined"; active: string | null;
+  manifest: ExtPluginManifest; failures: number;
+  sources: { name: string; paused: boolean; invalid: number; next: number;
+    lastPollAt: number; nextPollAt: number | null; todayCount: number; error: string | null }[];
+  versions: { sha: string; version: string }[]; pending: ExtPluginProposal | null;
+};
+```
+
+`sources` 列出当前安装版本的来源。轮询时间为 Unix 毫秒，尚无记录时 `lastPollAt` 为 0。`next` 是兼容旧客户端的原始时间值，初始值为 0。插件未启用或该来源已暂停时 `nextPollAt` 为 `null`，否则返回同 `next` 的值。`invalid` 是连续无效结果数，`error` 在成功后清为 `null`。
+
+### 清单与安装
+
+包入口是 `index.mjs`，从 `@alter/plugin-sdk` 导入 `definePlugin`，默认导出 `Plugin` 对象。`tools`、`sources`、`init?(ctx)` 和 `close?()` 都可省略，两个生命周期钩子可以同步或异步。工具签名为 `(args, ctx)`，来源为 `(ctx)`，返回含 `id`、`title` 和可选 `url`、`body`、`repo`、`type`、`publishedAt` 的条目数组。
+
 安装响应、待审批列表和 SSE 的提案均通过 `manifest.tools[]` 提供工具的 `name`、`description` 和 `effect`。升级时核对 `pending.manifest` 中的新版本。清单 schemaVersion 为 1，工具效果只接受 `read / write / irreversible`。输入输出使用显式类型 JSON Schema 子集，支持 properties、required、additionalProperties、items、enum 和 description。未知关键字在安装时拒绝。
 清单可省略 `network` 和 `requires`。`network` 的每项包含主机、HTTP 方法和字面路径前缀，仅作展示和版本差异比较。`requires` 为字符串数组，每项写明所需的外部程序或设备及用途，例如 `["adb（查询设备）", "已连接的安卓手机"]`。
 
@@ -441,11 +470,27 @@ SSE 首连和变更发送 `ext-plugins`，数据与 GET 相同。已安装版本
 
 安装先将包复制到 Alter 数据目录内的待审批副本。有 npm 依赖必须提供 `package.json` 和 `package-lock.json`。有锁文件即在副本中执行 `npm ci --ignore-scripts`，失败则安装接口返回 400。审批绑定规范化文件路径和内容的 SHA-256，覆盖代码、包元数据和锁文件。源目录已有的 `node_modules` 不参与复制或哈希。批准时复核代码，启用 npm 在待审批副本中安装的依赖。每次运行前校验代码哈希，依赖目录沿用安装结果。旧沙箱版本需在新权限说明下重新亲批。
 
-同一插件的调用串行执行，每次调用启动独立 Node 进程，通过 stdio JSON-RPC 通信。插件可直接使用 `fetch`、`fs` 和 `child_process`。子进程环境只继承 PATH、HOME、LANG、系统临时目录和 Windows 运行所需目录变量，并剔除与声明密钥同名的变量。声明的密钥全部配置后才注册工具、轮询来源。
+### 常驻进程与调用
 
-`ctx.http.request` 提供宿主侧密钥请求头注入，跨源跳转清除请求头。代发仍限制公开 HTTPS 地址、超时、响应大小和频率，每插件每分钟最多 60 跳。只读调用期间的代发限无请求体的 GET/HEAD，查询串禁止包含密钥。宿主记录代发决策。直连请求由插件自行处理。代码哈希不符时隔离该版本。连续调用失败 5 次暂停插件，来源连续 3 次返回无效结构时暂停该来源。
+每个运行时中，每个已启用插件的当前版本在首次调用时按需启动一个 Node 子进程，工具与来源复用同一模块实例。并发首调等待同一个 `init(ctx)`。宿主和 worker 通过 stdio JSON-RPC 以 `callId` 复用连接，工具和不同来源可以并发执行，同名来源不可重入。`AsyncLocalStorage` 将 SDK 调用关联到当前调用的 broker 和权限，即使使用 `init` 时保存的 `ctx` 也是如此。每次调用有独立的超时、取消信号和最多 512 次宿主 RPC，单帧上限为 4 MiB。同步阻塞仍会占住同一进程的事件循环。
 
-`resources.memoryMB` 约束插件进程的 V8 老生代和 RSS。独立监测线程每 100 ms 采样进程 RSS，超过上限时终止该进程。宿主按 `timeoutMs` 终止超时调用。插件另行启动的外部程序自行管理其资源。
+停用、重载（含升级与回滚）、设置或密钥变更、熔断及关闭运行时都会停止旧 worker。宿主发关闭帧，让 worker 调用 `close()` 释放连接，最多等 500 ms，之后用 `SIGKILL` 兜底。取消单次调用会立即结束等待并撤销本次宿主 RPC，未能在原期限内返回才会重置 worker。调用超时、进程崩溃或 RSS 超限会中止该进程中的在途调用，后续按需重启。`resources.memoryMB` 约束 V8 老生代和进程 RSS，独立线程每 100 ms 采样 RSS。插件自行启动的外部程序不计入该进程的资源限制。代码哈希不符时隔离该版本，计入工具连续失败的次数达到 5 次时暂停插件，来源失败单独计数。一次性 `run()` 入口仍保留，常规宿主调用使用常驻进程。见 [ADR-0028](../adr/0028-persistent-plugin-runtime.md)。
+
+### 来源轮询
+
+自写插件来源复用 `@alter/plugin-sdk/poller` 的基线、1000 个 ID 窗口及窗口外指纹去重。第一次成功拉取只建立基线，不投递。之后每批前 20 条新条目逐条投递，其余合成一条「另外 N 条更新」。事件标记为 `author = "external"`、`untrusted = true`，`source` 为 `feed:<来源名>`。每次确认投递后保存去重进度，再尝试下一次投递。正常停止或部分投递失败后，从未确认条目继续。事件写入与断点保存独立提交，两者之间崩溃时，最后一次投递可能以相同事件引用重试。
+
+每个来源独立退避。失败后按 `minIntervalSeconds` 的 2、4、8 倍延后，最高 64 倍。连续 3 次返回无效结构只暂停该来源并通知用户。`todayCount` 按应用时区统计已确认的来源条目数，不是通知数，汇总投递成功后计入其包含的全部条目。独立运行时未指定时区时用系统时区，无法取得时用 UTC。
+
+### 密钥与 HTTP 代发
+
+`pluginEnvironment` 只继承 `PATH`、`HOME`、`LANG`、`TMPDIR`、`TEMP`、`TMP`、`SYSTEMROOT`、`USERPROFILE`，剔除与声明密钥同名（名称比较忽略大小写）或含已知非空密钥原文的变量。服务端在全部声明密钥配置后才注册工具和调度来源。
+
+`ctx.secrets.list()` 返回当前清单中的密钥名。`ctx.secrets.get(name)` 仅可读取已声明的名称，未配置时返回 `undefined`。以字符串作为名称发起的读取（包括尝试读取未声明名称）记入 `audit.jsonl`，只记录插件 ID、密钥名和调用名。密钥名若含已配置密钥原文则脱敏。只有 `secrets.get` 的成功响应可以在宿主 RPC 中携带密钥明文。
+
+`withholdCredentials` 查找已配置非空密钥的字面子串，检查 JSON 的键、未转义的字符串值和序列化结果。它在调用参数送入 worker 前、宿主执行普通 RPC（包括 KV、借用、日志和 HTTP 代发）前、返回普通 RPC 响应时，以及工具结果或来源数据交给调用方前拒绝含密钥的数据。插件抛出的错误和宿主 RPC 拒绝不回传原始异常，运行时若发现错误消息含密钥，也会替换为通用错误。该检查不识别任意编码或变形，不是沙箱。插件仍以用户权限运行，可以直接使用 `fetch`、`fs` 和 `child_process`，也能自行使用读到的密钥。
+
+`ctx.http.request` 可通过 `secretHeaders` 中的 `${secret:名称}` 由宿主代填声明的密钥。代发拒绝请求参数中的密钥原文，并额外检查 URL、解码后的路径和查询及每次跳转的目标，不回传含密钥的响应正文。跨源跳转清除请求头，有请求体时不允许跨源跳转。代发限制公开 HTTPS 地址、超时、响应大小和频率，每插件每分钟最多 60 跳。只读调用限无请求体的 GET/HEAD。宿主记录代发决策，直连请求不经过这些检查。
 
 ## 反馈闭环（v1.20）
 
