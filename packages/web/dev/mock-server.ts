@@ -1,6 +1,6 @@
 // A contract-faithful fake of packages/server for UI work (docs/architecture/web-api.md). Password: "alter".
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AgendaEvent, LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem, ToolTrace, TranscriptItem, Notification } from "../src/types.ts";
+import type { AgendaEvent, LedgerEntry, PermissionRequest, Snapshot, Task, TimelineItem, TranscriptItem, Notification } from "../src/types.ts";
 
 const port = Number(process.env.PORT ?? 4318);
 const now = Date.now();
@@ -26,14 +26,8 @@ const timeline: TimelineItem[] = [
 ];
 const tasks: Task[] = [{
   taskId: "task-14", brief: "讀取 welcome 筆記並回報完整內容", context: "fresh", permission: "restricted", allow: ["notes"],
-  status: "completed", conversationId: "c-14", createdAt: now - 3_597_000, endedAt: now - 3_590_000, pending: [],
+  status: "completed", conversationId: "c-14", createdAt: now - 3_597_000, pending: [],
 }];
-const traces: ToolTrace[] = [{ id: 0, at: now - 3_596_000, taskId: "task-14", tool: "notes_read", effect: "read", decision: "allow" }];
-function trace(taskId: string, tool: string, decision: ToolTrace["decision"]) {
-  traces.push({ id: traces.at(-1)!.id + 1, at: Date.now(), taskId, tool, effect: "write", decision });
-  if (traces.length > 80) traces.shift();
-  emit("traces", traces);
-}
 const ledger: LedgerEntry[] = [{ taskId: "task-14", summary: "讀取了 welcome 筆記，內容是提醒規劃會議", refs: [{ kind: "note", ref: "welcome" }], at: now - 3_590_000 }];
 const transcripts: Record<string, TranscriptItem[]> = {
   "task-14": [
@@ -62,7 +56,7 @@ const clients = new Set<ServerResponse>();
 
 const pending = () => tasks.flatMap(task => task.pending);
 const snapshot = (): Snapshot => ({
-  timeline: timeline.slice(-200), traces, tasks, pending: pending(), ledger,
+  timeline: timeline.slice(-200), tasks, pending: pending(), ledger,
   watches: [
     { id: "watch-33", brief: "老闆在組群裡派任務時提醒我", where: { channel: "feishu", chatId: "研發組" }, createdAt: now - 1_800_000, until: now + 3 * 3_600_000, keywords: ["任務", "今晚"], thinking: "low", status: "running", wakes: 2 },
     { id: "watch-21", brief: "王老師的郵件到了就告訴我", where: { channel: "mail" }, createdAt: now - 5 * 3_600_000, until: now - 3 * 3_600_000, keywords: [], thinking: "low", status: "completed", wakes: 1 },
@@ -115,11 +109,10 @@ async function runTask(text: string) {
     { kind: "tool_call", tool: "calendar_create", arguments: { title: "週報會", start: "2026-11-23T15:00" }, at: Date.now() },
   ];
   emit("tasks", tasks);
-  trace(taskId, "calendar_create", "allow");
   await sleep(1500);
   transcripts[taskId].push({ kind: "tool_result", tool: "calendar_create", text: "event-76", isError: false, at: Date.now() });
   const request: PermissionRequest = {
-    id: `permission-${id()}`, taskId, audience: "user", capability: "outbox", tool: "outbox_send", effect: "write",
+    id: `permission-${id()}`, taskId, audience: "user", capability: "outbox", tool: "outbox_send",
     arguments: { message: "老闆您好，邀請您參加明天下午三點的週報會。" }, reason: task.brief,
     expiresAt: Date.now() + 24 * 3_600_000, defaultAt: Date.now() + 60_000,
     statement: [
@@ -127,7 +120,6 @@ async function runTask(text: string) {
       { tool: "outbox_send", target: "老闆（boss@example.com）", purpose: "發送週報會邀請", isNew: true },
     ],
   };
-  trace(taskId, request.tool, "park");
   task.pending.push(request);
   push({ id: id(), kind: "permission", taskId, text: `${taskId} 需要你批准 outbox_send`, at: Date.now() });
   emit("tasks", tasks);
@@ -137,11 +129,9 @@ async function runTask(text: string) {
 async function decide(requestId: string, allow: boolean, note?: string) {
   const task = tasks.find(t => t.pending.some(p => p.id === requestId));
   if (!task) return false;
-  trace(task.taskId, "outbox_send", allow ? "allow" : "deny");
   task.pending = task.pending.filter(p => p.id !== requestId);
   emit("pending", pending());
   await sleep(800);
-  task.endedAt = Date.now();
   task.status = allow ? "completed" : "failed";
   if (!allow) task.failure = note ?? "用戶拒絕了發送";
   const summary = allow ? "已建立週報會（event-76），並向老闆發送了會議邀請。" : `未發送：${task.failure}`;
@@ -262,7 +252,6 @@ createServer(async (req, res) => {
   const permission = /^\/api\/permissions\/(.+)$/.exec(path);
   if (permission && req.method === "POST") {
     const { decision, note } = await body(req);
-    if (!["call", "once", "capability", "always", "deny", "task-full"].includes(decision)) return json(res, 400, { error: "invalid decision" });
     return (await decide(decodeURIComponent(permission[1]!), decision !== "deny", note)) ? json(res, 204) : json(res, 409, { error: "not pending" });
   }
   const transcript = /^\/api\/tasks\/(.+)\/transcript$/.exec(path);

@@ -4,14 +4,14 @@ import { clock, pretty } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Markdown } from "../markdown.tsx";
 import type { State } from "../store.ts";
-import type { ApprovalAnswer, PermissionRequest, TimelineItem } from "../types.ts";
+import type { ApprovalDecision, PermissionRequest, TimelineItem } from "../types.ts";
 import { ApprovalCard } from "./Panels.tsx";
 
 type Props = {
   state: State;
   onSend: (text: string) => Promise<void>;
   onStop: () => void;
-  onAnswer: (id: string, decision: ApprovalAnswer, note?: string) => Promise<void>;
+  onAnswer: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>;
   onOpenTask: (taskId: string) => void;
 };
 

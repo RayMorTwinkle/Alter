@@ -3,7 +3,6 @@ import { useCallback, useEffect, useReducer, useState } from "react";
 import { api, connect, gatewayApi, Unauthorized } from "./api.ts";
 import { AgendaPanel } from "./components/Agenda.tsx";
 import { Chat } from "./components/Chat.tsx";
-import { LiveMission, RecordedMission, ReplayMission } from "./components/MissionControl.tsx";
 import { Login } from "./components/Login.tsx";
 import { GatewayLogin } from "./components/GatewayLogin.tsx";
 import { NodesSheet } from "./components/Nodes.tsx";
@@ -13,9 +12,8 @@ import { NotificationsSheet, TaskSheet } from "./components/Sheets.tsx";
 import { clock } from "./format.ts";
 import { SettingsSheet, type ConsoleTab } from "./components/Settings.tsx";
 import { I18n, useT } from "./i18n.tsx";
-import { initialWorkspace, reduceWorkspace, type RecordedFrame } from "./replay.ts";
-import { userPending, type Action } from "./store.ts";
-import type { ApprovalAnswer, FeishuPairing, GatewayUser, HeartbeatView } from "./types.ts";
+import { initialState, reduce, userPending } from "./store.ts";
+import type { ApprovalDecision, FeishuPairing, GatewayUser, HeartbeatView } from "./types.ts";
 import { defaultLocale, strings, type Locale } from "./strings.ts";
 
 // "gateway-out" means a multi-user gateway sits in front and wants a username; "out" is the single-owner password page.
@@ -23,20 +21,6 @@ type Auth = "checking" | "out" | "gateway-out" | "in";
 type Tab = "chat" | "tasks" | "approvals" | "agenda" | "memory" | "ledger";
 
 export function App() {
-  if (new URLSearchParams(location.search).has("replay")) return <OfflineConsole />;
-  return <ConnectedConsole />;
-}
-
-function OfflineConsole() {
-  const locale = defaultLocale();
-  const t = strings[locale];
-  return <I18n.Provider value={t}><div className="mc-shell">
-    <header className="mc-replay-head"><b>Alter</b><span>{t.mission.replay}</span><a href="./">{t.mission.liveLink} ↗</a></header>
-    <ReplayMission />
-  </div></I18n.Provider>;
-}
-
-function ConnectedConsole() {
   const [locale, setLocale] = useState<Locale>(defaultLocale);
   const [auth, setAuth] = useState<Auth>("checking");
   const [user, setUser] = useState<GatewayUser | null>(null);
@@ -72,10 +56,7 @@ function ConnectedConsole() {
 
 function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | null; onSignedOut: () => void; onToggleLocale: () => void }) {
   const t = useT();
-  const [{ state, history }, apply] = useReducer(reduceWorkspace, initialWorkspace);
-  const dispatch = useCallback((action: Action) => apply({ action, at: Date.now() }), []);
-  const [recording, setRecording] = useState<RecordedFrame[] | null>(null);
-  const [mission, setMission] = useState(true);
+  const [state, dispatch] = useReducer(reduce, initialState);
   const [tab, setTab] = useState<Tab>("chat");
   const [side, setSide] = useState<Exclude<Tab, "chat">>("tasks");
   const [openTask, setOpenTask] = useState<string | null>(null);
@@ -91,7 +72,7 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
   const [showNotices, setShowNotices] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => connect(dispatch, onSignedOut), [dispatch, onSignedOut]);
+  useEffect(() => connect(dispatch, onSignedOut), [onSignedOut]);
   useEffect(() => {
     if (!showNodes && state.nodes === null) api.nodes().then(nodes => dispatch({ type: "nodes", nodes }), () => {});
   }, [showNodes, state.nodes]);
@@ -132,7 +113,7 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
   }, [onSignedOut]);
 
   const onSend = (text: string) => guard(() => api.send(text));
-  const onAnswer = (id: string, decision: ApprovalAnswer, note?: string) => guard(() => api.answer(id, decision, note));
+  const onAnswer = (id: string, decision: ApprovalDecision, note?: string) => guard(() => api.answer(id, decision, note));
   const onStop = () => void guard(() => api.stop()).catch(() => {});
   const onLogout = () => void (user ? gatewayApi.logout() : api.logout()).finally(onSignedOut);
   const notices = state.notifications ?? [];
@@ -165,11 +146,11 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
   ];
 
   return (
-    <div className={`app mc-shell tab-${tab}`}>
+    <div className={`app tab-${tab}`}>
       <header className="topbar">
         <span className="wordmark">Alter</span>
         <span className={`status ${state.connection !== "open" ? "lost" : state.busy ? "busy" : ""}`}>
-          <i /><span className="status-text">{state.connection === "connecting" ? t.mission.connect : state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}</span>
+          <i /><span className="status-text">{state.connection === "lost" ? t.offline : state.busy ? t.thinking : t.idle}</span>
         </span>
         {heartbeat?.enabled && (heartbeat.nextAt || heartbeat.report?.paused) && (
           <button className="next-heartbeat" onClick={() => setConsoleTab("proactive")} title={t.heartbeat.title}>
@@ -215,13 +196,6 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
         </div>
       )}
 
-      <nav className="mc-nav" aria-label="Mission Control">
-        <button aria-pressed={mission && !recording} onClick={() => { setMission(true); setRecording(null); }}>{t.mission.title}</button>
-        <button aria-pressed={!mission && !recording} onClick={() => { setMission(false); setRecording(null); }}>{t.mission.workspace}</button>
-        <button aria-pressed={!!recording} disabled={!history.length} onClick={() => setRecording(recording ?? history)}>{t.mission.recording}</button>
-        <a href="?replay">{t.mission.example} ↗</a>
-      </nav>
-      {recording ? <RecordedMission frames={recording} /> : mission ? <LiveMission state={state} onAnswer={onAnswer} onOpen={setOpenTask} /> : <>
       <main className="workspace">
         <Chat state={state} onSend={onSend} onStop={onStop} onAnswer={onAnswer} onOpenTask={setOpenTask} />
         <aside className="side">
@@ -246,7 +220,7 @@ function Workspace({ user, onSignedOut, onToggleLocale }: { user: GatewayUser | 
             <span>{label}</span>
           </button>
         ))}
-      </nav></>}
+      </nav>
 
       {openTask && <TaskSheet taskId={openTask} task={state.tasks.find(task => task.taskId === openTask)} onClose={() => setOpenTask(null)} />}
       {consoleTab && (
