@@ -105,15 +105,14 @@ pnpm demo
 
 终端里会展示一次真实运行时的派单：主会话让工作会话读取本地笔记，再核对回执、任务状态和最终答复。首次安装需要访问包仓库或已有缓存；依赖就绪后可离线重复运行，无需模型、飞书或邮箱凭据。
 
-<details>
-<summary>🌐 想启动连接真实模型的 Web 应用？</summary>
+独立查看任务控制中心可运行 `pnpm -C packages/web replay`，在浏览器中拖动时间轴或批准、拒绝模拟请求。
 
-先在本机副本的 `.env` 中配置模型网关和 Web 登录密码；外部账号按需启用。
+如需启动连接真实模型的 Web 应用，请先在本机副本中配置模型网关和 Web 登录密码。外部账号按需启用。
 
 ```sh
 cp .env.example .env
-# 编辑 .env 后构建并启动
-pnpm -C packages/web build
+# 编辑 .env 后，构建界面并启动服务
+pnpm build
 pnpm -C packages/server start
 ```
 

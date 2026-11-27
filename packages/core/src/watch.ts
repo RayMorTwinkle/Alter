@@ -8,6 +8,7 @@ import {
   ROOT_CONVERSATION_ID as root, SubmissionSettled, type Conversation, type Harness, type TaskId, type Tx,
 } from "./runtime.ts";
 import { Ledger, TaskIdentity, Tasks, type TaskRecord, type WatchSettings } from "./state.ts";
+import { settleTask } from "./task-lifecycle.ts";
 import { clearRequests, finishTask, type createDispatcher, type createTaskCancellation } from "./tasks.ts";
 import { budgetExhausted, type ProactiveBudget } from "./usage.ts";
 
@@ -168,7 +169,7 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
               return { status: "sleeping", checkpoint: { phase: "settled", key, final }, signals: [SubmissionSettled.key(key)] };
             }
             if (final) {
-              current.status = "failed"; current.failure = budgetExhausted; current.endedAt = at;
+              settleTask(current, "failed", at, budgetExhausted);
               (await tx.doc(Ledger, root)).entries.push({ taskId: id, at, summary: budgetExhausted, refs: [] });
               return next("close");
             }
@@ -186,13 +187,12 @@ export function createWatches(main: () => Conversation, host: () => Harness, get
           const error = receipt && "value" in receipt && receipt.value.status === "unanswered" ? receipt.value : undefined;
           const failure = typeof error?.detail === "string" ? error.detail : error?.reason;
           if (!checkpoint.final && !failure) return next("tick");
-          task.status = failure ? "failed" : "completed";
+          const at = now();
+          settleTask(task, failure ? "failed" : "completed", at, failure);
           if (failure) {
-            task.failure = failure;
             await clearRequests(tx, root, id, true);
           }
-          task.endedAt = now();
-          (await tx.doc(Ledger, root)).entries.push({ taskId: id, at: task.endedAt, summary: failure ?? "观察期结束，无事报告", refs: [] });
+          (await tx.doc(Ledger, root)).entries.push({ taskId: id, at, summary: failure ?? "观察期结束，无事报告", refs: [] });
           return next("close");
         }, ctx);
       },

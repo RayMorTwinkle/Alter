@@ -26,7 +26,7 @@ it("authenticates API requests, enforces JSON writes, and revokes the session in
   expect((await web.post("/api/messages", { text: " " })).status).toBe(400);
   for (const query of ["range=", "range=week", "range=day&range=day"]) expect((await web.read("/api/stats?" + query)).status).toBe(400);
   expect(await (await web.read("/api/stats")).json()).toMatchObject({ range: "7d", total: { calls: 0, costUsd: null } });
-  const state = { timeline: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state = { timeline: [], traces: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   expect(await web.state()).toEqual(state);
   expect((await web.read("/api/feishu")).status).toBe(404);
   const feed = await stream(web.read);
@@ -180,12 +180,12 @@ it.each([
     context: "fresh", brief: "send greeting", permission, thinking: "high", status: "running", allow: [], pending: [request] });
   expect(task.createdAt).toBeGreaterThan(0);
   expect(request).toEqual({ id: expect.any(String), taskId: task.taskId, audience,
-    capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason,
+    effect: "write", capability: call.capability, tool: call.tool, arguments: call.arguments, reason: call.reason,
     statement: [{ tool: "", target: "", purpose: "delegate", isNew: false }, { tool: "", target: "任务 brief", purpose: "send greeting", isNew: false }],
     defaultAt: expect.any(Number), expiresAt: expect.any(Number) });
   expect(request.expiresAt).toBeGreaterThan(task.createdAt);
   expect(feed.events).toContainEqual({ event: "tasks", data: [task] });
-  const decide = () => web.post("/api/permissions/" + request.id, { decision: "once", note: "OK" });
+  const decide = () => web.post("/api/permissions/" + request.id, { decision: "call", note: "OK" });
   const decisions = await Promise.all([decide(), decide()]);
   expect(decisions.map(r => r.status).sort()).toEqual([204, 409]);
   await feed.seen(e => e.event === "timeline" && e.data.kind === "report" && e.data.taskId === task.taskId);
@@ -194,6 +194,9 @@ it.each([
   expect(updated.ledger.filter(row => row.taskId === task.taskId)).toEqual([{ taskId: task.taskId, summary: "sent invitation", refs: [{ kind: "message", ref: "demo" }], at: expect.any(Number) }]);
   expect(updated.timeline.filter(i => i.kind === "tool" && i.tool === "dispatch_task")).toMatchObject([{ taskId: task.taskId, isError: false }]);
   expect(updated.tasks[0]).toMatchObject({ status: "completed", pending: [] });
+  expect(updated.tasks[0]?.endedAt).toBeGreaterThanOrEqual(task.createdAt);
+  expect(updated.traces.filter(row => row.tool === call.tool).map(row => row.decision)).toEqual(["park", "allow"]);
+  await feed.seen(e => e.event === "traces" && e.data.some((row: { tool: string; decision: string }) => row.tool === call.tool && row.decision === "allow"));
   expect(updated.pending).toEqual([]);
   expect(web.app.demo.outbox).toEqual(["hello"]);
   await web.app.main.waitForIdle(context);

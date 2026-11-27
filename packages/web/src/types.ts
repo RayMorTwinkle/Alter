@@ -32,6 +32,7 @@ export type TimelineItem = {
 };
 
 export type AlwaysAllowedCapabilities = { capabilities: string[] };
+export type ApprovalAnswer = ApprovalDecision | "call";
 export type ApprovalDecision = "once" | "capability" | "always" | "deny";
 export type HeartbeatSettings = { enabled: boolean; start: string; end: string };
 export type ModelOverrides = {
@@ -56,6 +57,7 @@ export type PermissionRequest = {
   capability: string;
   tool: string;
   arguments: unknown;
+  effect?: ExtPluginEffect;
   reason: string;
   expiresAt: number;
   defaultAt?: number;
@@ -82,6 +84,7 @@ export type Task = {
   failure?: string;
   conversationId: string;
   createdAt: number;
+  endedAt?: number;
   pending: PermissionRequest[];
 };
 
@@ -152,7 +155,9 @@ export type Watch = {
   status: "running" | "completed" | "cancelled" | "failed"; wakes: number; pollError?: string;
 };
 
+export type ToolTrace = { id: number; at: number; taskId: string; tool: string; effect: ExtPluginEffect; decision: "park" | "allow" | "deny" };
 export type Snapshot = {
+  traces?: ToolTrace[];
   schedules?: ScheduledTask[]; // Available from v1.13.
   watches?: Watch[]; // Available from v1.14.
   notifications?: Notification[]; // Absent in v1.6 snapshots and before the first snapshot.

@@ -1,4 +1,5 @@
 import type { ApprovalAnswer, ApprovalRequest } from "@alter/node-protocol";
+import { approvalRoute, canonicalArguments } from "./effect-policy.ts";
 import { NodeRuns } from "./node-state.ts";
 import { activeWake } from "./wake.ts";
 import { activeLease, holdsLease, LeaseHistory, Leases } from "./leases.ts";
@@ -23,7 +24,7 @@ export function parseApprovalDecision(value: unknown) {
 }
 type Request = {
   id: string; taskId: string; toolTask: TaskId; audience: "main" | "user"; capability: string; tool: string;
-  reason: string; argumentsJson: string; expiresAt: number; defaultAt?: number;
+  reason: string; effect?: Effect; argumentsJson: string; expiresAt: number; defaultAt?: number;
   statement?: (PermissionItem & { isNew: boolean })[];
   leaseId?: string; wakeKey?: string; checking?: true; deferred?: true;
 };
@@ -37,7 +38,7 @@ export const Audit = conversationDoc<{ entries: AuditEntry[]; last: Record<strin
   "audit", () => ({ entries: [], last: {}, refused: {} }),
 );
 export type Review = {
-  taskId?: string; tool?: string; ended?: "deferred" | "expired"; itemCount?: number; judgment?: Judgment; user?: ApprovalDecision; note?: string;
+  exact?: true; taskId?: string; tool?: string; ended?: "deferred" | "expired"; itemCount?: number; judgment?: Judgment; user?: ApprovalDecision; note?: string;
   userAt?: number; judgedAt?: number; judgeAllowedAt?: number; timeoutAt?: number; expiredAt?: number;
 };
 export const Reviews = conversationDoc<{ byId: Record<string, Review> }>("approval-reviews", () => ({ byId: {} }));
@@ -60,7 +61,7 @@ export async function approvalStats(main: Conversation) {
 }
 const Decision = defineSignal({ name: "alter.permission", version: 1, schema: obj({ allow: bool(), note: opt(str()) }) });
 const Reviewed = defineSignal({ name: "alter.reviewed", version: 1, schema: bool() });
-type Answer = { requestId: string; decision: ApprovalDecision; note?: string };
+type Answer = { exact?: true; requestId: string; decision: ApprovalDecision; note?: string };
 export const approvalClocks = new WeakMap<Conversation, () => number>();
 const expiredMessage = "Approval expired without a decision";
 const deferredMessage = "暂未获批，可先做别的，做不下去就 finish 报告";
@@ -96,16 +97,21 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
     const req = Object.hasOwn(pending, requestId) ? pending[requestId] : undefined;
     if (!req || req.audience !== "user" || req.checking || !isApprovalDecision(decision)) return reply("No pending user decision", true);
     const now = (approvalClocks.get(main) ?? Date.now)();
+    if (answer.exact && decision !== "once") return reply("Invalid approval scope", true);
     if (now >= req.expiresAt) return reply(expiredMessage, true);
     const task = (await tx.doc(Tasks, main.id)).byId[req.taskId];
+    const caller = await currentCaller(tx, main, req.taskId, task);
+    if (answer.exact && req.deferred) {
+      if (caller === undefined || (req.taskId !== "main" && task?.status !== "running")) return reply("Task has ended", true);
+      if (req.leaseId && !holdsLease(await tx.doc(Leases, main.id), req.capability, req.leaseId)) return reply("Lease has ended", true);
+    }
     if (!req.deferred) {
       const status = await tx.signal(req.toolTask, Decision, req.wakeKey ?? req.id, { allow: decision !== "deny", ...(note && { note }) });
       // At the soft deadline pi-durable closes the signal, but its gate is waking and reads the durable decision.
       if (status !== "delivered" && !(status === "closed" && !req.wakeKey && req.defaultAt && now >= req.defaultAt)) return reply(status, true);
     }
     const { byId } = await tx.doc(Reviews, main.id);
-    byId[requestId] = { ...byId[requestId], taskId: req.taskId, tool: req.tool, user: decision, userAt: now, ...(note && { note }) };
-    const caller = await currentCaller(tx, main, req.taskId, task);
+    byId[requestId] = { ...byId[requestId], taskId: req.taskId, tool: req.tool, user: decision, userAt: now, ...(answer.exact && { exact: true }), ...(note && { note }) };
     if (decision === "always") {
       const grants = await tx.doc(AllowedCapabilities, main.id);
       if (!grants.capabilities.includes(req.capability)) grants.capabilities.push(req.capability);
@@ -113,7 +119,14 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
     let granted = false;
     if (caller !== undefined) {
       if (decision === "once") {
-        await rememberOnce(tx, caller, req.tool, now);
+        if (!answer.exact) await rememberOnce(tx, caller, req.tool, now);
+        else if (req.deferred) {
+          const scope = await tx.doc(ScopeDoc, caller);
+          scope.retries = (scope.retries ?? []).filter(retry => retry.expiresAt > now);
+          scope.retries.push({ tool: req.tool, capability: req.capability, ...(req.effect && { effect: req.effect }),
+            argumentsJson: req.argumentsJson, ...(req.leaseId && { leaseId: req.leaseId }),
+            expiresAt: Math.min(req.expiresAt, now + onceWindow) });
+        }
       } else if (decision === "capability") {
         if (task) {
           granted = true;
@@ -134,7 +147,7 @@ export function answerUserPermission(main: Conversation, answer: Answer, onDeliv
         audit.refused[`${req.taskId} ${req.tool}`] = true;
       }
     }
-    for (const other of Object.values(pending)) {
+    for (const other of answer.exact ? [] : Object.values(pending)) {
       if (other.id === req.id || now >= other.expiresAt || other.capability !== req.capability) continue;
       if (decision !== "always" && (other.taskId !== req.taskId || caller === undefined)) continue;
       if (decision === "deny" && (!task || other.tool !== req.tool)) continue;
@@ -168,7 +181,7 @@ export async function migrateRequests(tx: Tx, main: Conversation, at: number, ti
       review.judgeAllowedAt ??= review.timeoutAt;
     }
     if ((review.user as string | undefined) === "statement") review.user = "once";
-    if (review.user === "once" && review.userAt !== undefined && review.userAt + onceWindow > at && review.tool && review.taskId) {
+    if (review.user === "once" && !review.exact && review.userAt !== undefined && review.userAt + onceWindow > at && review.tool && review.taskId) {
       const caller = await currentCaller(tx, main, review.taskId, tasks[review.taskId]);
       if (caller !== undefined) await rememberOnce(tx, caller, review.tool, review.userAt);
     }
@@ -325,8 +338,8 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
       }
       // The main session's own notes, schedules and notifications are bookkeeping, not actions on the outside world.
       const internal = control || (isMain && !leasedCall && (call.name === "stay_silent" || capability === "memory" || capability === "schedule"));
-      const needsApproval = effect !== "read" && !internal &&
-        !(effect === "irreversible" && task?.permission === "full");
+      const setting = mode();
+      const route = approvalRoute(effect, { internal, permission: task?.permission, canReview: setting === "on" });
       if (req && at >= req.expiresAt) { await expire(tx, main, req, at); return block(expiredMessage); }
       const scope = await tx.doc(ScopeDoc, api.conversationId);
       const always = await tx.doc(AllowedCapabilities, main.id);
@@ -337,23 +350,27 @@ export function createBroker(getMain: () => Conversation, registry: CapabilityRe
         delete pending[id];
         return block(`The user already declined ${call.name} in this task. Do not retry it; finish and report that the user declined.`);
       }
-      if (!needsApproval || granted || audit.last[id] === "allow" ||
-          scope.late.some(item => item.tool === call.name && item.expiresAt > at)) {
+      function allow(): undefined {
         delete pending[id];
         record("allow");
-        return;
       }
-      const setting = mode();
+      if (route === "allow" || granted || audit.last[id] === "allow" ||
+          scope.late.some(item => item.tool === call.name && item.expiresAt > at)) return allow();
+      const argumentsJson = canonicalArguments(call.arguments);
+      const retry = scope.retries?.findIndex(item => item.tool === call.name && item.capability === capability &&
+        (item.effect === undefined || item.effect === effect) && item.argumentsJson === argumentsJson &&
+        item.leaseId === (leaseId ?? key) && item.expiresAt > at) ?? -1;
+      if (retry >= 0) {
+        scope.retries!.splice(retry, 1);
+        return allow();
+      }
       if (!req) {
-        const argumentsJson = JSON.stringify(call.arguments, (_, value) =>
-          value && typeof value === "object" && !Array.isArray(value)
-            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
         if (Object.values(pending).some(r => r.taskId === taskId && r.deferred && r.tool === call.name &&
           r.argumentsJson === argumentsJson && r.expiresAt > at)) return block(deferredMessage);
         const items = isMain ? (await recentUserText(tx, main.id, at) ?? []).map(purpose => ({ tool: "", target: "", purpose })) : scope.items;
-        const checking = effect === "write" && setting === "on" && items.length > 0;
+        const checking = route === "review" && items.length > 0;
         const reason = remote?.summary || task?.brief || "Main session tool call";
-        pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, tool: call.name,
+        pending[id] = { id, toolTask: api.taskId, taskId, audience: "user", capability, effect, tool: call.name,
           argumentsJson, ...(key && { leaseId: leaseId ?? key }), reason: (borrower ? "插件 " + borrower + " 借用：" : "") + reason, expiresAt: at + timeout,
           statement: items.map((item, index) => ({ ...item, isNew: scope.shown !== undefined && index >= scope.shown })),
           defaultAt: at + Math.min(defaultMs, timeout), ...(checking && { checking: true }) };

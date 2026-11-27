@@ -262,13 +262,14 @@ export async function createWebServer(app: AlterApp, options: WebOptions) {
     } else if (method === "POST" && /^\/api\/permissions\/[^/]+$/.test(path)) {
       const input = await body(req);
       const { note } = input;
-      const decision = "decision" in input ? parseApprovalDecision(input.decision) : input.allow === true ? "once" : input.allow === false ? "deny" : undefined;
+      const exact = input.decision === "call";
+      const decision = exact ? "once" : "decision" in input ? parseApprovalDecision(input.decision) : input.allow === true ? "once" : input.allow === false ? "deny" : undefined;
       if (!decision || ("decision" in input && "allow" in input) || (note !== undefined && typeof note !== "string")) {
         throw new HttpError(400, "Expected an approval decision and optional string note");
       }
-      const answer = await answerUserPermission(app.main, { requestId: path.split("/")[3]!, decision, note });
+      const answer = await answerUserPermission(app.main, { requestId: path.split("/")[3]!, decision, note, ...(exact && { exact: true }) });
       // The broker treats a duplicate signal as an idempotent success. HTTP distinguishes it from a first decision.
-      if (answer.isError || answer.output[0]?.text !== "delivered") throw new HttpError(409, "No pending user decision");
+      if (answer.isError || answer.output[0]?.text !== "delivered") throw new HttpError(409, answer.output[0]?.text ?? "No pending user decision");
     } else if (method === "GET" && /^\/api\/tasks\/[^/]+\/transcript$/.test(path)) {
       const tasks = await app.harness.snapshot(Tasks, app.main.id, context);
       const id = path.split("/")[3]!;
