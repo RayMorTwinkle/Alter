@@ -1,4 +1,4 @@
-import type { FeedbackView, ExtPluginView, Agenda, LedgerEntry, MemoryView, Node, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, ToolTrace, TimelineItem } from "./types.ts";
+import type { FeedbackView, ExtPluginView, Agenda, LedgerEntry, MemoryView, Node, Notification, PermissionRequest, ScheduledTask, Snapshot, Watch, Task, TimelineItem } from "./types.ts";
 
 export type State = Snapshot & {
   draft: { id: string; text: string } | null;
@@ -15,7 +15,6 @@ export type Action =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "timeline"; item: TimelineItem }
   | { type: "delta"; id: string; text: string }
-  | { type: "traces"; traces: ToolTrace[] }
   | { type: "tasks"; tasks: Task[] }
   | { type: "pending"; pending: PermissionRequest[] }
   | { type: "ledger"; ledger: LedgerEntry[] }
@@ -52,7 +51,7 @@ function upsert(timeline: TimelineItem[], item: TimelineItem) {
 export function reduce(state: State, action: Action): State {
   switch (action.type) {
     case "snapshot":
-      return { ...state, traces: [], ...action.snapshot, timeline: [...action.snapshot.timeline].sort(byTime), draft: null };
+      return { ...state, ...action.snapshot, timeline: [...action.snapshot.timeline].sort(byTime), draft: null };
     case "timeline": {
       const draft = state.draft?.id === action.item.id ? null : state.draft;
       return { ...state, timeline: upsert(state.timeline, action.item), draft };
@@ -64,8 +63,6 @@ export function reduce(state: State, action: Action): State {
         if (state.draft.text === action.text) return state;
       } else if (state.timeline.some(item => item.id === action.id)) return state;
       return { ...state, draft: { id: action.id, text: action.text } };
-    case "traces":
-      return { ...state, traces: action.traces };
     case "tasks":
       return { ...state, tasks: action.tasks };
     case "pending":

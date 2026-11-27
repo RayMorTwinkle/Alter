@@ -7,7 +7,6 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "pnpm --filter @alter/web build",
     "demo": "node packages/evals/demo.ts",
     "eval:triage": "node packages/evals/triage.ts",
     "eval:judge": "node packages/evals/judge.ts",

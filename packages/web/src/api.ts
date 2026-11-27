@@ -1,7 +1,7 @@
 import type { GatewayAdminUser, GatewayInvite, GatewayUser, GatewayUserPatch } from "./types.ts";
 import type { Node, NodeAdapterSummary, CreatedNode, HarnessId, NativeSession, DebugPrompt, DebugSchedule, DebugTrace, DebugTracePage, DebugTraceQuery } from "./types.ts";
 import type { Action } from "./store.ts";
-import type { AdapterCreate, AdapterPatch, AdapterPreset, AdapterPresetCreate, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalAnswer, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
+import type { AdapterCreate, AdapterPatch, AdapterPreset, AdapterPresetCreate, AdapterView, Agenda, AlwaysAllowedCapabilities, ApprovalDecision, ApprovalStats, ExtPluginView, FeedbackAnswer, FeedbackQuestion, FeedbackStats, FeedbackView, FeishuGuide, FeishuPairing, Funnel, HeartbeatView, ModelCapabilities, ModelOverrides, MemoryChange, MemoryPatch, MemoryView, PluginPatch, PluginView, ServiceFlag, ServiceState, Settings, SettingsPatch, Snapshot, SourceCreate, SourceCreateResult, SourcePatch, SourcePreview, SourcePreviewResult, SourceTemplate, SourceView, Stats, StatsRange, TranscriptItem, UsageRow } from "./types.ts";
 
 export class Unauthorized extends Error {}
 
@@ -64,8 +64,8 @@ export const api = {
   logout: () => request<void>("/api/logout", { method: "POST", body: {} }),
   state: () => request<Snapshot>("/api/state"),
   send: (text: string) => request<{ id: string }>("/api/messages", { body: { text } }),
-  answer: (id: string, decision: ApprovalAnswer, note?: string) =>
-    request<void>(`/api/permissions/${encodeURIComponent(id)}`, { body: { decision, note } }),
+  answer: (id: string, decision: ApprovalDecision, note?: string) =>
+    request<void>(`/api/permissions/${encodeURIComponent(id)}`, { body: note ? { decision, note } : { decision } }),
   stop: () => request<void>("/api/stop", { method: "POST", body: {} }),
   transcript: (taskId: string) =>
     request<{ items: TranscriptItem[] }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
@@ -130,7 +130,7 @@ export const api = {
   deleteMemory: (id: string) => request<void>(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-const events = ["snapshot", "traces", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins", "feedback", "nodes"] as const;
+const events = ["snapshot", "timeline", "delta", "tasks", "pending", "ledger", "busy", "calendar", "memory", "notifications", "heartbeat", "schedules", "watches", "ext-plugins", "feedback", "nodes"] as const;
 
 // EventSource retries on its own; on error we probe once so an expired session drops to the login screen.
 export function connect(dispatch: (action: Action) => void, onUnauthorized: () => void) {
@@ -160,7 +160,6 @@ export function connect(dispatch: (action: Action) => void, onUnauthorized: () =
         case "snapshot": return dispatch({ type: "snapshot", snapshot: data });
         case "timeline": return dispatch({ type: "timeline", item: data });
         case "delta": return dispatch({ type: "delta", id: data.id, text: data.text });
-        case "traces": return dispatch({ type: "traces", traces: data });
         case "tasks": return dispatch({ type: "tasks", tasks: data });
         case "pending": return dispatch({ type: "pending", pending: data });
         case "ledger": return dispatch({ type: "ledger", ledger: data });
