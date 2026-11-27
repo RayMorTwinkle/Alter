@@ -1,4 +1,7 @@
+import { missionHans, missionHant } from "./mission-strings.ts";
+
 const hant = {
+  mission: missionHant,
   appName: "Alter",
   loginTitle: "登入 Alter",
   password: "密碼",
@@ -30,7 +33,7 @@ const hant = {
   statement: "權限說明",
   statementNew: "新增",
   deferred: "任務已先去做別的，仍可在此批准",
-  defaultIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小時" : "分鐘"}後無人回應將按說明處理`,
+  defaultIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小時" : "分鐘"}後仍未回應，任務將先繼續`,
   deny: "拒絕",
   notePlaceholder: "附言（可選）",
   handledByMain: "由主會話處理",
@@ -458,6 +461,7 @@ export type Strings = typeof hant;
 
 const hans: Strings = {
   ...hant,
+  mission: missionHans,
   loginTitle: "登录 Alter",
   password: "密码",
   login: "登录",
@@ -483,7 +487,7 @@ const hans: Strings = {
   statement: "权限说明",
   statementNew: "新增",
   deferred: "任务已先去做别的，仍可在此批准",
-  defaultIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小时" : "分钟"}后无人回应将按说明处理`,
+  defaultIn: (n: number, unit: "h" | "m") => `${n} ${unit === "h" ? "小时" : "分钟"}后仍未回应，任务将先继续`,
   notePlaceholder: "附言（可选）",
   handledByMain: "由主会话处理",
   needsYou: "等你决定",

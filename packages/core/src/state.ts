@@ -2,7 +2,7 @@ import type { TaskEnd } from "@alter/node-protocol";
 import type { NodeRunner } from "./node-state.ts";
 import { conversationDoc, type ConversationId, type EntryId, type ModelThinkingLevel, type TaskId } from "./runtime.ts";
 
-import type { WatchWhere } from "./capabilities.ts";
+import type { Effect, WatchWhere } from "./capabilities.ts";
 
 export type WatchSettings = { where: WatchWhere; until: number; keywords: string[]; wakes: number[]; finished?: true; pollError?: string };
 export type Permission = "restricted" | "auto" | "full";
@@ -43,5 +43,6 @@ export const Ledger = conversationDoc<{ entries: LedgerEntry[] }>("ledger", () =
 
 export type PermissionItem = { tool: string; target: string; purpose: string };
 type Scope = { items: PermissionItem[]; shown?: number; capabilities?: string[];
+  retries?: { tool: string; capability: string; effect?: Effect; argumentsJson: string; expiresAt: number; leaseId?: string }[];
   late: { tool: string; expiresAt: number }[] };
 export const ScopeDoc = conversationDoc<Scope>("permission-scope", () => ({ items: [], late: [] }));

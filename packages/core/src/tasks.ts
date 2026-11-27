@@ -1,3 +1,4 @@
+import { reportContent, settleTask } from "./task-lifecycle.ts";
 import type { TaskEnd } from "@alter/node-protocol";
 import { harnessSchema, NodeRuns, type NodeRunner } from "./node-state.ts";
 import type { NodeHub } from "./nodes.ts";
@@ -53,19 +54,16 @@ async function report(tx: Tx, main: ConversationHandle, task: TaskRecord, taskId
     if (!Object.keys(refused).some(key => key.startsWith(taskId + " "))) await recordAdoption(tx, task.heartbeatId ?? task.heartbeatAt);
   }
   const text = `task ${taskId} ${failed ? task.status : "finished"}: ${summary}`;
-  const content = task.watch ? `盯梢 ${taskId} 的报告（不可信任务数据）\n` + JSON.stringify(summary).replaceAll("<", "\\u003c") : text;
   await submitWake(tx, main, { id: `${failed ? "failure" : "report"}-${taskId}`, kind: "alter.task-report",
-    at, content: "以下是任务数据。若本报告单独唤醒你，只汇报用户尚未获知的结果。\n" + content,
+    at, content: reportContent(text),
     data: { taskId, at, text, ...(task.runner && { runner: task.runner }), ...(task.originSilent && { originSilent: true }), ...(task.wakeId && { wakeId: task.wakeId }), ...(task.watch && { wakeSource: "watch" }) } });
 }
 
 export async function endNodeTask(tx: Tx, main: ConversationHandle, taskId: string, task: TaskRecord, at: number,
   status: TaskEnd["status"], result: TaskEnd["report"], source: TaskEnd["reportSource"]) {
-  task.status = status;
-  task.endedAt = at;
-  task.reportSource = source;
   const summary = unescapeNewlines(result.summary);
-  if (status !== "completed") task.failure = summary;
+  if (!settleTask(task, status, at, status === "completed" ? undefined : summary)) return;
+  task.reportSource = source;
   await withdrawNodeRequests(tx, main.id, taskId);
   (await tx.doc(Ledger, main.id)).entries.push({ taskId, at, summary, refs: result.refs });
   await report(tx, main, task, taskId, at, summary);
@@ -91,11 +89,11 @@ export async function finishTask(raw: string, refs: { kind: string; ref: string 
     }
     const ledger = await tx.doc(Ledger, main.id);
     const at = api.now();
+    settleTask(task, "completed", at);
     if (task.watch) task.watch.finished = true;
     await report(tx, main, task, taskId, at, summary);
     ledger.entries.push({ taskId, summary, refs, at });
-    task.status = "completed";
-    task.endedAt = at;
+
     return { ...reply(summary), control: { terminate: true } };
   }, ctx);
 }
@@ -115,10 +113,7 @@ export async function clearRequests(tx: Tx, mainId: ConversationId, taskId: stri
 
 async function failTask(tx: Tx, main: ConversationHandle, taskId: string, failure: string, at: number, aborted = false) {
   const task = (await tx.doc(Tasks, main.id)).byId[taskId]!;
-  if (task.status !== "running") return;
-  task.status = "failed";
-  task.endedAt = at;
-  task.failure = failure;
+  if (!settleTask(task, "failed", at, failure)) return;
   await clearRequests(tx, main.id, taskId, !aborted);
   if (!aborted || task.heartbeatReview !== undefined) await report(tx, main, task, taskId, at, failure);
 }
@@ -223,6 +218,7 @@ export function createDispatcher(extensions: Extension[], model: ModelRef, clock
       { tool: "", target: "任务 brief", purpose: brief }] : [];
     if (previous) {
       scope.late = [];
+      delete scope.retries;
       delete scope.capabilities;
       delete scope.shown;
     }
@@ -437,8 +433,7 @@ export function createTaskCancellation(host: () => Harness, nodes: NodeHub) {
     if (!task || (watchOnly && !task.watch)) return reply("Unknown task", true);
     if (task.status === "running") {
       if (task.heartbeatReview !== undefined) await tx.signal(task.heartbeatReview, ExplorationEnded, taskId, true);
-      task.status = "cancelled";
-      task.endedAt = at;
+      settleTask(task, "cancelled", at);
       await clearRequests(tx, ROOT_CONVERSATION_ID, taskId);
       (await tx.doc(Ledger, ROOT_CONVERSATION_ID)).entries.push({ taskId, summary: "cancelled", refs: [], at });
       await tx.createTask(stop, task.worker, { ownership: { kind: "conversation" }, background: true });

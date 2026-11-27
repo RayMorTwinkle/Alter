@@ -1,9 +1,10 @@
 import { CaretRight, Link as LinkIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
-import { clock, pretty, remaining } from "../format.ts";
+import { ApprovalCard } from "./ApprovalCard.tsx";
+export { ApprovalCard } from "./ApprovalCard.tsx";
+import { clock } from "../format.ts";
 import { useT } from "../i18n.tsx";
 import { Inline } from "../markdown.tsx";
-import type { ApprovalDecision, Lease, LedgerEntry, PermissionRequest, Task, Watch } from "../types.ts";
+import type { ApprovalAnswer, Lease, LedgerEntry, PermissionRequest, Task, Watch } from "../types.ts";
 
 export function StatusChip({ status }: { status: Task["status"] }) {
   const t = useT();
@@ -86,76 +87,8 @@ export function TasksPanel({ tasks, leases, watches, onOpen, onCancelWatch }: {
   );
 }
 
-export function ApprovalCard({ request, onAnswer, inline = false }: {
-  request: PermissionRequest; onAnswer: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>; inline?: boolean;
-}) {
-  const t = useT();
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const mine = request.audience === "user";
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  const left = remaining(request.expiresAt - now);
-  const statement = request.statement ?? [];
-  const fallback = request.defaultAt && request.defaultAt > now && !request.deferred ? remaining(request.defaultAt - now) : undefined;
-
-  async function answer(decision: ApprovalDecision) {
-    setBusy(true);
-    try {
-      await onAnswer(request.id, decision, note.trim() || undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <article className={`approval ${inline ? "inline" : ""} ${mine ? "mine" : ""}`}>
-      <header>
-        <span className="approval-tool">{request.capability} · <code>{request.tool}</code></span>
-        <span className={mine ? "badge" : "chip"}>{mine ? t.needsYou : t.handledByMain}</span>
-      </header>
-      <dl>
-        <dt>{t.reason}</dt>
-        <dd>{request.reason}</dd>
-        <dt>{t.arguments}</dt>
-        <dd><pre>{pretty(request.arguments)}</pre></dd>
-        {statement.length > 0 && <>
-          <dt>{t.statement}</dt>
-          <dd>
-            <ul className="statement">
-              {statement.map((item, i) => (
-                <li key={i} className={item.isNew ? "new" : ""}>
-                  <code>{item.tool}</code> · {item.target}<span>{item.purpose}</span>
-                  {item.isNew && <em>{t.statementNew}</em>}
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </>}
-      </dl>
-      {mine && (
-        <div className="approval-actions">
-          <input value={note} onChange={event => setNote(event.target.value)} placeholder={t.notePlaceholder} />
-          <div className="approval-buttons">
-            <button className="btn" disabled={busy} onClick={() => void answer("deny")}>{t.decisions.deny}</button>
-            <button className="btn quiet" disabled={busy} onClick={() => void answer("always")}>{t.decisions.always(request.capability)}</button>
-            <button className="btn quiet" disabled={busy} onClick={() => void answer("capability")}>{t.decisions.capability(request.capability)}</button>
-            <button className="btn primary" disabled={busy} onClick={() => void answer("once")}>{t.decisions.once}</button>
-          </div>
-          <span className="approval-expiry">
-            {request.deferred ? t.deferred : fallback ? t.defaultIn(fallback.n, fallback.unit) : t.expiresIn(left.n, left.unit)}
-          </span>
-        </div>
-      )}
-    </article>
-  );
-}
-
 export function ApprovalsPanel({ pending, onAnswer }: {
-  pending: PermissionRequest[]; onAnswer: (id: string, decision: ApprovalDecision, note?: string) => Promise<void>;
+  pending: PermissionRequest[]; onAnswer: (id: string, decision: ApprovalAnswer, note?: string) => Promise<void>;
 }) {
   const t = useT();
   const ordered = [...pending].sort((a, b) => Number(b.audience === "user") - Number(a.audience === "user"));

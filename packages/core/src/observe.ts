@@ -25,17 +25,19 @@ export async function startSurface(app: AlterApp, surface: AlterSurface) {
 }
 
 export type PermissionRequest = Omit<PermissionState["pending"][string], "argumentsJson" | "toolTask" | "wakeKey" | "leaseId" | "checking"> & { arguments: unknown };
-type Task = Omit<TaskRecord, "watch" | "conversationId" | "worker" | "heartbeatReview" | "lastEntry" | "messages" | "wakeId" | "endedAt" | "status"> & {
+type Task = Omit<TaskRecord, "watch" | "conversationId" | "worker" | "heartbeatReview" | "lastEntry" | "messages" | "wakeId" | "status"> & {
   status: Exclude<TaskRecord["status"], "cancelled">;
   taskId: string; conversationId: string; allow: string[]; pending: PermissionRequest[];
 };
+export type ToolTrace = { id: number; at: number; taskId: string; tool: string; effect: "read" | "write" | "irreversible"; decision: "park" | "allow" | "deny" };
 export type SurfaceState = {
+  traces: ToolTrace[];
   timeline: TimelineItem[]; tasks: Task[]; pending: PermissionRequest[]; ledger: LedgerEntry[];
   notifications: Notification[]; schedules: ScheduledTask[]; watches: WatchItem[];
   leases: { capability: string; idleTurns: number; window: number }[]; busy: boolean;
 };
 type Delta = { id: string; text: string };
-type Payloads = Pick<SurfaceState, "tasks" | "pending" | "ledger" | "notifications" | "schedules" | "watches"> & {
+type Payloads = Pick<SurfaceState, "traces" | "tasks" | "pending" | "ledger" | "notifications" | "schedules" | "watches"> & {
   feedback: ReturnType<typeof feedbackView>; busy: { busy: boolean }; timeline: TimelineItem; delta: Delta;
 };
 export type SurfaceEvent = { [K in keyof Payloads]: { event: K; data: Payloads[K] } }[keyof Payloads];
@@ -45,7 +47,7 @@ const limit = 200;
 // Both surfaces attach before resume. Seed the recent history once, then consume the
 // runtime's synchronous observations. HTTP clients can snapshot and subscribe in one tick.
 export async function observeSurface({ harness, main }: AlterApp, emit: (event: SurfaceEvent, inputSource?: string) => void) {
-  const state: SurfaceState = { timeline: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
+  const state: SurfaceState = { traces: [], timeline: [], schedules: [], watches: [], notifications: [], tasks: [], pending: [], ledger: [], leases: [], busy: false };
   const turn: Parameters<typeof timelineEntries>[1] = {};
   let partial: Delta | undefined;
   let records: Record<string, TaskRecord> = {};
@@ -75,7 +77,7 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
   }
 
   function updateTasks() {
-    state.tasks = Object.entries(records).map(([taskId, { worker, heartbeatReview, lastEntry, messages, wakeId, endedAt, status, watch, ...task }]) => ({
+    state.tasks = Object.entries(records).map(([taskId, { worker, heartbeatReview, lastEntry, messages, wakeId, status, watch, ...task }]) => ({
       ...task, allow: [], taskId, status: status === "cancelled" ? "failed" : status, ...(status === "cancelled" && { failure: status }),
       conversationId: String(task.conversationId), pending: state.pending.filter(req => req.taskId === taskId),
     }));
@@ -151,6 +153,12 @@ export async function observeSurface({ harness, main }: AlterApp, emit: (event: 
         for (let i = entries.length - 1; i >= 0 && count < limit; i--) permissionAt(i);
       } else {
         for (let i = auditLength; i < entries.length; i++) permissionAt(i);
+      }
+      if (seeding || auditLength !== entries.length) {
+        const start = Math.max(0, entries.length - 80);
+        state.traces = entries.slice(start).map(({ at, taskId, tool, effect, decision }, i) =>
+          ({ id: start + i, at, taskId, tool, effect, decision }));
+        if (!seeding) emit({ event: "traces", data: state.traces });
       }
       auditLength = entries.length;
     });

@@ -1,0 +1,28 @@
+export const missionHans = {
+  title: "任务控制中心", recording: "会话回放", example: "示例回放", workspace: "对话工作区", live: "实时会话", replay: "离线回放", sample: "模拟会话",
+  active: "执行中", waiting: "待审批", settled: "已结束", lanes: "执行泳道", main: "主会话", agent: "子代理",
+  empty: "等待主会话派发任务", open: "查看完整过程", elapsed: "耗时", toolEvents: "工具轨迹", review: "授权审批",
+  noRequests: "当前没有待处理的授权", evals: "评测基线", archive: "历史实测", complete: "端到端任务完成",
+  injection: "注入成功", noAttempt: "10 次均未尝试执行，正常任务完成 10/10。", old: "当时的模型与策略",
+  categories: ["日历", "浏览器", "邮箱", "组合"], history: "报告来源", branch: "模拟决策", clock: "回放进度",
+  previous: "上一帧", next: "下一帧", play: "播放", pause: "暂停", restart: "从头播放",
+  toolWindow: "批准同一工具 10 分钟（可更改参数）", externalSend: "高危 · 对外发送", localWrite: "本地写入", read: "只读", write: "写入", irreversible: "高危 · 不可逆", unknown: "旧记录 · 风险未标注",
+  allow: "放行", deny: "拒绝", park: "待批", params: "参数预览", diff: "变更预览", expired: "已过期",
+  queued: "已派发", emptyTrace: "暂无工具记录", liveLink: "打开实时工作区", mock: "本地模拟",
+  connect: "正在连接", taskList: "全部任务", more: "更多授权范围", current: "当前帧", frames: ["接收指令", "派发子任务", "读取笔记", "更新本地草稿", "等待发送授权", "记录审批决定", "回投主会话"],
+  endedUnknown: "结束时间未记录", latest: "最近事件", retry: "任务已继续。「允许这一次」仅对相同参数的下一次重试生效。",
+};
+export const missionHant: typeof missionHans = {
+  title: "任務控制中心", recording: "會話回放", example: "範例回放", workspace: "對話工作區", live: "即時會話", replay: "離線回放", sample: "模擬會話",
+  active: "執行中", waiting: "待審批", settled: "已結束", lanes: "執行泳道", main: "主會話", agent: "子代理",
+  empty: "等待主會話派發任務", open: "查看完整過程", elapsed: "耗時", toolEvents: "工具軌跡", review: "授權審批",
+  noRequests: "目前沒有待處理的授權", evals: "評測基線", archive: "歷史實測", complete: "端到端任務完成",
+  injection: "注入成功", noAttempt: "10 次均未嘗試執行，正常任務完成 10/10。", old: "當時的模型與策略",
+  categories: ["日曆", "瀏覽器", "郵箱", "組合"], history: "報告來源", branch: "模擬決策", clock: "回放進度",
+  previous: "上一幀", next: "下一幀", play: "播放", pause: "暫停", restart: "從頭播放",
+  toolWindow: "批准同一工具 10 分鐘（可更改參數）", externalSend: "高危 · 對外傳送", localWrite: "本機寫入", read: "唯讀", write: "寫入", irreversible: "高危 · 不可逆", unknown: "舊記錄 · 風險未標註",
+  allow: "放行", deny: "拒絕", park: "待批", params: "參數預覽", diff: "變更預覽", expired: "已過期",
+  queued: "已派發", emptyTrace: "暫無工具記錄", liveLink: "打開即時工作區", mock: "本機模擬",
+  connect: "正在連線", taskList: "全部任務", more: "更多授權範圍", current: "目前幀", frames: ["接收指令", "派發子任務", "讀取筆記", "更新本機草稿", "等待傳送授權", "記錄審批決定", "回投主會話"],
+  endedUnknown: "結束時間未記錄", latest: "最近事件", retry: "任務已繼續。「允許這一次」僅對相同參數的下一次重試生效。",
+};

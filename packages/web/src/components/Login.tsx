@@ -35,6 +35,7 @@ export function Login({ onDone }: { onDone: () => void }) {
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="btn primary" disabled={!password || busy}>{t.login}</button>
+        <a className="mc-login-link" href="?replay">{t.mission.replay} ↗</a>
       </form>
     </main>
   );

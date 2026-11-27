@@ -100,8 +100,11 @@ type Task = {
   failure?: string;           // 取消任务在此接口返回 status="failed"、failure="cancelled"
   conversationId: string;
   createdAt: number;
+  endedAt?: number;
   pending: PermissionRequest[];
 };
+
+type ToolTrace = { id: number; at: number; taskId: string; tool: string; effect: "read" | "write" | "irreversible"; decision: "park" | "allow" | "deny" };
 
 type PermissionRequest = {
   id: string;
@@ -110,6 +113,7 @@ type PermissionRequest = {
   audience: "user";
   capability: string;
   tool: string;
+  effect?: ToolTrace["effect"]; // 旧请求可能没有此字段
   arguments: unknown;         // 解析后的参数
   reason: string;
   statement?: { tool: string; target: string; purpose: string; isNew: boolean }[];
@@ -183,9 +187,9 @@ type TranscriptItem =
 |---|---|---|
 | `GET` | `/api/watches` | `Watch[]`（v1.14） |
 | `DELETE` | `/api/watches/:id` | 取消盯梢（v1.14） |
-| `GET` | `/api/state` | `{ timeline: TimelineItem[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], schedules: ScheduledTask[], notifications: Notification[], watches: Watch[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
+| `GET` | `/api/state` | `{ timeline: TimelineItem[], traces: ToolTrace[], tasks: Task[], pending: PermissionRequest[], ledger: LedgerEntry[], schedules: ScheduledTask[], notifications: Notification[], watches: Watch[], leases: { capability: string; idleTurns: number; window: number }[], busy: boolean }` |
 | `POST` | `/api/messages` | 请求 `{ text }` → `202 { id }`；主会话忙时排队，不报错 |
-| `POST` | `/api/permissions/:id` | 请求 `{ decision: "once" &#124; "task-full" &#124; "deny", note?: string }` → `204`。已处理、已到期或对主会话租约选择任务级授权返回 `409`。旧客户端可用布尔字段 `allow` 提交单次批准或拒绝 |
+| `POST` | `/api/permissions/:id` | 请求含 `decision` 和可选的 `note`。`call` 只放行本次调用；延迟回应只允许同一任务或租约、相同工具及参数重试一次。`once` 保留同一工具 10 分钟的授权窗口，`capability` 按任务或租约授权，`always` 持久授权，`deny` 拒绝。接受旧的 `task-full` 和布尔字段 `allow`。成功返回 204，重复、过期或已失效的请求返回 409。 |
 | `GET` | `/api/tasks/:taskId/transcript` | `{ items: TranscriptItem[] }` |
 | `POST` | `/api/stop` | 停止主会话当前回合 → `204` |
 | `GET` | `/api/funnel?days=7` | `Funnel`（v1.8）。需要登录，默认 7 个本地日，支持 1–366 天。非法或重复的 `days` 返回 `400` |
@@ -306,6 +310,7 @@ v1.7 的通知列表按写入顺序从新到旧保留 500 条。`at` 为实际�
 | `timeline` | `TimelineItem` | 按 id 新增或更新条目，含用户消息回显与工具结果状态 |
 | `delta` | `{ id: string; text: string }` | 主会话正在生成的回答，`text` 为**累计全文**，结束时由同 `id` 的 `timeline` 条目取代 |
 | `tasks` | `Task[]` | 任务列表整体替换 |
+| `traces` | `ToolTrace[]` | 最近 80 条工具审批轨迹，按审计顺序整体替换，重连时由快照恢复 |
 | `pending` | `PermissionRequest[]` | 待审批列表整体替换 |
 | `ledger` | `LedgerEntry[]` | 账本整体替换 |
 | `busy` | `{ busy: boolean }` | 主会话是否在生成 |

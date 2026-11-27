@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "replay": "vite --open /?replay",
     "dev": "vite",
     "mock": "node dev/mock-server.ts",
     "build": "vite build && node ../node/build.mjs",
